@@ -8,39 +8,41 @@ import AuditoriaTab from './components/tabs/AuditoriaTab';
 import ConfiguracoesTab from './components/tabs/ConfiguracoesTab';
 
 import { useOnlineStatus } from './hooks/useOnlineStatus';
-import { initialProducts, initialExpirations, initialAudits } from './data/mockData';
+import { initialProducts, initialValidities, initialAudits } from './data/mockData';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('inicio');
-  const [storeName, setStoreName] = useState('Loja 01 - Centro');
   const isOnline = useOnlineStatus();
+  const [products, setProducts] = useState(initialProducts);
+  const [validities, setValidities] = useState(initialValidities);
+  const [audits, setAudits] = useState(initialAudits);
+  const [notifications] = useState(3);
 
-  const [products] = useState(initialProducts);
-  const [expirations] = useState(initialExpirations);
-  const [audits] = useState(initialAudits);
+  const urgentCount = validities.filter(v => v.status === 'urgent').length;
 
   return (
-    <div className="min-h-screen bg-gray-50 text-gray-900 pb-20 font-sans">
-      <Header isOnline={isOnline} storeName={storeName} />
+    <div className="min-h-screen flex flex-col bg-slate-50 text-slate-800">
+      <Header isOnline={isOnline} notifications={notifications} />
 
-      <main className="p-4 max-w-md mx-auto">
+      <main className="flex-1 p-4 pb-24 max-w-5xl mx-auto w-full">
         {activeTab === 'inicio' && (
-          <InicioTab 
-            expirations={expirations} 
-            products={products} 
-            audits={audits} 
-            setActiveTab={setActiveTab} 
-          />
+          <InicioTab products={products} validities={validities} audits={audits} setActiveTab={setActiveTab} />
         )}
-        {activeTab === 'validade' && <ValidadeTab expirations={expirations} />}
-        {activeTab === 'estoque' && <EstoqueTab products={products} />}
-        {activeTab === 'auditoria' && <AuditoriaTab audits={audits} />}
+        {activeTab === 'validade' && (
+          <ValidadeTab validities={validities} setValidities={setValidities} />
+        )}
+        {activeTab === 'estoque' && (
+          <EstoqueTab products={products} setProducts={setProducts} />
+        )}
+        {activeTab === 'auditoria' && (
+          <AuditoriaTab audits={audits} setAudits={setAudits} />
+        )}
         {activeTab === 'configuracoes' && (
-          <ConfiguracoesTab storeName={storeName} setStoreName={setStoreName} />
+          <ConfiguracoesTab isOnline={isOnline} />
         )}
       </main>
 
-      <BottomNav activeTab={activeTab} setActiveTab={setActiveTab} />
+      <BottomNav activeTab={activeTab} setActiveTab={setActiveTab} urgentCount={urgentCount} />
     </div>
   );
 }

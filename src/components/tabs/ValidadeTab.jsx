@@ -1,44 +1,81 @@
-import React from 'react';
-import { AlertCircle, Clock, CheckCircle2 } from 'lucide-react';
+import React, { useState } from 'react';
+import { Calendar, Search, Plus } from 'lucide-react';
 
-export default function ValidadeTab({ expirations }) {
+export default function ValidadeTab({ validities }) {
+  const [searchTerm, setSearchTerm] = useState('');
+  const [filter, setFilter] = useState('all');
+
+  const filtered = validities.filter(item => {
+    const matchesSearch = item.name.toLowerCase().includes(searchTerm.toLowerCase()) || item.batch.toLowerCase().includes(searchTerm.toLowerCase());
+    if (filter === 'urgent') return matchesSearch && item.status === 'urgent';
+    if (filter === 'warning') return matchesSearch && item.status === 'warning';
+    return matchesSearch;
+  });
+
   return (
     <div className="space-y-4">
       <div className="flex justify-between items-center">
-        <h2 className="text-xl font-bold text-gray-800">Controle de Validade</h2>
-        <button className="bg-blue-600 text-white text-xs px-3 py-1.5 rounded-lg font-medium">
-          + Novo Lote
+        <div>
+          <h2 className="text-xl font-bold">Controle de Validades</h2>
+          <p className="text-xs text-slate-500">Monitore itens próximos ao vencimento.</p>
+        </div>
+        <button className="bg-emerald-600 text-white p-2.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 shadow-md shadow-emerald-600/20 hover:bg-emerald-700 transition-colors">
+          <Plus className="w-4 h-4" />
+          <span className="hidden sm:inline">Novo Lote</span>
         </button>
       </div>
 
+      <div className="flex gap-2">
+        <div className="relative flex-1">
+          <Search className="w-4 h-4 absolute left-3 top-3 text-slate-400" />
+          <input 
+            type="text" 
+            placeholder="Buscar por produto ou lote..." 
+            value={searchTerm}
+            onChange={e => setSearchTerm(e.target.value)}
+            className="w-full pl-9 pr-4 py-2 rounded-xl text-xs border bg-white border-slate-200 text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+          />
+        </div>
+        <select 
+          value={filter}
+          onChange={e => setFilter(e.target.value)}
+          className="px-3 py-2 rounded-xl text-xs border bg-white border-slate-200 text-slate-800 focus:outline-none"
+        >
+          <option value="all">Todos os Status</option>
+          <option value="urgent">Urgentes (&lt; 5 dias)</option>
+          <option value="warning">Atenção (&lt; 15 dias)</option>
+        </select>
+      </div>
+
       <div className="space-y-2">
-        {expirations.map((item) => (
-          <div key={item.id} className="bg-white p-3 rounded-xl border border-gray-100 shadow-sm flex justify-between items-center">
-            <div className="space-y-1">
-              <p className="font-semibold text-sm text-gray-800">{item.name}</p>
-              <div className="flex gap-2 text-xs text-gray-500">
-                <span>Lote: {item.lot}</span>
-                <span>•</span>
-                <span>Qtd: {item.quantity} un</span>
+        {filtered.map(item => (
+          <div key={item.id} className="p-3.5 rounded-2xl border bg-white border-slate-200 flex items-center justify-between transition-all">
+            <div className="flex items-center gap-3">
+              <div className={`p-2.5 rounded-xl ${
+                item.status === 'urgent' ? 'bg-rose-500/10 text-rose-500' : item.status === 'warning' ? 'bg-amber-500/10 text-amber-500' : 'bg-emerald-500/10 text-emerald-500'
+              }`}>
+                <Calendar className="w-5 h-5" />
               </div>
-              <p className="text-xs font-medium text-gray-700">Vence: {item.date}</p>
+              <div>
+                <h4 className="text-xs font-bold">{item.name}</h4>
+                <div className="flex items-center gap-2 text-[11px] text-slate-400 mt-0.5">
+                  <span>Lote: {item.batch}</span>
+                  <span>•</span>
+                  <span>Qtd: {item.quantity} un</span>
+                </div>
+              </div>
             </div>
-            
-            {item.status === 'critical' && (
-              <span className="flex items-center gap-1 text-xs font-semibold text-red-600 bg-red-50 px-2 py-1 rounded-md border border-red-100">
-                <AlertCircle className="w-3.5 h-3.5" /> Crítico
+
+            <div className="text-right">
+              <div className={`text-xs font-bold ${
+                item.status === 'urgent' ? 'text-rose-500' : item.status === 'warning' ? 'text-amber-500' : 'text-emerald-500'
+              }`}>
+                Vence: {item.dueDate}
+              </div>
+              <span className="text-[10px] text-slate-400 block mt-0.5">
+                {item.status === 'urgent' ? 'Ação Urgente' : item.status === 'warning' ? 'Monitorar' : 'Regular'}
               </span>
-            )}
-            {item.status === 'warning' && (
-              <span className="flex items-center gap-1 text-xs font-semibold text-amber-600 bg-amber-50 px-2 py-1 rounded-md border border-amber-100">
-                <Clock className="w-3.5 h-3.5" /> Atenção
-              </span>
-            )}
-            {item.status === 'ok' && (
-              <span className="flex items-center gap-1 text-xs font-semibold text-green-600 bg-green-50 px-2 py-1 rounded-md border border-green-100">
-                <CheckCircle2 className="w-3.5 h-3.5" /> Normal
-              </span>
-            )}
+            </div>
           </div>
         ))}
       </div>
