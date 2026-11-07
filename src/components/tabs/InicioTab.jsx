@@ -64,7 +64,7 @@ export default function InicioTab({ products, validities, audits, setActiveTab }
         <h3 className="text-sm font-semibold mb-3 text-slate-500 uppercase tracking-wider">Ações Rápidas</h3>
         <div className="grid grid-cols-2 gap-3">
           <button onClick={() => setActiveTab('estoque')} className="p-3.5 rounded-xl border bg-white border-slate-200 hover:bg-slate-50 flex items-center gap-3 transition-all">
-            <div className="p-2.5 rounded-lg bg-blue-500/10 text-blue-600"><Barcode className="w-5 h-5" /></div>
+            <div className="p-2.5 rounded-lg bg-blue-500/10 text-blue-600"><Scan className="w-5 h-5" /></div>
             <div className="text-left">
               <div className="text-xs font-bold">Bipar Produto</div>
               <div className="text-[10px] text-slate-400">Consultar preço</div>

@@ -38,7 +38,7 @@ export default function EstoqueTab({ products }) {
           />
         </div>
         <button className="p-2 rounded-xl border bg-white border-slate-200">
-          <Barcode className="w-5 h-5 text-slate-600" />
+          <Scan className="w-5 h-5 text-slate-600" />
         </button>
       </div>
 
