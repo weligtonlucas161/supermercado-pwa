@@ -1,5 +1,5 @@
 import React from 'react';
-import { AlertTriangle, Calendar, ClipboardCheck, Package, Barcode, Plus, ArrowUpRight } from 'lucide-react';
+import { AlertTriangle, Calendar, ClipboardCheck, Package, Scan, Plus, ArrowUpRight } from 'lucide-react';
 
 export default function InicioTab({ products, validities, audits, setActiveTab }) {
   const urgentValidities = validities.filter(v => v.status === 'urgent');
