@@ -1,0 +1,6 @@
+{
+  "name": "SuperPWA OpSys - Gestão de Supermercado",
+  "description": "Sistema PWA operacional para supermercados: gestão de validades, controle de estoque com ruptura, auditoria e modo offline.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
