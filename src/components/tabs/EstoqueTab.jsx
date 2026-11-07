@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Search, Plus, Barcode } from 'lucide-react';
+import { Search, Plus, Scan } from 'lucide-react';
 
 export default function EstoqueTab({ products }) {
   const [searchTerm, setSearchTerm] = useState('');
