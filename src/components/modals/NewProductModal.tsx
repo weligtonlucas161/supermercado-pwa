@@ -12,6 +12,8 @@ export const NewProductModal: React.FC<NewProductModalProps> = ({ isOpen, onClos
 
   const [name, setName] = useState('');
   const [ean, setEan] = useState('');
+  const [supplierCode, setSupplierCode] = useState('');
+  const [reducedCode, setReducedCode] = useState('');
   const [category, setCategory] = useState('Mercearia');
   const [stock, setStock] = useState('50');
   const [minStock, setMinStock] = useState('20');
@@ -27,6 +29,8 @@ export const NewProductModal: React.FC<NewProductModalProps> = ({ isOpen, onClos
     addProduct({
       name,
       ean: ean.trim(),
+      supplierCode: supplierCode.trim(),
+      reducedCode: reducedCode.trim(),
       category,
       stock: Number(stock) || 0,
       minStock: Number(minStock) || 10,
@@ -99,6 +103,34 @@ export const NewProductModal: React.FC<NewProductModalProps> = ({ isOpen, onClos
               onChange={e => setEan(e.target.value)}
               className="w-full px-3 py-2 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-800 dark:text-slate-100 focus:ring-2 focus:ring-emerald-500"
             />
+          </div>
+
+          {/* Código de Fornecedor & Código Reduzido */}
+          <div className="grid grid-cols-2 gap-2.5">
+            <div>
+              <label className="text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase block mb-1">
+                Cód. Fornecedor
+              </label>
+              <input
+                type="text"
+                placeholder="Ex: FORN-102"
+                value={supplierCode}
+                onChange={e => setSupplierCode(e.target.value)}
+                className="w-full px-3 py-2 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-800 dark:text-slate-100 focus:ring-2 focus:ring-emerald-500"
+              />
+            </div>
+            <div>
+              <label className="text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase block mb-1">
+                Cód. Reduzido
+              </label>
+              <input
+                type="text"
+                placeholder="Ex: RED-409"
+                value={reducedCode}
+                onChange={e => setReducedCode(e.target.value)}
+                className="w-full px-3 py-2 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-800 dark:text-slate-100 focus:ring-2 focus:ring-emerald-500"
+              />
+            </div>
           </div>
 
           {/* Categoria & Preço */}

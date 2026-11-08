@@ -6,7 +6,8 @@ import {
   Minus, 
   Package, 
   AlertTriangle, 
-  FileSpreadsheet 
+  FileSpreadsheet,
+  Lock
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { NewProductModal } from '../modals/NewProductModal';
@@ -137,15 +138,23 @@ export const EstoqueTab: React.FC = () => {
                 <div className="space-y-1">
                   <div className="flex items-center gap-2 flex-wrap">
                     <h4 className="text-xs font-bold text-slate-900 dark:text-white">{product.name}</h4>
+                    {product.isEncryptedInStorage && (
+                      <span className="text-[10px] font-bold px-1.5 py-0.2 rounded bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 flex items-center gap-1" title="Criptografado com AES-256 no banco e descriptografado no software">
+                        <Lock className="w-2.5 h-2.5" /> Protegido AES
+                      </span>
+                    )}
                     {isLow && (
                       <span className="bg-amber-500/15 text-amber-700 dark:text-amber-400 text-[10px] px-2 py-0.5 rounded-md font-bold border border-amber-500/20 flex items-center gap-1">
                         <AlertTriangle className="w-3 h-3 text-amber-500" /> Ruptura Iminente
                       </span>
                     )}
                   </div>
-                  <p className="text-[11px] text-slate-400 font-mono">
-                    EAN: {product.ean} • <span className="font-sans text-slate-500 dark:text-slate-400 font-medium">{product.location}</span>
-                  </p>
+                  <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-400 font-mono">
+                    <span>EAN: {product.ean}</span>
+                    {product.reducedCode && <span>• Reduzido: {product.reducedCode}</span>}
+                    {product.supplierCode && <span>• Forn: {product.supplierCode}</span>}
+                    <span>• <span className="font-sans text-slate-500 dark:text-slate-400 font-medium">{product.location}</span></span>
+                  </div>
                   <p className="text-xs font-extrabold text-emerald-600 dark:text-emerald-400">
                     R$ {product.price.toFixed(2)}
                   </p>

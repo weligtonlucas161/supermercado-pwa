@@ -6,14 +6,47 @@ export type TabId = 'inicio' | 'validade' | 'estoque' | 'auditoria' | 'configura
 
 export interface Product {
   id: string;
-  ean: string;
-  name: string;
+  ean: string;                      // Código EAN
+  name: string;                     // Descrição do produto
+  supplierCode?: string;            // Código de fornecedor
+  reducedCode?: string;             // Código reduzido
   category: string;
-  stock: number;
+  stock: number;                    // Quantidade em estoque
   minStock: number;
   price: number;
   location: string;
+  isEncryptedInStorage?: boolean;   // Indicador de que o registro foi cifrado antes do upload
+  encryptedPayload?: {
+    ciphertext: string;
+    iv: string;
+    encryptedAt?: string;
+  };
   lastUpdated?: string;
+}
+
+/**
+ * Modelo estrito das 5 colunas exigidas da planilha:
+ * 1. Descrição do produto
+ * 2. Código de fornecedor
+ * 3. Código reduzido
+ * 4. Código EAN
+ * 5. Quantidade
+ */
+export interface SpreadsheetProductItem {
+  name: string;             // Descrição do produto
+  supplierCode: string;     // Código de fornecedor
+  reducedCode: string;      // Código reduzido
+  ean: string;              // Código EAN
+  quantity: number;         // Quantidade
+  isValid: boolean;
+  errors: string[];
+}
+
+export interface EncryptedProductUpload {
+  ean: string;
+  ciphertext: string;
+  iv: string;
+  createdAt: string;
 }
 
 export interface ValidityItem {
@@ -49,7 +82,7 @@ export interface Operator {
 
 export interface OfflineAction {
   id: string;
-  type: 'ADD_PRODUCT' | 'UPDATE_STOCK' | 'ADD_VALIDITY' | 'ADD_AUDIT' | 'APPLY_DISCOUNT';
+  type: 'ADD_PRODUCT' | 'UPDATE_STOCK' | 'ADD_VALIDITY' | 'ADD_AUDIT' | 'APPLY_DISCOUNT' | 'IMPORT_ENCRYPTED_SPREADSHEET';
   payload: unknown;
   timestamp: string;
 }
