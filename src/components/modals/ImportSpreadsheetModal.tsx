@@ -41,7 +41,7 @@ interface ColumnOption {
 }
 
 export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ isOpen, onClose }) => {
-  const { addProduct } = useApp();
+  const { addProduct, operator } = useApp();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   // Estados do Fluxo em Passos
@@ -295,10 +295,18 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
     setUploadProgress(0);
 
     try {
-      // 1. Upload em Realtime para o Supabase
-      await uploadEncryptedProductsRealtime(encryptedList, (uploaded, total, pct) => {
-        setUploadProgress(pct);
-      });
+      // 1. Upload em Realtime para o banco Synk (tabelas produtos, produtos_catalogo_universal e app_logs)
+      await uploadEncryptedProductsRealtime(
+        encryptedList,
+        (uploaded, total, pct) => {
+          setUploadProgress(pct);
+        },
+        {
+          lojaId: operator.loja_id || 'loja_padrao_001',
+          operatorMatricula: operator.code || '4092',
+          operatorNome: operator.name || 'Carlos Silva',
+        }
+      );
 
       // 2. Gravação no estoque do App (informações descriptografadas na memória da aplicação)
       encryptedList.forEach(item => {
@@ -312,6 +320,7 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
           price: 9.90,
           category: 'Mercearia',
           location: 'Gôndola Central',
+          loja_id: operator.loja_id || 'loja_padrao_001',
           isEncryptedInStorage: true,
           encryptedPayload: {
             ciphertext: item.encrypted.ciphertext,

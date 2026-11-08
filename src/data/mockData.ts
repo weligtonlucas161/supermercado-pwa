@@ -26,11 +26,13 @@ export const INITIAL_AUDITS: AuditItem[] = [
 ];
 
 export const INITIAL_OPERATOR: Operator = {
-  id: 'op-4092',
+  id: 'usr_op_carlos_4092',
   name: 'Carlos Silva',
-  code: '#4092',
-  role: 'Encarregado de Prevenção e Estoque',
-  store: 'Loja 04 - Centro',
+  code: '4092',
+  matricula: '4092',
+  role: 'operador',
+  store: 'Supermercado Silva - Loja 01 (Matriz)',
+  loja_id: 'loja_padrao_001',
   shift: 'Manhã (07:00 - 15:20)',
 };
 

@@ -4,18 +4,33 @@ export type AuditStatus = 'Concluída' | 'Em Andamento' | 'Pendente';
 
 export type TabId = 'inicio' | 'validade' | 'estoque' | 'auditoria' | 'configuracoes';
 
+/**
+ * Interface Produto sincronizada com a tabela 'produtos' e 'produtos_catalogo_universal'
+ * do banco Synk (2026.1):
+ * - id: TEXT
+ * - nome: TEXT (Descrição do produto)
+ * - codigo_barras: TEXT (Código EAN)
+ * - plu: TEXT (Código reduzido)
+ * - codigo_fornecedor: TEXT (Código de fornecedor)
+ * - setor: TEXT
+ * - quantidade: INTEGER (Quantidade em estoque)
+ * - data_vencimento: TEXT (YYYY-MM-DD)
+ * - loja_id: TEXT
+ */
 export interface Product {
   id: string;
-  ean: string;                      // Código EAN
-  name: string;                     // Descrição do produto
-  supplierCode?: string;            // Código de fornecedor
-  reducedCode?: string;             // Código reduzido
-  category: string;
-  stock: number;                    // Quantidade em estoque
+  ean: string;                      // Código EAN (codigo_barras)
+  name: string;                     // Descrição do produto (nome)
+  supplierCode?: string;            // Código de fornecedor (codigo_fornecedor)
+  reducedCode?: string;             // Código reduzido (plu)
+  category: string;                 // Setor da loja (setor)
+  stock: number;                    // Quantidade em estoque (quantidade)
   minStock: number;
   price: number;
   location: string;
-  isEncryptedInStorage?: boolean;   // Indicador de que o registro foi cifrado antes do upload
+  loja_id?: string;                 // Isolamento por loja
+  data_vencimento?: string;         // YYYY-MM-DD
+  isEncryptedInStorage?: boolean;   // Indicador de criptografia
   encryptedPayload?: {
     ciphertext: string;
     iv: string;
@@ -25,19 +40,14 @@ export interface Product {
 }
 
 /**
- * Modelo estrito das 5 colunas exigidas da planilha:
- * 1. Descrição do produto
- * 2. Código de fornecedor
- * 3. Código reduzido
- * 4. Código EAN
- * 5. Quantidade
+ * Modelo estrito das 5 colunas da planilha
  */
 export interface SpreadsheetProductItem {
-  name: string;             // Descrição do produto
-  supplierCode: string;     // Código de fornecedor
-  reducedCode: string;      // Código reduzido
-  ean: string;              // Código EAN
-  quantity: number;         // Quantidade
+  name: string;             // 1. Descrição do produto
+  supplierCode: string;     // 2. Código de fornecedor
+  reducedCode: string;      // 3. Código reduzido
+  ean: string;              // 4. Código EAN
+  quantity: number;         // 5. Quantidade
   isValid: boolean;
   errors: string[];
 }
@@ -74,9 +84,11 @@ export interface AuditItem {
 export interface Operator {
   id: string;
   name: string;
-  code: string;
-  role: string;
+  code: string;         // Matrícula
+  matricula?: string;
+  role: string;         // Cargo ('adm' | 'master' | 'operador')
   store: string;
+  loja_id: string;      // ID da loja vinculada
   shift: string;
 }
 
