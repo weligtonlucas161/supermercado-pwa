@@ -14,11 +14,16 @@ import {
   Layers,
   Database,
   CheckCircle2,
-  AlertCircle
+  AlertCircle,
+  LogOut,
+  Sparkles,
+  FileText
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { PWAInstallBanner } from '../../pwa/PWAInstallBanner';
 import { isSupabaseConfigured, testSupabaseConnection } from '../../services/supabaseService';
+import { PatchNotesModal } from '../modals/PatchNotesModal';
+import { TermsModal } from '../modals/TermsModal';
 
 export const ConfiguracoesTab: React.FC = () => {
   const { 
@@ -30,13 +35,16 @@ export const ConfiguracoesTab: React.FC = () => {
     offlineQueue, 
     syncOfflineQueue, 
     operator, 
-    resetAllData 
+    resetAllData,
+    logout 
   } = useApp();
 
   const [resetConfirm, setResetConfirm] = useState(false);
   const [cacheCleared, setCacheCleared] = useState(false);
   const [testingSupabase, setTestingSupabase] = useState(false);
   const [supabaseTestResult, setSupabaseTestResult] = useState<{ success: boolean; message: string } | null>(null);
+  const [showPatchNotes, setShowPatchNotes] = useState(false);
+  const [showTerms, setShowTerms] = useState(false);
 
   const handleClearCache = async () => {
     if ('caches' in window) {
@@ -208,7 +216,7 @@ export const ConfiguracoesTab: React.FC = () => {
           )}
         </div>
 
-        {/* Perfil Operador */}
+        {/* Perfil Operador & Logout */}
         <div className="p-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="p-2.5 rounded-xl bg-purple-500/15 text-purple-500">
@@ -217,11 +225,21 @@ export const ConfiguracoesTab: React.FC = () => {
             <div>
               <p className="text-xs font-bold text-slate-900 dark:text-white">{operator.name}</p>
               <p className="text-[11px] text-slate-400">
-                Matrícula {operator.code} • {operator.role}
+                Matrícula {operator.code} • Cargo: {operator.role}
               </p>
             </div>
           </div>
-          <span className="text-[11px] font-bold text-slate-400">{operator.store}</span>
+          <div className="flex items-center gap-2">
+            <span className="text-[11px] font-bold text-slate-400 hidden sm:inline">{operator.store}</span>
+            <button
+              onClick={logout}
+              className="px-2.5 py-1.5 rounded-xl border border-rose-200 dark:border-rose-900/50 text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/20 text-xs font-bold flex items-center gap-1.5 transition"
+              title="Encerrar Sessão"
+            >
+              <LogOut className="w-3.5 h-3.5" />
+              <span>Sair</span>
+            </button>
+          </div>
         </div>
       </div>
 
@@ -286,14 +304,42 @@ export const ConfiguracoesTab: React.FC = () => {
       </div>
 
       {/* Rodapé Informativo */}
-      <div className="text-center pt-2 pb-6 space-y-1">
+      <div className="text-center pt-2 pb-6 space-y-2">
+        <div className="flex items-center justify-center gap-3 text-xs text-slate-500 dark:text-slate-400">
+          <button
+            onClick={() => setShowTerms(true)}
+            className="hover:underline flex items-center gap-1 font-semibold text-emerald-600 dark:text-emerald-400 cursor-pointer"
+          >
+            <FileText className="w-3.5 h-3.5" />
+            <span>Termos de Uso</span>
+          </button>
+          <span>•</span>
+          <button
+            onClick={() => setShowPatchNotes(true)}
+            className="hover:underline flex items-center gap-1 font-semibold text-slate-600 dark:text-slate-300 cursor-pointer"
+          >
+            <Sparkles className="w-3.5 h-3.5 text-amber-500" />
+            <span>Notas da Versão (v2026.1.4)</span>
+          </button>
+        </div>
+
         <p className="text-[11px] font-bold text-slate-500 dark:text-slate-400">
-          SuperPWA OpSys • Versão 2.2.0 PWA & Supabase Ready
+          SuperPWA OpSys • No-Copyright (Domínio Público) • Synk 2026.1
         </p>
         <p className="text-[10px] text-slate-400">
           Suporte completo a Chrome, Edge, Safari iOS, coletores Zebra / Honeywell e Android PWA
         </p>
       </div>
+
+      <PatchNotesModal
+        isOpen={showPatchNotes}
+        onClose={() => setShowPatchNotes(false)}
+      />
+
+      <TermsModal
+        isOpen={showTerms}
+        onClose={() => setShowTerms(false)}
+      />
     </div>
   );
 };

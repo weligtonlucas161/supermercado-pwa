@@ -12,19 +12,19 @@ import {
   ArrowRight, 
   ArrowLeft, 
   RefreshCw, 
-  Eye, 
-  EyeOff, 
-  Database,
-  CheckCircle2,
-  FileCheck2,
   SlidersHorizontal,
-  Key
+  Layers,
+  Table,
+  CheckCircle2,
+  FileCheck,
+  Eye,
+  Tag
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { useApp } from '../../context/AppContext';
-import { SpreadsheetProductItem } from '../../types';
+import { SpreadsheetProductItem, SetorLoja, SETORES_DISPONIVEIS } from '../../types';
 import { uploadEncryptedProductsRealtime } from '../../services/supabaseService';
-import { encryptProductList, decryptProduct } from '../../utils/crypto';
+import { encryptProductList } from '../../utils/crypto';
 import { triggerScanBeep } from '../../utils/haptics';
 
 interface ImportSpreadsheetModalProps {
@@ -32,7 +32,7 @@ interface ImportSpreadsheetModalProps {
   onClose: () => void;
 }
 
-type ImportStep = '1_UPLOAD_MAP' | '2_CONFIRM_LIST' | '3_ENCRYPTION' | '4_REALTIME_UPLOAD_SUCCESS';
+type StepNumber = 1 | 2 | 3 | 4;
 
 interface ColumnOption {
   index: number;
@@ -44,13 +44,19 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
   const { addProduct, operator } = useApp();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  // Estados do Fluxo em Passos
-  const [currentStep, setCurrentStep] = useState<ImportStep>('1_UPLOAD_MAP');
+  // Etapa Atual (1 a 4)
+  const [step, setStep] = useState<StepNumber>(1);
+
+  // Estados da Etapa 1: Upload e Preview Bruto
   const [fileName, setFileName] = useState<string | null>(null);
+  const [fileSize, setFileSize] = useState<string | null>(null);
+  const [rawHeaders, setRawHeaders] = useState<string[]>([]);
+  const [rawMatrix, setRawMatrix] = useState<string[][]>([]);
   const [rawRows, setRawRows] = useState<Array<Record<string, unknown>>>([]);
   const [detectedColumns, setDetectedColumns] = useState<ColumnOption[]>([]);
 
-  // Mapeamento das 5 colunas estritas por posição / chave
+  // Estados da Etapa 2: Mapeamento das 5 Colunas e Seleção de Setor
+  const [selectedSetor, setSelectedSetor] = useState<SetorLoja>('MERCEARIA');
   const [colMap, setColMap] = useState({
     name: -1,         // 1. Descrição do produto
     supplierCode: -1, // 2. Código de fornecedor
@@ -58,26 +64,26 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
     ean: -1,          // 4. Código EAN
     quantity: -1,     // 5. Quantidade
   });
+  const [mappedItems, setMappedItems] = useState<SpreadsheetProductItem[]>([]);
 
-  // Dados extraídos das 5 colunas
-  const [extractedItems, setExtractedItems] = useState<SpreadsheetProductItem[]>([]);
-
-  // Estados da Criptografia (Passo 3)
+  // Estados da Etapa 3: Criptografia Local (AES-GCM 256 bits)
   const [encryptionProgress, setEncryptionProgress] = useState(0);
   const [encryptedPayloads, setEncryptedPayloads] = useState<
     Array<{ original: SpreadsheetProductItem; encrypted: { ciphertext: string; iv: string } }>
   >([]);
   const [sampleCiphertext, setSampleCiphertext] = useState('');
+  const [isEncrypting, setIsEncrypting] = useState(false);
 
-  // Estados do Upload Realtime (Passo 4)
+  // Estados da Etapa 4: Sincronização Supabase e Exibição Descriptografada
   const [uploadProgress, setUploadProgress] = useState(0);
   const [isUploading, setIsUploading] = useState(false);
+  const [uploadSuccess, setUploadSuccess] = useState(false);
   const [showEncryptedView, setShowEncryptedView] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   if (!isOpen) return null;
 
-  // Função utilitária para normalizar strings de cabeçalho
+  // Normalização para detecção inteligente de cabeçalhos
   const normalize = (text: string) => {
     return text
       .toLowerCase()
@@ -87,13 +93,14 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
   };
 
   // =========================================================================
-  // PASSO 1: CARREGAR PLANILHA E IDENTIFICAR AS 5 COLUNAS
+  // ETAPA 1: LEITURA E PREVIEW DA PLANILHA BRUTA
   // =========================================================================
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     setFileName(file.name);
+    setFileSize((file.size / 1024).toFixed(1) + ' KB');
     setErrorMessage(null);
 
     const reader = new FileReader();
@@ -105,7 +112,7 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
         const wsname = wb.SheetNames[0];
         const ws = wb.Sheets[wsname];
 
-        // Ler matriz bruta para pegar tanto posições físicas quanto cabeçalhos
+        // Matriz bruta para preview fiel
         const matrix = XLSX.utils.sheet_to_json<string[]>(ws, { header: 1, defval: '' });
 
         if (!matrix || matrix.length < 1) {
@@ -114,21 +121,22 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
         }
 
         const headerRow = matrix[0] || [];
-        const firstDataRow = matrix[1] || [];
+        setRawHeaders(headerRow);
+        setRawMatrix(matrix.slice(1, 10)); // Primeiras linhas de preview
 
+        const firstDataRow = matrix[1] || [];
         const cols: ColumnOption[] = headerRow.map((head, idx) => ({
           index: idx,
-          label: `Coluna ${String.fromCharCode(65 + idx)} (${head || 'Sem nome'})`,
+          label: `Coluna ${String.fromCharCode(65 + idx)} (${head || 'Sem título'})`,
           sampleValue: String(firstDataRow[idx] || ''),
         }));
-
         setDetectedColumns(cols);
 
-        // Converter dados estruturados
-        const parsedData = XLSX.utils.sheet_to_json<Record<string, unknown>>(ws, { defval: '' });
-        setRawRows(parsedData);
+        // Linhas estruturadas
+        const parsed = XLSX.utils.sheet_to_json<Record<string, unknown>>(ws, { defval: '' });
+        setRawRows(parsed);
 
-        // Auto-identificação inteligente das 5 posições padrão
+        // Auto-mapeamento das 5 colunas pelas palavras-chave
         const autoMap = {
           name: -1,
           supplierCode: -1,
@@ -152,7 +160,7 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
           }
         });
 
-        // Caso posições sejam sequenciais sem cabeçalho específico (ex: A, B, C, D, E)
+        // Fallbacks se as colunas forem A, B, C, D, E sequenciais
         if (autoMap.name === -1 && cols.length > 0) autoMap.name = 0;
         if (autoMap.supplierCode === -1 && cols.length > 1) autoMap.supplierCode = 1;
         if (autoMap.reducedCode === -1 && cols.length > 2) autoMap.reducedCode = 2;
@@ -162,7 +170,7 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
         setColMap(autoMap);
       } catch (err) {
         console.error('Erro ao ler planilha:', err);
-        setErrorMessage('Formato de planilha inválido. Utilize arquivos .xlsx, .xls ou .csv.');
+        setErrorMessage('Formato de planilha inválido. Carregue um arquivo .xlsx, .xls ou .csv.');
       }
     };
 
@@ -170,7 +178,7 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
   };
 
   // Gerar e baixar planilha modelo estrita com as 5 colunas
-  const handleDownload5ColTemplate = () => {
+  const handleDownloadTemplate = () => {
     const template = [
       {
         'Descrição do produto': 'Leite UHT Integral 1 Litro',
@@ -215,23 +223,22 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
     XLSX.writeFile(wb, 'modelo_estoque_5_colunas.xlsx');
   };
 
-  // Validar e extrair dados para o Passo 2
-  const handleProceedToStep2 = () => {
-    if (colMap.name === -1 || colMap.ean === -1 || colMap.quantity === -1) {
-      setErrorMessage('Por favor, informe a posição ao menos de Descrição, EAN e Quantidade.');
-      return;
+  // =========================================================================
+  // ETAPA 2: PROCESSAR MAPEAMENTO DAS 5 COLUNAS + SETOR SELECIONADO
+  // =========================================================================
+  const updateMappedItems = (currentColMap = colMap, setor = selectedSetor) => {
+    if (currentColMap.name === -1 || currentColMap.ean === -1 || currentColMap.quantity === -1) {
+      return [];
     }
-
-    setErrorMessage(null);
 
     const items: SpreadsheetProductItem[] = rawRows.map((row) => {
       const values = Object.values(row);
 
-      const name = String(values[colMap.name] ?? '').trim();
-      const supplierCode = colMap.supplierCode >= 0 ? String(values[colMap.supplierCode] ?? '').trim() : '';
-      const reducedCode = colMap.reducedCode >= 0 ? String(values[colMap.reducedCode] ?? '').trim() : '';
-      const ean = String(values[colMap.ean] ?? '').trim();
-      const quantityRaw = values[colMap.quantity];
+      const name = String(values[currentColMap.name] ?? '').trim();
+      const supplierCode = currentColMap.supplierCode >= 0 ? String(values[currentColMap.supplierCode] ?? '').trim() : '';
+      const reducedCode = currentColMap.reducedCode >= 0 ? String(values[currentColMap.reducedCode] ?? '').trim() : '';
+      const ean = String(values[currentColMap.ean] ?? '').trim();
+      const quantityRaw = values[currentColMap.quantity];
       const quantity = Math.max(0, parseInt(String(quantityRaw ?? 0).replace(/[^0-9]/g, ''), 10) || 0);
 
       const errors: string[] = [];
@@ -244,27 +251,56 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
         reducedCode,
         ean,
         quantity,
+        setor,
         isValid: errors.length === 0,
         errors,
       };
     });
 
-    setExtractedItems(items);
-    setCurrentStep('2_CONFIRM_LIST');
+    return items;
+  };
+
+  const handleGoToStep2 = () => {
+    if (rawRows.length === 0) {
+      setErrorMessage('Carregue uma planilha antes de avançar.');
+      return;
+    }
+    setErrorMessage(null);
+    const items = updateMappedItems(colMap, selectedSetor);
+    setMappedItems(items);
+    setStep(2);
     triggerScanBeep(true);
   };
 
+  const handleSetorChange = (setor: SetorLoja) => {
+    setSelectedSetor(setor);
+    const items = updateMappedItems(colMap, setor);
+    setMappedItems(items);
+  };
+
+  const handleColMapChange = (key: keyof typeof colMap, value: number) => {
+    const updated = { ...colMap, [key]: value };
+    setColMap(updated);
+    const items = updateMappedItems(updated, selectedSetor);
+    setMappedItems(items);
+  };
+
   // =========================================================================
-  // PASSO 3: CRIPTOGRAFIA DE TODAS AS 5 COLUNAS (AES-GCM 256-bit)
+  // ETAPA 3: CRIPTOGRAFIA LOCAL (AES-GCM 256 BITS)
   // =========================================================================
   const handleStartEncryption = async () => {
-    setCurrentStep('3_ENCRYPTION');
-    setEncryptionProgress(0);
+    const validItems = mappedItems.filter(i => i.isValid);
+    if (validItems.length === 0) {
+      setErrorMessage('Nenhum item válido para criptografar. Verifique o mapeamento das colunas.');
+      return;
+    }
+
     setErrorMessage(null);
+    setStep(3);
+    setIsEncrypting(true);
+    setEncryptionProgress(0);
 
     try {
-      const validItems = extractedItems.filter(i => i.isValid);
-
       const encrypted = await encryptProductList(validItems, (processed, total, pct) => {
         setEncryptionProgress(pct);
       });
@@ -273,29 +309,33 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
       if (encrypted.length > 0) {
         setSampleCiphertext(encrypted[0].encrypted.ciphertext);
       }
+      setIsEncrypting(false);
+      triggerScanBeep(true);
 
-      // Pequena pausa para o usuário ver o feedback de 100%
+      // Transição automática para Etapa 4 após breve intervalo
       setTimeout(() => {
-        handleRealtimeUpload(encrypted);
+        handleStartSync(encrypted);
       }, 700);
     } catch (err) {
-      console.error('Erro na criptografia:', err);
-      setErrorMessage('Falha ao criptografar dados antes do upload.');
+      console.error('Falha na criptografia:', err);
+      setIsEncrypting(false);
+      setErrorMessage('Erro ao criptografar dados com AES-GCM 256 bits.');
     }
   };
 
   // =========================================================================
-  // PASSO 4: UPLOAD REALTIME PARA O BANCO E EXIBIÇÃO DESCRIPTOGRAFADA
+  // ETAPA 4: SINCRONIZAÇÃO COM BACKEND SUPABASE & EXIBIÇÃO NO SOFTWARE
   // =========================================================================
-  const handleRealtimeUpload = async (
-    encryptedList: Array<{ original: SpreadsheetProductItem; encrypted: { ciphertext: string; iv: string } }>
+  const handleStartSync = async (
+    encryptedList = encryptedPayloads
   ) => {
-    setCurrentStep('4_REALTIME_UPLOAD_SUCCESS');
+    setStep(4);
     setIsUploading(true);
     setUploadProgress(0);
+    setUploadSuccess(false);
 
     try {
-      // 1. Upload em Realtime para o banco Synk (tabelas produtos, produtos_catalogo_universal e app_logs)
+      // 1. Upload em tempo real para o banco de dados oficial Synk
       await uploadEncryptedProductsRealtime(
         encryptedList,
         (uploaded, total, pct) => {
@@ -308,7 +348,7 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
         }
       );
 
-      // 2. Gravação no estoque do App (informações descriptografadas na memória da aplicação)
+      // 2. Gravação no estoque do App (informações descriptografadas com o setor escolhido)
       encryptedList.forEach(item => {
         addProduct({
           name: item.original.name,
@@ -318,8 +358,8 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
           stock: item.original.quantity,
           minStock: 10,
           price: 9.90,
-          category: 'Mercearia',
-          location: 'Gôndola Central',
+          category: item.original.setor || selectedSetor,
+          location: `Gôndola - ${item.original.setor || selectedSetor}`,
           loja_id: operator.loja_id || 'loja_padrao_001',
           isEncryptedInStorage: true,
           encryptedPayload: {
@@ -331,21 +371,22 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
       });
 
       setIsUploading(false);
+      setUploadSuccess(true);
       triggerScanBeep(true);
     } catch (err) {
-      console.error('Erro no upload realtime:', err);
+      console.error('Erro na sincronização:', err);
       setIsUploading(false);
-      setErrorMessage('Ocorreu uma falha no upload para o banco de dados.');
+      setErrorMessage('Ocorreu um erro durante a sincronização com o banco de dados.');
     }
   };
 
-  const validItemsCount = extractedItems.filter(i => i.isValid).length;
+  const validItemsCount = mappedItems.filter(i => i.isValid).length;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-xs p-3 sm:p-4 animate-in fade-in duration-200">
       <div className="w-full max-w-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl shadow-2xl p-5 sm:p-6 max-h-[94vh] flex flex-col">
         
-        {/* Header com Indicador de Passos */}
+        {/* Header Modal */}
         <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
           <div className="flex items-center gap-2.5">
             <div className="p-2.5 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 rounded-2xl">
@@ -353,15 +394,15 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <h3 className="font-extrabold text-sm text-slate-800 dark:text-white">
-                  Importação de Estoque por Planilha (5 Colunas Estritas)
+                <h3 className="font-extrabold text-sm sm:text-base text-slate-800 dark:text-white">
+                  Importação de Planilha de Estoque
                 </h3>
-                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
-                  AES-256 GCM
+                <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
+                  4 Etapas
                 </span>
               </div>
               <p className="text-[11px] text-slate-400">
-                Descrição • Cód. Fornecedor • Cód. Reduzido • EAN • Quantidade
+                Mapeamento das 5 colunas estritas • Seleção de Setor • AES-256 • Supabase
               </p>
             </div>
           </div>
@@ -373,26 +414,49 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
           </button>
         </div>
 
-        {/* Stepper Visual */}
-        <div className="py-3 flex items-center justify-between border-b border-slate-100 dark:border-slate-800/80 text-xs">
-          <div className={`flex items-center gap-1.5 ${currentStep === '1_UPLOAD_MAP' ? 'font-bold text-emerald-600 dark:text-emerald-400' : 'text-slate-400'}`}>
-            <span className="w-5 h-5 rounded-full bg-emerald-500/20 text-emerald-600 flex items-center justify-center text-[10px] font-bold">1</span>
-            <span>Carregar & Mapear 5 Colunas</span>
+        {/* Stepper Visual (1 -> 2 -> 3 -> 4) */}
+        <div className="py-3 flex items-center justify-between border-b border-slate-100 dark:border-slate-800/80 text-xs overflow-x-auto gap-2">
+          {/* Etapa 1 */}
+          <div className={`flex items-center gap-1.5 shrink-0 ${step === 1 ? 'font-black text-emerald-600 dark:text-emerald-400' : 'text-slate-400'}`}>
+            <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold ${
+              step > 1 ? 'bg-emerald-500 text-white' : step === 1 ? 'bg-emerald-500/20 text-emerald-600 dark:text-emerald-400' : 'bg-slate-200 dark:bg-slate-800'
+            }`}>
+              {step > 1 ? '✓' : '1'}
+            </span>
+            <span>1. Upload & Preview</span>
           </div>
-          <ArrowRight className="w-3.5 h-3.5 text-slate-300 dark:text-slate-700" />
-          <div className={`flex items-center gap-1.5 ${currentStep === '2_CONFIRM_LIST' ? 'font-bold text-emerald-600 dark:text-emerald-400' : 'text-slate-400'}`}>
-            <span className="w-5 h-5 rounded-full bg-emerald-500/20 text-emerald-600 flex items-center justify-center text-[10px] font-bold">2</span>
-            <span>Conferência de Dados</span>
+          <ArrowRight className="w-3.5 h-3.5 text-slate-300 dark:text-slate-700 shrink-0" />
+
+          {/* Etapa 2 */}
+          <div className={`flex items-center gap-1.5 shrink-0 ${step === 2 ? 'font-black text-emerald-600 dark:text-emerald-400' : 'text-slate-400'}`}>
+            <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold ${
+              step > 2 ? 'bg-emerald-500 text-white' : step === 2 ? 'bg-emerald-500/20 text-emerald-600 dark:text-emerald-400' : 'bg-slate-200 dark:bg-slate-800'
+            }`}>
+              {step > 2 ? '✓' : '2'}
+            </span>
+            <span>2. Colunas & Setor</span>
           </div>
-          <ArrowRight className="w-3.5 h-3.5 text-slate-300 dark:text-slate-700" />
-          <div className={`flex items-center gap-1.5 ${currentStep === '3_ENCRYPTION' ? 'font-bold text-emerald-600 dark:text-emerald-400' : 'text-slate-400'}`}>
-            <span className="w-5 h-5 rounded-full bg-emerald-500/20 text-emerald-600 flex items-center justify-center text-[10px] font-bold">3</span>
-            <span>Criptografia</span>
+          <ArrowRight className="w-3.5 h-3.5 text-slate-300 dark:text-slate-700 shrink-0" />
+
+          {/* Etapa 3 */}
+          <div className={`flex items-center gap-1.5 shrink-0 ${step === 3 ? 'font-black text-emerald-600 dark:text-emerald-400' : 'text-slate-400'}`}>
+            <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold ${
+              step > 3 ? 'bg-emerald-500 text-white' : step === 3 ? 'bg-emerald-500/20 text-emerald-600 dark:text-emerald-400' : 'bg-slate-200 dark:bg-slate-800'
+            }`}>
+              {step > 3 ? '✓' : '3'}
+            </span>
+            <span>3. Criptografia</span>
           </div>
-          <ArrowRight className="w-3.5 h-3.5 text-slate-300 dark:text-slate-700" />
-          <div className={`flex items-center gap-1.5 ${currentStep === '4_REALTIME_UPLOAD_SUCCESS' ? 'font-bold text-emerald-600 dark:text-emerald-400' : 'text-slate-400'}`}>
-            <span className="w-5 h-5 rounded-full bg-emerald-500/20 text-emerald-600 flex items-center justify-center text-[10px] font-bold">4</span>
-            <span>Upload Realtime & Descriptografia</span>
+          <ArrowRight className="w-3.5 h-3.5 text-slate-300 dark:text-slate-700 shrink-0" />
+
+          {/* Etapa 4 */}
+          <div className={`flex items-center gap-1.5 shrink-0 ${step === 4 ? 'font-black text-emerald-600 dark:text-emerald-400' : 'text-slate-400'}`}>
+            <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold ${
+              uploadSuccess ? 'bg-emerald-500 text-white' : step === 4 ? 'bg-emerald-500/20 text-emerald-600 dark:text-emerald-400' : 'bg-slate-200 dark:bg-slate-800'
+            }`}>
+              {uploadSuccess ? '✓' : '4'}
+            </span>
+            <span>4. Sincronização</span>
           </div>
         </div>
 
@@ -404,11 +468,11 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
         )}
 
         {/* ================================================================= */}
-        {/* CORPO DO PASSO 1: UPLOAD E POSIÇÕES DAS 5 COLUNAS */}
+        {/* ETAPA 1: UPLOAD E PREVIEW DA PLANILHA */}
         {/* ================================================================= */}
-        {currentStep === '1_UPLOAD_MAP' && (
+        {step === 1 && (
           <div className="py-4 space-y-4 overflow-y-auto flex-1">
-            {/* Seletor de Arquivo */}
+            {/* Dropzone */}
             <div
               onClick={() => fileInputRef.current?.click()}
               className="border-2 border-dashed border-emerald-500/40 hover:border-emerald-500 rounded-3xl p-5 text-center cursor-pointer bg-emerald-500/5 hover:bg-emerald-500/10 transition group"
@@ -422,131 +486,65 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
               />
               <Upload className="w-8 h-8 mx-auto text-emerald-500 mb-2 group-hover:scale-110 transition-transform" />
               <p className="text-xs font-bold text-slate-800 dark:text-slate-100">
-                {fileName ? `Arquivo Carregado: ${fileName}` : 'Clique para selecionar a planilha (.xlsx, .xls ou .csv)'}
+                {fileName ? `Arquivo: ${fileName} (${fileSize})` : 'Clique ou arraste a planilha aqui (.xlsx, .xls ou .csv)'}
               </p>
               <p className="text-[11px] text-slate-400 mt-0.5">
-                O sistema identificará e extrairá estritamente as 5 colunas requeridas.
+                O arquivo será lido instantaneamente para visualização prévia das linhas.
               </p>
             </div>
 
-            {/* Atalho Baixar Modelo 5 Colunas */}
+            {/* Atalho Baixar Modelo */}
             <div className="flex items-center justify-between bg-slate-50 dark:bg-slate-800/60 p-3 rounded-2xl border border-slate-100 dark:border-slate-800 text-xs">
               <span className="text-slate-500 dark:text-slate-400">
-                Quer a planilha modelo com as 5 posições já configuradas?
+                Deseja o modelo de 5 colunas pronto para preenchimento?
               </span>
               <button
-                onClick={handleDownload5ColTemplate}
+                type="button"
+                onClick={handleDownloadTemplate}
                 className="text-emerald-600 dark:text-emerald-400 font-bold hover:underline flex items-center gap-1"
               >
                 <Download className="w-3.5 h-3.5" /> Baixar Modelo .XLSX
               </button>
             </div>
 
-            {/* Definição das Posições das 5 Colunas */}
-            {detectedColumns.length > 0 && (
-              <div className="space-y-3 p-4 rounded-3xl bg-slate-50 dark:bg-slate-850 border border-slate-100 dark:border-slate-800">
+            {/* Preview da Planilha Bruta (Tabela das primeiras linhas) */}
+            {rawHeaders.length > 0 && (
+              <div className="space-y-2">
                 <div className="flex items-center justify-between">
                   <h4 className="text-xs font-bold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
-                    <SlidersHorizontal className="w-4 h-4 text-emerald-500" />
-                    Mapeamento das Posições das 5 Colunas
+                    <Table className="w-4 h-4 text-emerald-500" />
+                    Preview dos Dados Brutos ({rawRows.length} linhas detectadas)
                   </h4>
                   <span className="text-[10px] text-slate-400">
-                    Selecione qual coluna da planilha corresponde a cada campo
+                    Amostragem das primeiras {rawMatrix.length} linhas
                   </span>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
-                  {/* 1. Descrição */}
-                  <div>
-                    <label className="text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase block mb-1">
-                      1. Descrição do Produto *
-                    </label>
-                    <select
-                      value={colMap.name}
-                      onChange={e => setColMap({ ...colMap, name: parseInt(e.target.value, 10) })}
-                      className="w-full p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200 font-medium"
-                    >
-                      {detectedColumns.map(col => (
-                        <option key={col.index} value={col.index}>
-                          {col.label} {col.sampleValue && `(Ex: ${col.sampleValue.substring(0, 20)})`}
-                        </option>
+                <div className="border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden max-h-52 overflow-x-auto overflow-y-auto text-xs">
+                  <table className="w-full text-left whitespace-nowrap">
+                    <thead className="bg-slate-100 dark:bg-slate-800 text-[11px] font-bold text-slate-500 dark:text-slate-400 sticky top-0">
+                      <tr>
+                        <th className="p-2 w-10 text-center">#</th>
+                        {rawHeaders.map((head, idx) => (
+                          <th key={idx} className="p-2 border-l border-slate-200 dark:border-slate-700">
+                            {head || `Col ${String.fromCharCode(65 + idx)}`}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                      {rawMatrix.map((row, rIdx) => (
+                        <tr key={rIdx} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
+                          <td className="p-2 text-center text-slate-400 font-mono text-[10px]">{rIdx + 1}</td>
+                          {rawHeaders.map((_, cIdx) => (
+                            <td key={cIdx} className="p-2 text-slate-700 dark:text-slate-300 border-l border-slate-100 dark:border-slate-800 text-[11px]">
+                              {String(row[cIdx] ?? '')}
+                            </td>
+                          ))}
+                        </tr>
                       ))}
-                    </select>
-                  </div>
-
-                  {/* 2. Código de Fornecedor */}
-                  <div>
-                    <label className="text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase block mb-1">
-                      2. Código de Fornecedor
-                    </label>
-                    <select
-                      value={colMap.supplierCode}
-                      onChange={e => setColMap({ ...colMap, supplierCode: parseInt(e.target.value, 10) })}
-                      className="w-full p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200 font-medium"
-                    >
-                      <option value={-1}>-- Não mapear / Deixar em branco --</option>
-                      {detectedColumns.map(col => (
-                        <option key={col.index} value={col.index}>
-                          {col.label} {col.sampleValue && `(Ex: ${col.sampleValue.substring(0, 20)})`}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  {/* 3. Código Reduzido */}
-                  <div>
-                    <label className="text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase block mb-1">
-                      3. Código Reduzido
-                    </label>
-                    <select
-                      value={colMap.reducedCode}
-                      onChange={e => setColMap({ ...colMap, reducedCode: parseInt(e.target.value, 10) })}
-                      className="w-full p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200 font-medium"
-                    >
-                      <option value={-1}>-- Não mapear / Deixar em branco --</option>
-                      {detectedColumns.map(col => (
-                        <option key={col.index} value={col.index}>
-                          {col.label} {col.sampleValue && `(Ex: ${col.sampleValue.substring(0, 20)})`}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  {/* 4. Código EAN */}
-                  <div>
-                    <label className="text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase block mb-1">
-                      4. Código EAN (Código de Barras) *
-                    </label>
-                    <select
-                      value={colMap.ean}
-                      onChange={e => setColMap({ ...colMap, ean: parseInt(e.target.value, 10) })}
-                      className="w-full p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200 font-medium"
-                    >
-                      {detectedColumns.map(col => (
-                        <option key={col.index} value={col.index}>
-                          {col.label} {col.sampleValue && `(Ex: ${col.sampleValue.substring(0, 20)})`}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  {/* 5. Quantidade */}
-                  <div className="md:col-span-2">
-                    <label className="text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase block mb-1">
-                      5. Quantidade (Saldo de Estoque) *
-                    </label>
-                    <select
-                      value={colMap.quantity}
-                      onChange={e => setColMap({ ...colMap, quantity: parseInt(e.target.value, 10) })}
-                      className="w-full p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200 font-medium"
-                    >
-                      {detectedColumns.map(col => (
-                        <option key={col.index} value={col.index}>
-                          {col.label} {col.sampleValue && `(Ex: ${col.sampleValue.substring(0, 20)})`}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
+                    </tbody>
+                  </table>
                 </div>
               </div>
             )}
@@ -554,82 +552,228 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
         )}
 
         {/* ================================================================= */}
-        {/* CORPO DO PASSO 2: LISTAGEM E CONFIRMAÇÃO DOS DADOS */}
+        {/* ETAPA 2: MAPEAMENTO DE COLUNAS E SELEÇÃO DE SETOR */}
         {/* ================================================================= */}
-        {currentStep === '2_CONFIRM_LIST' && (
-          <div className="py-4 space-y-3 overflow-y-auto flex-1">
-            <div className="flex items-center justify-between">
-              <div>
-                <h4 className="text-xs font-bold text-slate-900 dark:text-white">
-                  Conferência de Registros Extraídos ({validItemsCount} válidos de {extractedItems.length})
-                </h4>
-                <p className="text-[11px] text-slate-400">
-                  Verifique a integridade das 5 colunas antes de prosseguir com a criptografia.
-                </p>
+        {step === 2 && (
+          <div className="py-4 space-y-4 overflow-y-auto flex-1">
+            {/* SELEÇÃO DO SETOR (FRIOS, AÇOUGUE, PEIXARIA, MERCEARIA, PADARIA, BAZAR) */}
+            <div className="p-4 rounded-3xl bg-emerald-500/5 border border-emerald-500/20 space-y-2.5">
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-black text-slate-900 dark:text-white flex items-center gap-1.5 uppercase tracking-wider">
+                  <Tag className="w-4 h-4 text-emerald-500" />
+                  Selecione o Setor da Loja para estes Produtos *
+                </label>
+                <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400">
+                  Setor Ativo: {selectedSetor}
+                </span>
               </div>
-              <span className="text-[10px] font-bold px-2 py-1 rounded-lg bg-emerald-500/10 text-emerald-600 border border-emerald-500/20">
-                100% Filtrado
-              </span>
+              <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                Escolha a qual setor operacional os produtos importados serão vinculados no estoque:
+              </p>
+
+              {/* Botões / Chips dos 6 Setores Oficiais */}
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-2">
+                {SETORES_DISPONIVEIS.map((setor) => {
+                  const isSelected = selectedSetor === setor;
+                  return (
+                    <button
+                      key={setor}
+                      type="button"
+                      onClick={() => handleSetorChange(setor)}
+                      className={`p-2.5 rounded-2xl text-xs font-black transition-all flex flex-col items-center justify-center gap-1 border cursor-pointer ${
+                        isSelected
+                          ? 'bg-emerald-600 text-white border-emerald-600 shadow-md shadow-emerald-600/30 ring-2 ring-emerald-500/30'
+                          : 'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:border-emerald-500/50 hover:bg-emerald-50 dark:hover:bg-slate-750'
+                      }`}
+                    >
+                      <span>{setor}</span>
+                      {isSelected && (
+                        <span className="text-[9px] font-semibold opacity-90">✓ Selecionado</span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
 
-            {/* Tabela com as 5 colunas */}
-            <div className="border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden max-h-64 overflow-y-auto text-xs">
-              <table className="w-full text-left">
-                <thead className="bg-slate-100 dark:bg-slate-800 text-[11px] font-bold text-slate-500 dark:text-slate-400 sticky top-0">
-                  <tr>
-                    <th className="p-2.5">Descrição do Produto</th>
-                    <th className="p-2.5">Cód. Fornecedor</th>
-                    <th className="p-2.5">Cód. Reduzido</th>
-                    <th className="p-2.5">Código EAN</th>
-                    <th className="p-2.5 text-right">Quantidade</th>
-                    <th className="p-2.5 text-center">Status</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                  {extractedItems.map((item, idx) => (
-                    <tr key={idx} className={item.isValid ? '' : 'bg-rose-500/10 text-rose-600'}>
-                      <td className="p-2.5 font-bold truncate max-w-[180px]">{item.name || 'NÃO INFORMADO'}</td>
-                      <td className="p-2.5 font-mono text-[11px] text-slate-500 dark:text-slate-400">{item.supplierCode || '-'}</td>
-                      <td className="p-2.5 font-mono text-[11px] text-slate-500 dark:text-slate-400">{item.reducedCode || '-'}</td>
-                      <td className="p-2.5 font-mono text-[11px] text-slate-700 dark:text-slate-300">{item.ean || 'ERRO'}</td>
-                      <td className="p-2.5 text-right font-extrabold text-emerald-600 dark:text-emerald-400">{item.quantity} un</td>
-                      <td className="p-2.5 text-center">
-                        {item.isValid ? (
-                          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-600">Válido</span>
-                        ) : (
-                          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-rose-500/15 text-rose-600">{item.errors.join(', ')}</span>
-                        )}
-                      </td>
+            {/* MAPEAMENTO DAS 5 COLUNAS ESTRITAS */}
+            <div className="p-4 rounded-3xl bg-slate-50 dark:bg-slate-850 border border-slate-100 dark:border-slate-800 space-y-3">
+              <div className="flex items-center justify-between">
+                <h4 className="text-xs font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
+                  <SlidersHorizontal className="w-4 h-4 text-emerald-500" />
+                  Mapeamento das 5 Colunas Requeridas
+                </h4>
+                <span className="text-[10px] text-slate-400">
+                  Vincule os campos da planilha
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+                {/* 1. Descrição */}
+                <div>
+                  <label className="text-[11px] font-bold text-slate-600 dark:text-slate-400 uppercase block mb-1">
+                    1. Descrição do Produto *
+                  </label>
+                  <select
+                    value={colMap.name}
+                    onChange={e => handleColMapChange('name', parseInt(e.target.value, 10))}
+                    className="w-full p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200 font-medium"
+                  >
+                    {detectedColumns.map(col => (
+                      <option key={col.index} value={col.index}>
+                        {col.label} {col.sampleValue && `(Ex: ${col.sampleValue.substring(0, 18)})`}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* 2. Código de Fornecedor */}
+                <div>
+                  <label className="text-[11px] font-bold text-slate-600 dark:text-slate-400 uppercase block mb-1">
+                    2. Código de Fornecedor
+                  </label>
+                  <select
+                    value={colMap.supplierCode}
+                    onChange={e => handleColMapChange('supplierCode', parseInt(e.target.value, 10))}
+                    className="w-full p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200 font-medium"
+                  >
+                    <option value={-1}>-- Não mapear / Deixar vazio --</option>
+                    {detectedColumns.map(col => (
+                      <option key={col.index} value={col.index}>
+                        {col.label} {col.sampleValue && `(Ex: ${col.sampleValue.substring(0, 18)})`}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* 3. Código Reduzido */}
+                <div>
+                  <label className="text-[11px] font-bold text-slate-600 dark:text-slate-400 uppercase block mb-1">
+                    3. Código Reduzido
+                  </label>
+                  <select
+                    value={colMap.reducedCode}
+                    onChange={e => handleColMapChange('reducedCode', parseInt(e.target.value, 10))}
+                    className="w-full p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200 font-medium"
+                  >
+                    <option value={-1}>-- Não mapear / Deixar vazio --</option>
+                    {detectedColumns.map(col => (
+                      <option key={col.index} value={col.index}>
+                        {col.label} {col.sampleValue && `(Ex: ${col.sampleValue.substring(0, 18)})`}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* 4. Código EAN */}
+                <div>
+                  <label className="text-[11px] font-bold text-slate-600 dark:text-slate-400 uppercase block mb-1">
+                    4. Código EAN (Código de Barras) *
+                  </label>
+                  <select
+                    value={colMap.ean}
+                    onChange={e => handleColMapChange('ean', parseInt(e.target.value, 10))}
+                    className="w-full p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200 font-medium"
+                  >
+                    {detectedColumns.map(col => (
+                      <option key={col.index} value={col.index}>
+                        {col.label} {col.sampleValue && `(Ex: ${col.sampleValue.substring(0, 18)})`}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* 5. Quantidade */}
+                <div className="md:col-span-2">
+                  <label className="text-[11px] font-bold text-slate-600 dark:text-slate-400 uppercase block mb-1">
+                    5. Quantidade (Saldo de Estoque) *
+                  </label>
+                  <select
+                    value={colMap.quantity}
+                    onChange={e => handleColMapChange('quantity', parseInt(e.target.value, 10))}
+                    className="w-full p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200 font-medium"
+                  >
+                    {detectedColumns.map(col => (
+                      <option key={col.index} value={col.index}>
+                        {col.label} {col.sampleValue && `(Ex: ${col.sampleValue.substring(0, 18)})`}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+            </div>
+
+            {/* TABELA DE CONFERÊNCIA DOS ITENS MAPEADOS */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-slate-800 dark:text-slate-200">
+                  Itens Extraídos com o Setor Aplicado ({validItemsCount} válidos de {mappedItems.length})
+                </span>
+                <span className="text-[10px] font-black px-2 py-0.5 rounded-md bg-emerald-500/10 text-emerald-600 border border-emerald-500/20">
+                  Setor: {selectedSetor}
+                </span>
+              </div>
+
+              <div className="border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden max-h-48 overflow-y-auto text-xs">
+                <table className="w-full text-left">
+                  <thead className="bg-slate-100 dark:bg-slate-800 text-[11px] font-bold text-slate-500 dark:text-slate-400 sticky top-0">
+                    <tr>
+                      <th className="p-2">Descrição</th>
+                      <th className="p-2">Setor</th>
+                      <th className="p-2">Cód. Fornecedor</th>
+                      <th className="p-2">Cód. Reduzido</th>
+                      <th className="p-2">EAN</th>
+                      <th className="p-2 text-right">Qtd</th>
+                      <th className="p-2 text-center">Status</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                    {mappedItems.map((item, idx) => (
+                      <tr key={idx} className={item.isValid ? '' : 'bg-rose-500/10 text-rose-600'}>
+                        <td className="p-2 font-bold truncate max-w-[150px]">{item.name || 'NÃO INFORMADO'}</td>
+                        <td className="p-2 font-semibold text-emerald-600 dark:text-emerald-400 text-[11px]">{item.setor}</td>
+                        <td className="p-2 font-mono text-[11px] text-slate-500 dark:text-slate-400">{item.supplierCode || '-'}</td>
+                        <td className="p-2 font-mono text-[11px] text-slate-500 dark:text-slate-400">{item.reducedCode || '-'}</td>
+                        <td className="p-2 font-mono text-[11px] text-slate-700 dark:text-slate-300">{item.ean}</td>
+                        <td className="p-2 text-right font-black text-emerald-600 dark:text-emerald-400">{item.quantity} un</td>
+                        <td className="p-2 text-center">
+                          {item.isValid ? (
+                            <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-600">Válido</span>
+                          ) : (
+                            <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-rose-500/15 text-rose-600">{item.errors.join(', ')}</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
           </div>
         )}
 
         {/* ================================================================= */}
-        {/* CORPO DO PASSO 3: CRIPTOGRAFIA EM ANDAMENTO */}
+        {/* ETAPA 3: CRIPTOGRAFIA LOCAL (AES-GCM 256 BITS) */}
         {/* ================================================================= */}
-        {currentStep === '3_ENCRYPTION' && (
+        {step === 3 && (
           <div className="py-8 space-y-6 text-center flex-1 flex flex-col justify-center items-center">
             <div className="w-16 h-16 rounded-3xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-emerald-500 animate-pulse">
               <Lock className="w-8 h-8" />
             </div>
 
-            <div className="space-y-1 max-w-sm">
+            <div className="space-y-1.5 max-w-md">
               <h4 className="text-base font-black text-slate-900 dark:text-white">
                 Criptografando Dados da Planilha
               </h4>
-              <p className="text-xs text-slate-400">
-                Processando as 5 colunas com chave AES-GCM 256 bits antes do envio ao banco de dados.
+              <p className="text-xs text-slate-400 leading-relaxed">
+                As 5 colunas e o setor <strong>{selectedSetor}</strong> estão sendo cifrados localmente com chave AES-GCM 256 bits antes do trânsito para a nuvem.
               </p>
             </div>
 
-            {/* Barra de Progresso da Criptografia */}
+            {/* Barra de Progresso */}
             <div className="w-full max-w-md space-y-1.5">
               <div className="flex justify-between text-xs font-bold text-slate-500">
-                <span>Criptografando registros...</span>
+                <span>Cifrando registros em memória...</span>
                 <span>{encryptionProgress}%</span>
               </div>
               <div className="w-full h-3 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden p-0.5">
@@ -642,7 +786,7 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
 
             {sampleCiphertext && (
               <div className="p-3 rounded-2xl bg-slate-900 text-left font-mono text-[10px] text-emerald-400 max-w-md w-full truncate border border-emerald-500/30">
-                <span className="text-slate-400 block font-sans font-bold mb-0.5">Payload Criptografado (Exemplo):</span>
+                <span className="text-slate-400 block font-sans font-bold mb-0.5">Exemplo do Ciphertext Criptografado:</span>
                 {sampleCiphertext}
               </div>
             )}
@@ -650,11 +794,11 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
         )}
 
         {/* ================================================================= */}
-        {/* CORPO DO PASSO 4: UPLOAD REALTIME & VISUALIZAÇÃO DESCRIPTOGRAFADA */}
+        {/* ETAPA 4: SINCRONIZAÇÃO COM O SUPABASE & EXIBIÇÃO NO SOFTWARE */}
         {/* ================================================================= */}
-        {currentStep === '4_REALTIME_UPLOAD_SUCCESS' && (
+        {step === 4 && (
           <div className="py-4 space-y-4 overflow-y-auto flex-1">
-            {/* Status do Upload Realtime */}
+            {/* Status do Upload */}
             <div className="p-4 rounded-3xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-between">
               <div className="flex items-center gap-3">
                 <div className="p-2.5 rounded-2xl bg-emerald-500 text-white">
@@ -662,56 +806,77 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
                 </div>
                 <div>
                   <h4 className="text-xs font-bold text-emerald-900 dark:text-emerald-300">
-                    Upload em Realtime e Gravação Concluídos!
+                    {uploadSuccess ? 'Sincronização e Gravação Concluídas com Sucesso!' : 'Sincronizando com o Backend Supabase...'}
                   </h4>
                   <p className="text-[11px] text-emerald-700 dark:text-emerald-400">
-                    {encryptedPayloads.length} itens gravados com sucesso. O banco de dados recebeu os payloads criptografados.
+                    {encryptedPayloads.length} produtos gravados no setor <strong>{selectedSetor}</strong> com integridade garantida.
                   </p>
                 </div>
               </div>
 
-              {/* Botão para alternar visualização criptografada / descriptografada */}
+              {/* Toggle de Visualização (Criptografado no banco vs Descriptografado no app) */}
               <button
+                type="button"
                 onClick={() => setShowEncryptedView(!showEncryptedView)}
-                className="px-3 py-1.5 rounded-xl border border-emerald-500/40 bg-white dark:bg-slate-800 text-xs font-bold text-emerald-700 dark:text-emerald-300 flex items-center gap-1.5 transition shadow-xs"
+                className="px-3 py-1.5 rounded-xl border border-emerald-500/40 bg-white dark:bg-slate-800 text-xs font-bold text-emerald-700 dark:text-emerald-300 flex items-center gap-1.5 transition shadow-xs cursor-pointer"
               >
                 {showEncryptedView ? <Unlock className="w-3.5 h-3.5" /> : <Lock className="w-3.5 h-3.5" />}
-                <span>{showEncryptedView ? 'Ver Descriptografado' : 'Ver Criptografado no Banco'}</span>
+                <span>{showEncryptedView ? 'Ver Descriptografado' : 'Ver Criptografado'}</span>
               </button>
             </div>
 
-            {/* Tabela no Software: Mostrando Informações Descriptografadas (ou Criptografadas no Banco) */}
-            <div className="border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden max-h-60 overflow-y-auto text-xs">
+            {/* Progresso do Upload se ainda em andamento */}
+            {isUploading && (
+              <div className="space-y-1">
+                <div className="flex justify-between text-xs font-bold text-slate-500">
+                  <span>Enviando em tempo real para o banco...</span>
+                  <span>{uploadProgress}%</span>
+                </div>
+                <div className="w-full h-2.5 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-emerald-500 transition-all duration-300"
+                    style={{ width: `${uploadProgress}%` }}
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* Tabela do Software (Mostrando Informações Descriptografadas ou Criptografadas) */}
+            <div className="border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden max-h-56 overflow-y-auto text-xs">
               <table className="w-full text-left">
                 <thead className="bg-slate-100 dark:bg-slate-800 text-[11px] font-bold text-slate-500 dark:text-slate-400 sticky top-0">
                   <tr>
-                    <th className="p-2.5">Descrição</th>
-                    <th className="p-2.5">Cód. Fornecedor</th>
-                    <th className="p-2.5">Cód. Reduzido</th>
-                    <th className="p-2.5">EAN</th>
-                    <th className="p-2.5 text-right">Quantidade</th>
-                    <th className="p-2.5 text-center">Proteção</th>
+                    <th className="p-2">Descrição</th>
+                    <th className="p-2">Setor</th>
+                    <th className="p-2">Cód. Fornecedor</th>
+                    <th className="p-2">Cód. Reduzido</th>
+                    <th className="p-2">EAN</th>
+                    <th className="p-2 text-right">Qtd</th>
+                    <th className="p-2 text-center">Proteção</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
                   {encryptedPayloads.map((row, idx) => (
                     <tr key={idx}>
-                      <td className="p-2.5 font-bold truncate max-w-[170px]">
+                      <td className="p-2 font-bold truncate max-w-[160px]">
                         {showEncryptedView ? row.encrypted.ciphertext.substring(0, 18) + '...' : row.original.name}
                       </td>
-                      <td className="p-2.5 font-mono text-[11px] text-slate-400">
+                      <td className="p-2 font-semibold text-emerald-600 dark:text-emerald-400 text-[11px]">
+                        {row.original.setor || selectedSetor}
+                      </td>
+                      <td className="p-2 font-mono text-[11px] text-slate-400">
                         {showEncryptedView ? '***' : row.original.supplierCode || '-'}
                       </td>
-                      <td className="p-2.5 font-mono text-[11px] text-slate-400">
+                      <td className="p-2 font-mono text-[11px] text-slate-400">
                         {showEncryptedView ? '***' : row.original.reducedCode || '-'}
                       </td>
-                      <td className="p-2.5 font-mono text-[11px] text-slate-700 dark:text-slate-300">
+                      <td className="p-2 font-mono text-[11px] text-slate-700 dark:text-slate-300">
                         {row.original.ean}
                       </td>
-                      <td className="p-2.5 text-right font-black text-emerald-600 dark:text-emerald-400">
+                      <td className="p-2 text-right font-black text-emerald-600 dark:text-emerald-400">
                         {showEncryptedView ? '***' : `${row.original.quantity} un`}
                       </td>
-                      <td className="p-2.5 text-center">
+                      <td className="p-2 text-center">
                         <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-600 flex items-center justify-center gap-1">
                           <Lock className="w-2.5 h-2.5" /> AES-256
                         </span>
@@ -723,64 +888,70 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
             </div>
 
             <p className="text-[11px] text-slate-400 text-center">
-              ✓ No software operacional, os operadores visualizam as informações descriptografadas instantaneamente.
+              ✓ Na interface operacional, os operadores visualizam as informações descriptografadas instantaneamente para auditoria e conferência.
             </p>
           </div>
         )}
 
         {/* ================================================================= */}
-        {/* FOOTER COM BOTÕES DE AÇÃO POR PASSO */}
+        {/* FOOTER DO MODAL COM CONTROLES DE NAVEGAÇÃO POR ETAPA */}
         {/* ================================================================= */}
         <div className="pt-3 border-t border-slate-100 dark:border-slate-800 flex justify-between items-center">
-          {currentStep === '1_UPLOAD_MAP' && (
+          {step === 1 && (
             <>
               <button
+                type="button"
                 onClick={onClose}
-                className="px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-semibold text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800"
+                className="px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-semibold text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 transition"
               >
                 Cancelar
               </button>
               <button
-                onClick={handleProceedToStep2}
-                disabled={detectedColumns.length === 0}
-                className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-bold shadow-md shadow-emerald-600/20 flex items-center gap-1.5 transition"
+                type="button"
+                onClick={handleGoToStep2}
+                disabled={rawRows.length === 0}
+                className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-bold shadow-md shadow-emerald-600/20 flex items-center gap-1.5 transition cursor-pointer"
               >
-                <span>Avançar para Conferência</span>
+                <span>Avançar para Mapeamento & Setor</span>
                 <ArrowRight className="w-4 h-4" />
               </button>
             </>
           )}
 
-          {currentStep === '2_CONFIRM_LIST' && (
+          {step === 2 && (
             <>
               <button
-                onClick={() => setCurrentStep('1_UPLOAD_MAP')}
-                className="px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-semibold text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 flex items-center gap-1"
+                type="button"
+                onClick={() => setStep(1)}
+                className="px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-semibold text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 flex items-center gap-1 transition"
               >
                 <ArrowLeft className="w-3.5 h-3.5" /> Voltar
               </button>
               <button
+                type="button"
                 onClick={handleStartEncryption}
                 disabled={validItemsCount === 0}
-                className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-bold shadow-md shadow-emerald-600/20 flex items-center gap-1.5 transition"
+                className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-bold shadow-md shadow-emerald-600/20 flex items-center gap-1.5 transition cursor-pointer"
               >
                 <Lock className="w-4 h-4" />
-                <span>Confirmar Dados e Criptografar ({validItemsCount} itens)</span>
+                <span>Criptografar Dados ({validItemsCount} itens no setor {selectedSetor})</span>
               </button>
             </>
           )}
 
-          {currentStep === '3_ENCRYPTION' && (
+          {step === 3 && (
             <div className="w-full text-center text-xs font-bold text-slate-400">
-              Aguarde a finalização da criptografia de todas as 5 colunas...
+              Aguarde a finalização da criptografia AES-GCM...
             </div>
           )}
 
-          {currentStep === '4_REALTIME_UPLOAD_SUCCESS' && (
+          {step === 4 && (
             <div className="w-full flex justify-end">
               <button
+                type="button"
                 onClick={onClose}
-                className="px-6 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-md shadow-emerald-600/20 flex items-center gap-1.5 transition"
+                disabled={isUploading}
+                className="px-6 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-bold shadow-md shadow-emerald-600/20 flex items-center gap-1.5 transition cursor-pointer"
               >
                 <Check className="w-4 h-4" /> Concluir e Visualizar no Estoque
               </button>

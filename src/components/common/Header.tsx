@@ -8,7 +8,8 @@ import {
   CheckCircle2, 
   AlertTriangle,
   X,
-  SlidersHorizontal
+  SlidersHorizontal,
+  LogOut
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 
@@ -23,7 +24,8 @@ export const Header: React.FC = () => {
     unreadCount, 
     markAllNotificationsAsRead,
     openScanner,
-    operator 
+    operator,
+    logout
   } = useApp();
 
   const [showNotifications, setShowNotifications] = useState(false);
@@ -110,6 +112,16 @@ export const Header: React.FC = () => {
             {unreadCount > 0 && (
               <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-rose-500 ring-2 ring-white dark:ring-slate-900 animate-pulse"></span>
             )}
+          </button>
+
+          {/* Logout / Trocar Usuário */}
+          <button
+            onClick={logout}
+            className="p-2 rounded-xl text-slate-500 hover:text-rose-600 dark:text-slate-400 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/30 transition"
+            title="Sair / Trocar Usuário"
+            aria-label="Sair da Conta"
+          >
+            <LogOut className="w-4 h-4" />
           </button>
         </div>
       </header>

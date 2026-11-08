@@ -6,7 +6,8 @@ import {
   Operator, 
   NotificationItem, 
   TabId, 
-  OfflineAction 
+  OfflineAction,
+  AuthUser 
 } from '../types';
 import { 
   INITIAL_PRODUCTS, 
@@ -20,6 +21,7 @@ import {
 } from '../data/mockData';
 import { useOnlineStatus } from '../pwa/useOnlineStatus';
 import { triggerScanBeep } from '../utils/haptics';
+import { loginUser } from '../services/supabaseService';
 
 interface AppContextType {
   // Navigation & UI
@@ -44,6 +46,12 @@ interface AppContextType {
   audits: AuditItem[];
   operator: Operator;
   updateOperator: (operator: Partial<Operator>) => void;
+
+  // Autenticação Segura (Script 03)
+  isAuthenticated: boolean;
+  currentUser: AuthUser | null;
+  login: (matricula: string, senha: string) => Promise<{ success: boolean; message?: string }>;
+  logout: () => void;
 
   // Actions
   addProduct: (product: Omit<Product, 'id'>) => Product;
@@ -116,7 +124,62 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return loadStoredData<AuditItem[]>(STORAGE_KEYS.AUDITS, INITIAL_AUDITS);
   });
 
+  // Autenticação Segura (Script 03)
+  const [currentUser, setCurrentUser] = useState<AuthUser | null>(() => {
+    return loadStoredData<AuthUser | null>(STORAGE_KEYS.AUTH_USER, null);
+  });
+
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => {
+    return !!loadStoredData<AuthUser | null>(STORAGE_KEYS.AUTH_USER, null);
+  });
+
+  const login = async (matricula: string, senha: string): Promise<{ success: boolean; message?: string }> => {
+    const result = await loginUser(matricula, senha);
+    if (result.success && result.user) {
+      setCurrentUser(result.user);
+      setIsAuthenticated(true);
+      saveStoredData(STORAGE_KEYS.AUTH_USER, result.user);
+      if (result.token) {
+        saveStoredData(STORAGE_KEYS.AUTH_TOKEN, result.token);
+      }
+      setOperator(prev => ({
+        ...prev,
+        id: result.user!.id,
+        name: result.user!.nome,
+        code: result.user!.matricula,
+        matricula: result.user!.matricula,
+        role: result.user!.cargo,
+        store: result.user!.loja_nome || prev.store,
+        loja_id: result.user!.loja_id || prev.loja_id,
+      }));
+      triggerScanBeep(true);
+      return { success: true };
+    }
+    return { success: false, message: result.message || 'Falha na autenticação' };
+  };
+
+  const logout = () => {
+    setCurrentUser(null);
+    setIsAuthenticated(false);
+    localStorage.removeItem(STORAGE_KEYS.AUTH_USER);
+    localStorage.removeItem(STORAGE_KEYS.AUTH_TOKEN);
+    setActiveTab('inicio');
+  };
+
   const [operator, setOperator] = useState<Operator>(() => {
+    const savedUser = loadStoredData<AuthUser | null>(STORAGE_KEYS.AUTH_USER, null);
+    if (savedUser) {
+      return {
+        id: savedUser.id,
+        name: savedUser.nome,
+        code: savedUser.matricula,
+        matricula: savedUser.matricula,
+        role: savedUser.cargo,
+        store: savedUser.loja_nome || INITIAL_OPERATOR.store,
+        loja_id: savedUser.loja_id || INITIAL_OPERATOR.loja_id,
+        shift: INITIAL_OPERATOR.shift,
+      };
+    }
     return loadStoredData<Operator>(STORAGE_KEYS.OPERATOR, INITIAL_OPERATOR);
   });
 
@@ -307,6 +370,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         audits,
         operator,
         updateOperator,
+        isAuthenticated,
+        currentUser,
+        login,
+        logout,
         addProduct,
         updateProductStock,
         addValidity,

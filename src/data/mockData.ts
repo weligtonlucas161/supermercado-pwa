@@ -71,6 +71,8 @@ const STORAGE_KEYS = {
   NOTIFICATIONS: 'superpwa_notifications_v1',
   OFFLINE_QUEUE: 'superpwa_offline_queue_v1',
   DARK_MODE: 'superpwa_darkmode_v1',
+  AUTH_USER: 'superpwa_auth_user_v1',
+  AUTH_TOKEN: 'superpwa_auth_token_v1',
 };
 
 export function loadStoredData<T>(key: string, fallback: T): T {

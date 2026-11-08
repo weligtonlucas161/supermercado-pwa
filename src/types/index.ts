@@ -40,7 +40,21 @@ export interface Product {
 }
 
 /**
- * Modelo estrito das 5 colunas da planilha
+ * 6 Setores Oficiais de Supermercado
+ */
+export type SetorLoja = 'FRIOS' | 'AÇOUGUE' | 'PEIXARIA' | 'MERCEARIA' | 'PADARIA' | 'BAZAR';
+
+export const SETORES_DISPONIVEIS: SetorLoja[] = [
+  'FRIOS',
+  'AÇOUGUE',
+  'PEIXARIA',
+  'MERCEARIA',
+  'PADARIA',
+  'BAZAR',
+];
+
+/**
+ * Modelo estrito das 5 colunas da planilha + Setor Selecionado
  */
 export interface SpreadsheetProductItem {
   name: string;             // 1. Descrição do produto
@@ -48,6 +62,7 @@ export interface SpreadsheetProductItem {
   reducedCode: string;      // 3. Código reduzido
   ean: string;              // 4. Código EAN
   quantity: number;         // 5. Quantidade
+  setor?: SetorLoja;        // Setor atribuído na Etapa 2
   isValid: boolean;
   errors: string[];
 }
@@ -57,6 +72,23 @@ export interface EncryptedProductUpload {
   ciphertext: string;
   iv: string;
   createdAt: string;
+}
+
+export interface AuthUser {
+  id: string;
+  matricula: string;
+  nome: string;
+  cargo: 'adm' | 'master' | 'operador';
+  setor?: string;
+  loja_id: string;
+  loja_nome?: string;
+}
+
+export interface LoginResult {
+  success: boolean;
+  message?: string;
+  token?: string;
+  user?: AuthUser;
 }
 
 export interface ValidityItem {

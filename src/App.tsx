@@ -9,6 +9,7 @@ import { Header } from './components/common/Header';
 import { BottomNav } from './components/common/BottomNav';
 import { BarcodeModal } from './components/common/BarcodeModal';
 import { PWAUpdateToast } from './pwa/PWAUpdateToast';
+import { LoginScreen } from './components/auth/LoginScreen';
 import { InicioTab } from './components/tabs/InicioTab';
 import { ValidadeTab } from './components/tabs/ValidadeTab';
 import { EstoqueTab } from './components/tabs/EstoqueTab';
@@ -16,7 +17,12 @@ import { AuditoriaTab } from './components/tabs/AuditoriaTab';
 import { ConfiguracoesTab } from './components/tabs/ConfiguracoesTab';
 
 function AppContent() {
-  const { activeTab, darkMode, effectiveOnline } = useApp();
+  const { activeTab, darkMode, effectiveOnline, isAuthenticated } = useApp();
+
+  // Se não estiver autenticado, exibe a tela de login
+  if (!isAuthenticated) {
+    return <LoginScreen />;
+  }
 
   return (
     <div
