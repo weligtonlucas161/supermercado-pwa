@@ -12,10 +12,13 @@ import {
   Radio, 
   Check, 
   Layers,
-  Info
+  Database,
+  CheckCircle2,
+  AlertCircle
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { PWAInstallBanner } from '../../pwa/PWAInstallBanner';
+import { isSupabaseConfigured, testSupabaseConnection } from '../../services/supabaseService';
 
 export const ConfiguracoesTab: React.FC = () => {
   const { 
@@ -26,13 +29,14 @@ export const ConfiguracoesTab: React.FC = () => {
     toggleSimulatedOffline, 
     offlineQueue, 
     syncOfflineQueue, 
-    clearOfflineQueue, 
     operator, 
     resetAllData 
   } = useApp();
 
   const [resetConfirm, setResetConfirm] = useState(false);
   const [cacheCleared, setCacheCleared] = useState(false);
+  const [testingSupabase, setTestingSupabase] = useState(false);
+  const [supabaseTestResult, setSupabaseTestResult] = useState<{ success: boolean; message: string } | null>(null);
 
   const handleClearCache = async () => {
     if ('caches' in window) {
@@ -43,6 +47,16 @@ export const ConfiguracoesTab: React.FC = () => {
     setTimeout(() => setCacheCleared(false), 2000);
   };
 
+  const handleTestSupabase = async () => {
+    setTestingSupabase(true);
+    setSupabaseTestResult(null);
+    const result = await testSupabaseConnection();
+    setSupabaseTestResult(result);
+    setTestingSupabase(false);
+  };
+
+  const hasSupabase = isSupabaseConfigured();
+
   return (
     <div className="space-y-5 animate-in fade-in duration-300">
       <div>
@@ -50,12 +64,69 @@ export const ConfiguracoesTab: React.FC = () => {
           Configurações & PWA
         </h2>
         <p className="text-xs text-slate-500 dark:text-slate-400">
-          Ajustes do dispositivo, diagnóstico do Service Worker, sincronização e preferências operacionais.
+          Ajustes do dispositivo, diagnóstico do Service Worker, banco Supabase e preferências operacionais.
         </p>
       </div>
 
       {/* PWA Install Banner */}
       <PWAInstallBanner />
+
+      {/* Card de Conexão com o Banco de Dados Supabase */}
+      <div
+        className={`p-4 sm:p-5 rounded-3xl border ${
+          darkMode ? 'bg-slate-800/80 border-slate-700' : 'bg-white border-slate-200'
+        } shadow-sm space-y-3`}
+      >
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2.5">
+            <div className={`p-2.5 rounded-2xl ${hasSupabase ? 'bg-emerald-500/15 text-emerald-500' : 'bg-blue-500/15 text-blue-500'}`}>
+              <Database className="w-5 h-5" />
+            </div>
+            <div>
+              <h4 className="text-xs font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
+                Banco de Dados Supabase (PostgreSQL)
+                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                  hasSupabase 
+                    ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400' 
+                    : 'bg-amber-500/15 text-amber-600 dark:text-amber-400'
+                }`}>
+                  {hasSupabase ? 'Conectado' : 'Modo Local / Offline-First'}
+                </span>
+              </h4>
+              <p className="text-[11px] text-slate-400">
+                {hasSupabase 
+                  ? 'Sincronização em nuvem ativa com tabelas de estoque, validades e auditoria.' 
+                  : 'Scripts SQL completos em /supabase. O app opera com persistência local garantida.'}
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={handleTestSupabase}
+            disabled={testingSupabase}
+            className="px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-bold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-750 transition flex items-center gap-1.5 shrink-0"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${testingSupabase ? 'animate-spin' : ''}`} />
+            <span>Testar Conexão</span>
+          </button>
+        </div>
+
+        {supabaseTestResult && (
+          <div
+            className={`p-3 rounded-2xl text-xs flex items-center gap-2 animate-in fade-in ${
+              supabaseTestResult.success
+                ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30'
+                : 'bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/30'
+            }`}
+          >
+            {supabaseTestResult.success ? (
+              <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-500" />
+            ) : (
+              <AlertCircle className="w-4 h-4 shrink-0 text-amber-500" />
+            )}
+            <span>{supabaseTestResult.message}</span>
+          </div>
+        )}
+      </div>
 
       {/* Painel de Preferências */}
       <div
@@ -217,7 +288,7 @@ export const ConfiguracoesTab: React.FC = () => {
       {/* Rodapé Informativo */}
       <div className="text-center pt-2 pb-6 space-y-1">
         <p className="text-[11px] font-bold text-slate-500 dark:text-slate-400">
-          SuperPWA OpSys • Versão 2.1.0 PWA Standard
+          SuperPWA OpSys • Versão 2.2.0 PWA & Supabase Ready
         </p>
         <p className="text-[10px] text-slate-400">
           Suporte completo a Chrome, Edge, Safari iOS, coletores Zebra / Honeywell e Android PWA

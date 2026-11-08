@@ -1,13 +1,23 @@
 import React, { useState } from 'react';
-import { Search, Plus, Barcode, Minus, Package, AlertTriangle, ArrowUp, ArrowDown } from 'lucide-react';
+import { 
+  Search, 
+  Plus, 
+  Barcode, 
+  Minus, 
+  Package, 
+  AlertTriangle, 
+  FileSpreadsheet 
+} from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { NewProductModal } from '../modals/NewProductModal';
+import { ImportSpreadsheetModal } from '../modals/ImportSpreadsheetModal';
 
 export const EstoqueTab: React.FC = () => {
   const { products, updateProductStock, darkMode, openScanner } = useApp();
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('all');
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isSpreadsheetModalOpen, setIsSpreadsheetModalOpen] = useState(false);
 
   const categories = ['all', ...Array.from(new Set(products.map(p => p.category)))];
 
@@ -29,7 +39,7 @@ export const EstoqueTab: React.FC = () => {
   return (
     <div className="space-y-4 animate-in fade-in duration-300">
       {/* Header */}
-      <div className="flex justify-between items-center">
+      <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-3">
         <div>
           <h2 className="text-xl font-black text-slate-900 dark:text-white tracking-tight">
             Consulta de Estoque
@@ -38,13 +48,23 @@ export const EstoqueTab: React.FC = () => {
             Localização em gôndola, saldos e consulta de código EAN-13.
           </p>
         </div>
-        <button
-          onClick={() => setIsModalOpen(true)}
-          className="bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-md shadow-emerald-600/20 transition"
-        >
-          <Plus className="w-4 h-4" />
-          <span className="hidden sm:inline">Cadastrar Produto</span>
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setIsSpreadsheetModalOpen(true)}
+            className="border border-emerald-500/40 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-700 dark:text-emerald-400 px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition"
+            title="Importar planilha Excel ou CSV"
+          >
+            <FileSpreadsheet className="w-4 h-4" />
+            <span>Importar Planilha</span>
+          </button>
+          <button
+            onClick={() => setIsModalOpen(true)}
+            className="bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-md shadow-emerald-600/20 transition"
+          >
+            <Plus className="w-4 h-4" />
+            <span>Cadastrar Produto</span>
+          </button>
+        </div>
       </div>
 
       {/* Busca & Scanner Trigger */}
@@ -70,7 +90,7 @@ export const EstoqueTab: React.FC = () => {
               ? 'bg-slate-800 border-slate-700 text-slate-200 hover:bg-slate-700'
               : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
           }`}
-          title="Bipar código de barras"
+          title="Bipar código de barras com Barcode Detector API"
         >
           <Barcode className="w-5 h-5 text-emerald-500" />
           <span className="hidden sm:inline">Bipar</span>
@@ -164,6 +184,7 @@ export const EstoqueTab: React.FC = () => {
       </div>
 
       <NewProductModal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} />
+      <ImportSpreadsheetModal isOpen={isSpreadsheetModalOpen} onClose={() => setIsSpreadsheetModalOpen(false)} />
     </div>
   );
 };

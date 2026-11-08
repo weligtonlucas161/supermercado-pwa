@@ -9,12 +9,257 @@ import {
   ArrowUpRight, 
   Check, 
   Tag, 
-  Sparkles,
-  Percent
+  Percent,
+  FileSpreadsheet,
+  Clock,
+  Layers,
+  ChevronRight,
+  TrendingDown,
+  ShieldAlert,
+  ArrowRight
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { NewValidityModal } from '../modals/NewValidityModal';
 import { NewProductModal } from '../modals/NewProductModal';
+import { ImportSpreadsheetModal } from '../modals/ImportSpreadsheetModal';
+
+/**
+ * Componente Dashboard com cards de resumo focados na operação de piso de loja:
+ * - Validades Vencendo Hoje
+ * - Itens com Ruptura
+ * - Tarefas Pendentes de Auditoria
+ */
+export const Dashboard: React.FC = () => {
+  const { 
+    products, 
+    validities, 
+    audits, 
+    setActiveTab, 
+    applyDiscount, 
+    darkMode 
+  } = useApp();
+
+  // Obter data de hoje em formato YYYY-MM-DD
+  const todayStr = new Date().toISOString().split('T')[0];
+
+  // 1. Validades Vencendo Hoje (ou com prazo imediato de hoje)
+  const expiringToday = validities.filter(v => v.dueDate <= todayStr || v.status === 'urgent');
+  const exactTodayCount = validities.filter(v => v.dueDate === todayStr).length;
+
+  // 2. Itens com Ruptura (estoque zerado ou abaixo do mínimo de segurança)
+  const ruptureItems = products.filter(p => p.stock <= p.minStock);
+  const zeroStockItems = products.filter(p => p.stock === 0);
+
+  // 3. Tarefas Pendentes de Auditoria
+  const pendingAudits = audits.filter(a => a.status === 'Em Andamento' || a.status === 'Pendente');
+
+  return (
+    <div className="space-y-4">
+      {/* Seção de Cabeçalho do Dashboard */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h3 className="font-extrabold text-base text-slate-900 dark:text-white flex items-center gap-2">
+            <Layers className="w-4 h-4 text-emerald-500" />
+            Painel de Controle Operacional
+          </h3>
+          <p className="text-[11px] text-slate-400">
+            Monitoramento em tempo real de riscos e pendências de piso de loja
+          </p>
+        </div>
+        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
+          Atualizado Agora
+        </span>
+      </div>
+
+      {/* 3 CARDS PRINCIPAIS DE RESUMO */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3.5">
+        
+        {/* CARD 1: Validades Vencendo Hoje */}
+        <div
+          className={`p-4 rounded-3xl border transition-all ${
+            darkMode ? 'bg-slate-800/90 border-slate-700' : 'bg-white border-slate-200'
+          } shadow-sm hover:border-rose-400/60 flex flex-col justify-between relative overflow-hidden`}
+        >
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="p-2.5 rounded-2xl bg-rose-500/15 text-rose-600 dark:text-rose-400">
+                <Clock className="w-5 h-5" />
+              </div>
+              <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-md bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/20">
+                Ação Imediata
+              </span>
+            </div>
+
+            <div>
+              <div className="flex items-baseline gap-2">
+                <span className="text-3xl font-black text-slate-900 dark:text-white tracking-tight">
+                  {expiringToday.length}
+                </span>
+                <span className="text-xs text-slate-400 font-medium">lotes em risco</span>
+              </div>
+              <h4 className="font-bold text-xs text-slate-800 dark:text-slate-100 mt-0.5">
+                Validades Vencendo Hoje
+              </h4>
+              <p className="text-[11px] text-slate-400 mt-0.5">
+                {exactTodayCount > 0 
+                  ? `${exactTodayCount} vencem na data de hoje; outros estão a menos de 5 dias.` 
+                  : 'Lotes urgentes aguardando remarcação para evitar perda.'}
+              </p>
+            </div>
+
+            {/* Amostra rápida dos itens em risco */}
+            <div className="space-y-1.5 pt-1">
+              {expiringToday.slice(0, 2).map(item => (
+                <div
+                  key={item.id}
+                  className="flex items-center justify-between text-[11px] p-2 rounded-xl bg-rose-500/10 border border-rose-500/20"
+                >
+                  <span className="font-bold text-slate-800 dark:text-slate-200 truncate max-w-[130px]">
+                    {item.name}
+                  </span>
+                  <span className="text-[10px] font-bold text-rose-600 dark:text-rose-400">
+                    {item.quantity} un ({item.dueDate})
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <button
+            onClick={() => setActiveTab('validade')}
+            className="mt-4 w-full py-2 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 text-rose-600 dark:text-rose-400 border border-rose-500/30 text-xs font-bold flex items-center justify-center gap-1.5 transition"
+          >
+            <span>Gerenciar Validades</span>
+            <ArrowRight className="w-3.5 h-3.5" />
+          </button>
+        </div>
+
+        {/* CARD 2: Itens com Ruptura */}
+        <div
+          className={`p-4 rounded-3xl border transition-all ${
+            darkMode ? 'bg-slate-800/90 border-slate-700' : 'bg-white border-slate-200'
+          } shadow-sm hover:border-amber-400/60 flex flex-col justify-between relative overflow-hidden`}
+        >
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="p-2.5 rounded-2xl bg-amber-500/15 text-amber-600 dark:text-amber-400">
+                <AlertTriangle className="w-5 h-5" />
+              </div>
+              <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-md bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20">
+                {zeroStockItems.length > 0 ? `${zeroStockItems.length} Zerados` : 'Estoque Baixo'}
+              </span>
+            </div>
+
+            <div>
+              <div className="flex items-baseline gap-2">
+                <span className="text-3xl font-black text-slate-900 dark:text-white tracking-tight">
+                  {ruptureItems.length}
+                </span>
+                <span className="text-xs text-slate-400 font-medium">produtos</span>
+              </div>
+              <h4 className="font-bold text-xs text-slate-800 dark:text-slate-100 mt-0.5">
+                Itens com Ruptura
+              </h4>
+              <p className="text-[11px] text-slate-400 mt-0.5">
+                Produtos abaixo do estoque mínimo de segurança com risco de gôndola vazia.
+              </p>
+            </div>
+
+            {/* Amostra rápida dos itens em ruptura */}
+            <div className="space-y-1.5 pt-1">
+              {ruptureItems.slice(0, 2).map(prod => (
+                <div
+                  key={prod.id}
+                  className="flex items-center justify-between text-[11px] p-2 rounded-xl bg-amber-500/10 border border-amber-500/20"
+                >
+                  <span className="font-bold text-slate-800 dark:text-slate-200 truncate max-w-[130px]">
+                    {prod.name}
+                  </span>
+                  <span className="text-[10px] font-bold text-amber-600 dark:text-amber-400">
+                    {prod.stock}/{prod.minStock} un
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <button
+            onClick={() => setActiveTab('estoque')}
+            className="mt-4 w-full py-2 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 text-amber-600 dark:text-amber-400 border border-amber-500/30 text-xs font-bold flex items-center justify-center gap-1.5 transition"
+          >
+            <span>Repor Gôndolas</span>
+            <ArrowRight className="w-3.5 h-3.5" />
+          </button>
+        </div>
+
+        {/* CARD 3: Tarefas Pendentes de Auditoria */}
+        <div
+          className={`p-4 rounded-3xl border transition-all ${
+            darkMode ? 'bg-slate-800/90 border-slate-700' : 'bg-white border-slate-200'
+          } shadow-sm hover:border-emerald-400/60 flex flex-col justify-between relative overflow-hidden`}
+        >
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="p-2.5 rounded-2xl bg-emerald-500/15 text-emerald-600 dark:text-emerald-400">
+                <ClipboardCheck className="w-5 h-5" />
+              </div>
+              <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-md bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
+                Piso de Loja
+              </span>
+            </div>
+
+            <div>
+              <div className="flex items-baseline gap-2">
+                <span className="text-3xl font-black text-slate-900 dark:text-white tracking-tight">
+                  {pendingAudits.length}
+                </span>
+                <span className="text-xs text-slate-400 font-medium">sessões ativas</span>
+              </div>
+              <h4 className="font-bold text-xs text-slate-800 dark:text-slate-100 mt-0.5">
+                Tarefas Pendentes de Auditoria
+              </h4>
+              <p className="text-[11px] text-slate-400 mt-0.5">
+                Contagens físicas programadas para verificação de divergências de estoque.
+              </p>
+            </div>
+
+            {/* Amostra rápida das auditorias pendentes */}
+            <div className="space-y-1.5 pt-1">
+              {pendingAudits.length > 0 ? (
+                pendingAudits.slice(0, 2).map(audit => (
+                  <div
+                    key={audit.id}
+                    className="flex items-center justify-between text-[11px] p-2 rounded-xl bg-emerald-500/10 border border-emerald-500/20"
+                  >
+                    <span className="font-bold text-slate-800 dark:text-slate-200 truncate max-w-[130px]">
+                      {audit.title}
+                    </span>
+                    <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400">
+                      {audit.status}
+                    </span>
+                  </div>
+                ))
+              ) : (
+                <div className="p-2 text-center text-[11px] text-slate-400 bg-slate-50 dark:bg-slate-800 rounded-xl">
+                  Todas auditorias em dia
+                </div>
+              )}
+            </div>
+          </div>
+
+          <button
+            onClick={() => setActiveTab('auditoria')}
+            className="mt-4 w-full py-2 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30 text-xs font-bold flex items-center justify-center gap-1.5 transition"
+          >
+            <span>Executar Auditoria</span>
+            <ArrowRight className="w-3.5 h-3.5" />
+          </button>
+        </div>
+
+      </div>
+    </div>
+  );
+};
 
 export const InicioTab: React.FC = () => {
   const { 
@@ -30,6 +275,7 @@ export const InicioTab: React.FC = () => {
 
   const [isValidityModalOpen, setIsValidityModalOpen] = useState(false);
   const [isProductModalOpen, setIsProductModalOpen] = useState(false);
+  const [isSpreadsheetModalOpen, setIsSpreadsheetModalOpen] = useState(false);
   const [discountSuccessId, setDiscountSuccessId] = useState<string | null>(null);
 
   const urgentValidities = validities.filter(v => v.status === 'urgent');
@@ -78,85 +324,18 @@ export const InicioTab: React.FC = () => {
           >
             Repor Rupturas ({lowStockProducts.length})
           </button>
+          <button
+            onClick={() => setIsSpreadsheetModalOpen(true)}
+            className="bg-emerald-500/30 text-white border border-white/20 px-4 py-2 rounded-xl text-xs font-bold hover:bg-emerald-500/50 active:scale-95 transition flex items-center gap-1.5"
+          >
+            <FileSpreadsheet className="w-3.5 h-3.5" />
+            Importar Planilha
+          </button>
         </div>
       </div>
 
-      {/* Cards de Métricas Rápidas */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <div
-          onClick={() => setActiveTab('estoque')}
-          className={`p-4 rounded-2xl border cursor-pointer hover:border-amber-400/50 transition-all ${
-            darkMode ? 'bg-slate-800/80 border-slate-700' : 'bg-white border-slate-200'
-          } shadow-xs`}
-        >
-          <div className="flex items-center justify-between text-slate-500 mb-1.5">
-            <span className="text-xs font-semibold">Em Ruptura</span>
-            <div className="p-1 rounded-lg bg-amber-500/10 text-amber-500">
-              <AlertTriangle className="w-4 h-4" />
-            </div>
-          </div>
-          <div className="text-2xl font-black tracking-tight text-slate-900 dark:text-white">
-            {lowStockProducts.length}
-          </div>
-          <span className="text-[11px] text-amber-600 dark:text-amber-400 font-medium">Estoque Baixo</span>
-        </div>
-
-        <div
-          onClick={() => setActiveTab('validade')}
-          className={`p-4 rounded-2xl border cursor-pointer hover:border-rose-400/50 transition-all ${
-            darkMode ? 'bg-slate-800/80 border-slate-700' : 'bg-white border-slate-200'
-          } shadow-xs`}
-        >
-          <div className="flex items-center justify-between text-slate-500 mb-1.5">
-            <span className="text-xs font-semibold">Vencem &lt; 5 dias</span>
-            <div className="p-1 rounded-lg bg-rose-500/10 text-rose-500">
-              <Calendar className="w-4 h-4" />
-            </div>
-          </div>
-          <div className="text-2xl font-black tracking-tight text-slate-900 dark:text-white">
-            {urgentValidities.length}
-          </div>
-          <span className="text-[11px] text-rose-600 dark:text-rose-400 font-medium">Ação Imediata</span>
-        </div>
-
-        <div
-          onClick={() => setActiveTab('auditoria')}
-          className={`p-4 rounded-2xl border cursor-pointer hover:border-emerald-400/50 transition-all ${
-            darkMode ? 'bg-slate-800/80 border-slate-700' : 'bg-white border-slate-200'
-          } shadow-xs`}
-        >
-          <div className="flex items-center justify-between text-slate-500 mb-1.5">
-            <span className="text-xs font-semibold">Auditorias</span>
-            <div className="p-1 rounded-lg bg-emerald-500/10 text-emerald-500">
-              <ClipboardCheck className="w-4 h-4" />
-            </div>
-          </div>
-          <div className="text-2xl font-black tracking-tight text-slate-900 dark:text-white">
-            {audits.length}
-          </div>
-          <span className="text-[11px] text-emerald-600 dark:text-emerald-400 font-medium">
-            {audits.filter(a => a.status === 'Em Andamento').length} Em Andamento
-          </span>
-        </div>
-
-        <div
-          onClick={() => setActiveTab('estoque')}
-          className={`p-4 rounded-2xl border cursor-pointer hover:border-blue-400/50 transition-all ${
-            darkMode ? 'bg-slate-800/80 border-slate-700' : 'bg-white border-slate-200'
-          } shadow-xs`}
-        >
-          <div className="flex items-center justify-between text-slate-500 mb-1.5">
-            <span className="text-xs font-semibold">Total de Itens</span>
-            <div className="p-1 rounded-lg bg-blue-500/10 text-blue-500">
-              <Package className="w-4 h-4" />
-            </div>
-          </div>
-          <div className="text-2xl font-black tracking-tight text-slate-900 dark:text-white">
-            {products.length}
-          </div>
-          <span className="text-[11px] text-blue-600 dark:text-blue-400 font-medium">Cadastrados</span>
-        </div>
-      </div>
+      {/* DASHBOARD PRINCIPAL COM CARDS DEDICADOS */}
+      <Dashboard />
 
       {/* Ações Rápidas de Terminal */}
       <div>
@@ -179,7 +358,24 @@ export const InicioTab: React.FC = () => {
             </div>
             <div>
               <div className="text-xs font-bold text-slate-800 dark:text-white">Bipar Produto</div>
-              <div className="text-[10px] text-slate-400">Preço, saldo e gôndola</div>
+              <div className="text-[10px] text-slate-400">Google Barcode Detector</div>
+            </div>
+          </button>
+
+          <button
+            onClick={() => setIsSpreadsheetModalOpen(true)}
+            className={`p-3.5 rounded-2xl border flex items-center gap-3 transition-all text-left ${
+              darkMode
+                ? 'bg-slate-800/90 border-slate-700 hover:bg-slate-750'
+                : 'bg-white border-slate-200 hover:bg-slate-50'
+            } shadow-xs`}
+          >
+            <div className="p-2.5 rounded-xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
+              <FileSpreadsheet className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="text-xs font-bold text-slate-800 dark:text-white">Subir Planilha</div>
+              <div className="text-[10px] text-slate-400">Importação XLSX/CSV</div>
             </div>
           </button>
 
@@ -208,29 +404,12 @@ export const InicioTab: React.FC = () => {
                 : 'bg-white border-slate-200 hover:bg-slate-50'
             } shadow-xs`}
           >
-            <div className="p-2.5 rounded-xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
+            <div className="p-2.5 rounded-xl bg-purple-500/10 text-purple-600 dark:text-purple-400">
               <Package className="w-5 h-5" />
             </div>
             <div>
               <div className="text-xs font-bold text-slate-800 dark:text-white">Novo Produto</div>
               <div className="text-[10px] text-slate-400">Cadastrar no catálogo</div>
-            </div>
-          </button>
-
-          <button
-            onClick={() => setActiveTab('auditoria')}
-            className={`p-3.5 rounded-2xl border flex items-center gap-3 transition-all text-left ${
-              darkMode
-                ? 'bg-slate-800/90 border-slate-700 hover:bg-slate-750'
-                : 'bg-white border-slate-200 hover:bg-slate-50'
-            } shadow-xs`}
-          >
-            <div className="p-2.5 rounded-xl bg-purple-500/10 text-purple-600 dark:text-purple-400">
-              <ClipboardCheck className="w-5 h-5" />
-            </div>
-            <div>
-              <div className="text-xs font-bold text-slate-800 dark:text-white">Contagem Rápida</div>
-              <div className="text-[10px] text-slate-400">Auditar gôndola</div>
             </div>
           </button>
         </div>
@@ -246,9 +425,9 @@ export const InicioTab: React.FC = () => {
           <div>
             <h3 className="font-bold text-sm text-slate-900 dark:text-white flex items-center gap-1.5">
               <AlertTriangle className="w-4 h-4 text-rose-500" />
-              Lotes em Risco de Vencimento
+              Lotes em Risco Imediato de Vencimento
             </h3>
-            <p className="text-[11px] text-slate-400">Itens com prazo inferior a 5 dias</p>
+            <p className="text-[11px] text-slate-400">Itens com vencimento hoje ou inferior a 5 dias</p>
           </div>
           <button
             onClick={() => setActiveTab('validade')}
@@ -305,6 +484,7 @@ export const InicioTab: React.FC = () => {
       {/* Modais */}
       <NewValidityModal isOpen={isValidityModalOpen} onClose={() => setIsValidityModalOpen(false)} />
       <NewProductModal isOpen={isProductModalOpen} onClose={() => setIsProductModalOpen(false)} />
+      <ImportSpreadsheetModal isOpen={isSpreadsheetModalOpen} onClose={() => setIsSpreadsheetModalOpen(false)} />
     </div>
   );
 };
