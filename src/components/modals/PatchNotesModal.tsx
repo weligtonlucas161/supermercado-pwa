@@ -9,7 +9,8 @@ import {
   Database,
   Lock,
   Cpu,
-  ArrowRight
+  ArrowRight,
+  RefreshCw
 } from 'lucide-react';
 
 interface PatchNotesModalProps {
@@ -105,7 +106,18 @@ export const PatchNotesModal: React.FC<PatchNotesModalProps> = ({ isOpen, onClos
             </p>
           </div>
 
-          {/* Item 4: No Copyright & Termos de Uso */}
+          {/* Item 4: Background Sync no Service Worker */}
+          <div className="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-800/70 border border-slate-100 dark:border-slate-800 space-y-1">
+            <div className="flex items-center gap-2 font-bold text-slate-900 dark:text-white">
+              <RefreshCw className="w-3.5 h-3.5 text-emerald-500" />
+              <span>Listener 'sync' no Service Worker (Background Sync)</span>
+            </div>
+            <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
+              O Service Worker agora escuta o evento nativo <code>sync</code> em segundo plano, disparando a consolidação das filas de alterações pendentes com o banco Supabase assim que o dispositivo recuperar a conexão com a internet.
+            </p>
+          </div>
+
+          {/* Item 5: No Copyright & Termos de Uso */}
           <div className="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-800/70 border border-slate-100 dark:border-slate-800 space-y-1">
             <div className="flex items-center gap-2 font-bold text-slate-900 dark:text-white">
               <ShieldCheck className="w-3.5 h-3.5 text-emerald-500" />

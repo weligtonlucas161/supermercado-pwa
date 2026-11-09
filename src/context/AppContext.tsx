@@ -20,8 +20,9 @@ import {
   saveStoredData 
 } from '../data/mockData';
 import { useOnlineStatus } from '../pwa/useOnlineStatus';
+import { useBackgroundSync } from '../pwa/useBackgroundSync';
 import { triggerScanBeep } from '../utils/haptics';
-import { loginUser } from '../services/supabaseService';
+import { loginUser, isSupabaseConfigured, syncOfflineQueueToSupabase } from '../services/supabaseService';
 
 interface AppContextType {
   // Navigation & UI
@@ -236,21 +237,45 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   // Sync Queue Action
-  const syncOfflineQueue = () => {
+  const syncOfflineQueue = async () => {
     if (offlineQueue.length === 0) return;
+    const count = offlineQueue.length;
+    const currentQueue = [...offlineQueue];
+
+    // Se Supabase estiver conectado, sincroniza no banco
+    if (isSupabaseConfigured()) {
+      try {
+        const res = await syncOfflineQueueToSupabase(currentQueue, operator.loja_id || 'loja_padrao_001');
+        if (!res.success) {
+          console.warn('Aviso sincronização Supabase:', res.error);
+        }
+      } catch (err) {
+        console.warn('Erro ao sincronizar offline queue com Supabase:', err);
+      }
+    }
+
     triggerScanBeep(true);
     setOfflineQueue([]);
     // Add success notification
     const syncNotif: NotificationItem = {
       id: 'n-sync-' + Date.now(),
       title: 'Sincronização Concluída',
-      message: `${offlineQueue.length} alterações locais foram consolidadas no servidor central.`,
+      message: `${count} alterações locais foram consolidadas ${isSupabaseConfigured() ? 'no Supabase' : 'no armazenamento central'}.`,
       type: 'info',
       timestamp: 'Agora',
       read: false,
     };
     setNotifications(prev => [syncNotif, ...prev]);
   };
+
+  // Integração com o Service Worker Background Sync (evento 'sync' e reconexão à internet)
+  useBackgroundSync({
+    onSyncTriggered: () => {
+      console.log('[AppContext] Sincronização disparada pelo Service Worker background sync');
+      syncOfflineQueue();
+    },
+    hasPendingItems: offlineQueue.length > 0,
+  });
 
   const clearOfflineQueue = () => {
     setOfflineQueue([]);

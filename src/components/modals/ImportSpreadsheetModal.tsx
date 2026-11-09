@@ -18,12 +18,18 @@ import {
   CheckCircle2,
   FileCheck,
   Eye,
-  Tag
+  Tag,
+  Database
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { useApp } from '../../context/AppContext';
 import { SpreadsheetProductItem, SetorLoja, SETORES_DISPONIVEIS } from '../../types';
-import { uploadEncryptedProductsRealtime } from '../../services/supabaseService';
+import { 
+  uploadEncryptedProductsRealtime, 
+  isSupabaseConfigured, 
+  setCustomSupabaseConfig, 
+  getSupabaseConfigInfo 
+} from '../../services/supabaseService';
 import { encryptProductList } from '../../utils/crypto';
 import { triggerScanBeep } from '../../utils/haptics';
 
@@ -43,6 +49,14 @@ interface ColumnOption {
 export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ isOpen, onClose }) => {
   const { addProduct, operator } = useApp();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Estados de Conexão com Supabase
+  const supabaseConnected = isSupabaseConfigured();
+  const [dbSaveStatus, setDbSaveStatus] = useState<'IDLE' | 'SAVED_TO_SUPABASE' | 'LOCAL_ONLY' | 'ERROR'>('IDLE');
+  const [quickSupabaseUrl, setQuickSupabaseUrl] = useState(getSupabaseConfigInfo().url || '');
+  const [quickSupabaseKey, setQuickSupabaseKey] = useState('');
+  const [isConnectingQuick, setIsConnectingQuick] = useState(false);
+  const [quickConnectError, setQuickConnectError] = useState<string | null>(null);
 
   // Etapa Atual (1 a 4)
   const [step, setStep] = useState<StepNumber>(1);
@@ -333,10 +347,11 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
     setIsUploading(true);
     setUploadProgress(0);
     setUploadSuccess(false);
+    setErrorMessage(null);
 
     try {
       // 1. Upload em tempo real para o banco de dados oficial Synk
-      await uploadEncryptedProductsRealtime(
+      const res = await uploadEncryptedProductsRealtime(
         encryptedList,
         (uploaded, total, pct) => {
           setUploadProgress(pct);
@@ -371,13 +386,41 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
       });
 
       setIsUploading(false);
-      setUploadSuccess(true);
-      triggerScanBeep(true);
+
+      if (res.success) {
+        setUploadSuccess(true);
+        setDbSaveStatus('SAVED_TO_SUPABASE');
+        triggerScanBeep(true);
+      } else if (res.isLocalOnly) {
+        setUploadSuccess(false);
+        setDbSaveStatus('LOCAL_ONLY');
+      } else {
+        setUploadSuccess(false);
+        setDbSaveStatus('ERROR');
+        setErrorMessage(res.error || 'Falha ao gravar no banco de dados Supabase.');
+      }
     } catch (err) {
       console.error('Erro na sincronização:', err);
       setIsUploading(false);
+      setDbSaveStatus('ERROR');
       setErrorMessage('Ocorreu um erro durante a sincronização com o banco de dados.');
     }
+  };
+
+  const handleQuickConnectAndUpload = async () => {
+    setQuickConnectError(null);
+    setIsConnectingQuick(true);
+
+    const result = setCustomSupabaseConfig(quickSupabaseUrl, quickSupabaseKey);
+    if (!result.success) {
+      setQuickConnectError(result.message);
+      setIsConnectingQuick(false);
+      return;
+    }
+
+    setIsConnectingQuick(false);
+    // Dispara o upload real com as credenciais salvas
+    await handleStartSync(encryptedPayloads);
   };
 
   const validItemsCount = mappedItems.filter(i => i.isValid).length;
@@ -393,12 +436,19 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
               <FileSpreadsheet className="w-5 h-5" />
             </div>
             <div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 <h3 className="font-extrabold text-sm sm:text-base text-slate-800 dark:text-white">
                   Importação de Planilha de Estoque
                 </h3>
                 <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
                   4 Etapas
+                </span>
+                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
+                  supabaseConnected
+                    ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border-emerald-500/20'
+                    : 'bg-amber-500/15 text-amber-600 dark:text-amber-400 border-amber-500/20'
+                }`}>
+                  {supabaseConnected ? '🟢 Supabase Conectado' : '⚪ Modo Local (Offline)'}
                 </span>
               </div>
               <p className="text-[11px] text-slate-400">
@@ -798,32 +848,129 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
         {/* ================================================================= */}
         {step === 4 && (
           <div className="py-4 space-y-4 overflow-y-auto flex-1">
-            {/* Status do Upload */}
-            <div className="p-4 rounded-3xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <div className="p-2.5 rounded-2xl bg-emerald-500 text-white">
-                  <ShieldCheck className="w-6 h-6" />
+            {/* Status do Upload e Gravação no Banco */}
+            {dbSaveStatus === 'SAVED_TO_SUPABASE' && (
+              <div className="p-4 rounded-3xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="p-2.5 rounded-2xl bg-emerald-500 text-white">
+                    <ShieldCheck className="w-6 h-6" />
+                  </div>
+                  <div>
+                    <h4 className="text-xs font-bold text-emerald-900 dark:text-emerald-300">
+                      Sincronização Concluída com Sucesso no Banco Supabase!
+                    </h4>
+                    <p className="text-[11px] text-emerald-700 dark:text-emerald-400">
+                      {encryptedPayloads.length} produtos gravados no banco na nuvem (tabela 'produtos' e catálogo universal) no setor <strong>{selectedSetor}</strong>.
+                    </p>
+                  </div>
                 </div>
-                <div>
-                  <h4 className="text-xs font-bold text-emerald-900 dark:text-emerald-300">
-                    {uploadSuccess ? 'Sincronização e Gravação Concluídas com Sucesso!' : 'Sincronizando com o Backend Supabase...'}
-                  </h4>
-                  <p className="text-[11px] text-emerald-700 dark:text-emerald-400">
-                    {encryptedPayloads.length} produtos gravados no setor <strong>{selectedSetor}</strong> com integridade garantida.
-                  </p>
+
+                <button
+                  type="button"
+                  onClick={() => setShowEncryptedView(!showEncryptedView)}
+                  className="px-3 py-1.5 rounded-xl border border-emerald-500/40 bg-white dark:bg-slate-800 text-xs font-bold text-emerald-700 dark:text-emerald-300 flex items-center gap-1.5 transition shadow-xs cursor-pointer shrink-0"
+                >
+                  {showEncryptedView ? <Unlock className="w-3.5 h-3.5" /> : <Lock className="w-3.5 h-3.5" />}
+                  <span>{showEncryptedView ? 'Ver Descriptografado' : 'Ver Criptografado'}</span>
+                </button>
+              </div>
+            )}
+
+            {/* Aviso Quando Supabase está Desconectado / Modo Local */}
+            {dbSaveStatus === 'LOCAL_ONLY' && (
+              <div className="p-4 rounded-3xl bg-amber-500/10 border border-amber-500/30 space-y-3">
+                <div className="flex items-start gap-3">
+                  <div className="p-2 rounded-2xl bg-amber-500 text-white shrink-0 mt-0.5">
+                    <AlertTriangle className="w-5 h-5" />
+                  </div>
+                  <div className="space-y-1">
+                    <h4 className="text-xs font-bold text-amber-900 dark:text-amber-200">
+                      Gravado apenas localmente no aparelho (Supabase Desconectado)
+                    </h4>
+                    <p className="text-[11px] text-amber-800 dark:text-amber-300 leading-relaxed">
+                      Os produtos foram carregados na memória do app, mas <strong>NÃO foram gravados no banco de dados Supabase</strong> porque o banco ainda não foi conectado com sua URL e Chave Anon.
+                    </p>
+                  </div>
+                </div>
+
+                {/* Formulário de Conexão Rápida com o Supabase */}
+                <div className="p-3.5 rounded-2xl bg-white dark:bg-slate-800 border border-amber-500/20 space-y-2.5 text-xs">
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-slate-800 dark:text-slate-200 text-[11px] flex items-center gap-1.5">
+                      <Database className="w-3.5 h-3.5 text-amber-500" />
+                      Conectar ao seu Banco Supabase para Gravar os Dados na Nuvem:
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-500 uppercase block mb-0.5">URL do Supabase</label>
+                      <input
+                        type="text"
+                        value={quickSupabaseUrl}
+                        onChange={e => setQuickSupabaseUrl(e.target.value)}
+                        placeholder="https://seu-id.supabase.co"
+                        className="w-full p-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-slate-800 dark:text-slate-200 text-xs font-mono"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-500 uppercase block mb-0.5">Chave Anon (Public Key)</label>
+                      <input
+                        type="password"
+                        value={quickSupabaseKey}
+                        onChange={e => setQuickSupabaseKey(e.target.value)}
+                        placeholder="eyJhbGciOiJIUz..."
+                        className="w-full p-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-slate-800 dark:text-slate-200 text-xs font-mono"
+                      />
+                    </div>
+                  </div>
+
+                  {quickConnectError && (
+                    <p className="text-[11px] text-rose-600 dark:text-rose-400 font-medium">
+                      {quickConnectError}
+                    </p>
+                  )}
+
+                  <div className="flex justify-end pt-1">
+                    <button
+                      type="button"
+                      onClick={handleQuickConnectAndUpload}
+                      disabled={!quickSupabaseUrl || !quickSupabaseKey || isConnectingQuick}
+                      className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-bold text-xs shadow-md shadow-emerald-600/20 flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <Database className="w-3.5 h-3.5" />
+                      <span>{isConnectingQuick ? 'Conectando...' : 'Conectar e Gravar no Supabase Agora'}</span>
+                    </button>
+                  </div>
                 </div>
               </div>
+            )}
 
-              {/* Toggle de Visualização (Criptografado no banco vs Descriptografado no app) */}
-              <button
-                type="button"
-                onClick={() => setShowEncryptedView(!showEncryptedView)}
-                className="px-3 py-1.5 rounded-xl border border-emerald-500/40 bg-white dark:bg-slate-800 text-xs font-bold text-emerald-700 dark:text-emerald-300 flex items-center gap-1.5 transition shadow-xs cursor-pointer"
-              >
-                {showEncryptedView ? <Unlock className="w-3.5 h-3.5" /> : <Lock className="w-3.5 h-3.5" />}
-                <span>{showEncryptedView ? 'Ver Descriptografado' : 'Ver Criptografado'}</span>
-              </button>
-            </div>
+            {/* Erro Durante o Upload */}
+            {dbSaveStatus === 'ERROR' && (
+              <div className="p-4 rounded-3xl bg-rose-500/10 border border-rose-500/30 flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="p-2.5 rounded-2xl bg-rose-500 text-white shrink-0">
+                    <AlertTriangle className="w-6 h-6" />
+                  </div>
+                  <div>
+                    <h4 className="text-xs font-bold text-rose-900 dark:text-rose-200">
+                      Falha ao Gravar no Banco de Dados Supabase
+                    </h4>
+                    <p className="text-[11px] text-rose-700 dark:text-rose-300">
+                      {errorMessage || 'Ocorreu um erro ao comunicar com as tabelas do Supabase.'}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => handleStartSync(encryptedPayloads)}
+                  className="px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold shrink-0 transition"
+                >
+                  Tentar Novamente
+                </button>
+              </div>
+            )}
 
             {/* Progresso do Upload se ainda em andamento */}
             {isUploading && (

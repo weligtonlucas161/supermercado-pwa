@@ -21,7 +21,13 @@ import {
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { PWAInstallBanner } from '../../pwa/PWAInstallBanner';
-import { isSupabaseConfigured, testSupabaseConnection } from '../../services/supabaseService';
+import { 
+  isSupabaseConfigured, 
+  testSupabaseConnection, 
+  setCustomSupabaseConfig, 
+  clearCustomSupabaseConfig, 
+  getSupabaseConfigInfo 
+} from '../../services/supabaseService';
 import { PatchNotesModal } from '../modals/PatchNotesModal';
 import { TermsModal } from '../modals/TermsModal';
 
@@ -46,6 +52,13 @@ export const ConfiguracoesTab: React.FC = () => {
   const [showPatchNotes, setShowPatchNotes] = useState(false);
   const [showTerms, setShowTerms] = useState(false);
 
+  // Estados de Configuração do Supabase
+  const configInfo = getSupabaseConfigInfo();
+  const [supabaseUrlInput, setSupabaseUrlInput] = useState(configInfo.url || '');
+  const [supabaseKeyInput, setSupabaseKeyInput] = useState('');
+  const [isEditingConfig, setIsEditingConfig] = useState(!configInfo.isConfigured);
+  const [configFeedback, setConfigFeedback] = useState<{ success: boolean; message: string } | null>(null);
+
   const handleClearCache = async () => {
     if ('caches' in window) {
       const keys = await caches.keys();
@@ -53,6 +66,38 @@ export const ConfiguracoesTab: React.FC = () => {
     }
     setCacheCleared(true);
     setTimeout(() => setCacheCleared(false), 2000);
+  };
+
+  const handleSaveSupabaseConfig = async () => {
+    setConfigFeedback(null);
+    setSupabaseTestResult(null);
+
+    const result = setCustomSupabaseConfig(supabaseUrlInput, supabaseKeyInput);
+    if (!result.success) {
+      setConfigFeedback(result);
+      return;
+    }
+
+    // Testa a conexão imediatamente após salvar
+    setTestingSupabase(true);
+    const testResult = await testSupabaseConnection();
+    setTestingSupabase(false);
+    setSupabaseTestResult(testResult);
+    if (testResult.success) {
+      setConfigFeedback({ success: true, message: 'Supabase conectado com sucesso!' });
+      setIsEditingConfig(false);
+    } else {
+      setConfigFeedback({ success: false, message: testResult.message });
+    }
+  };
+
+  const handleDisconnectSupabase = () => {
+    clearCustomSupabaseConfig();
+    setSupabaseUrlInput('');
+    setSupabaseKeyInput('');
+    setSupabaseTestResult(null);
+    setConfigFeedback({ success: true, message: 'Configuração do Supabase removida. O app está operando em Modo Local.' });
+    setIsEditingConfig(true);
   };
 
   const handleTestSupabase = async () => {
@@ -83,11 +128,11 @@ export const ConfiguracoesTab: React.FC = () => {
       <div
         className={`p-4 sm:p-5 rounded-3xl border ${
           darkMode ? 'bg-slate-800/80 border-slate-700' : 'bg-white border-slate-200'
-        } shadow-sm space-y-3`}
+        } shadow-sm space-y-4`}
       >
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2.5">
-            <div className={`p-2.5 rounded-2xl ${hasSupabase ? 'bg-emerald-500/15 text-emerald-500' : 'bg-blue-500/15 text-blue-500'}`}>
+            <div className={`p-2.5 rounded-2xl ${hasSupabase ? 'bg-emerald-500/15 text-emerald-500' : 'bg-amber-500/15 text-amber-500'}`}>
               <Database className="w-5 h-5" />
             </div>
             <div>
@@ -95,28 +140,119 @@ export const ConfiguracoesTab: React.FC = () => {
                 Banco de Dados Supabase (PostgreSQL)
                 <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
                   hasSupabase 
-                    ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400' 
-                    : 'bg-amber-500/15 text-amber-600 dark:text-amber-400'
+                    ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20' 
+                    : 'bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/20'
                 }`}>
-                  {hasSupabase ? 'Conectado' : 'Modo Local / Offline-First'}
+                  {hasSupabase ? 'Conectado na Nuvem' : 'Modo Local / Desconectado'}
                 </span>
               </h4>
               <p className="text-[11px] text-slate-400">
                 {hasSupabase 
-                  ? 'Sincronização em nuvem ativa com tabelas de estoque, validades e auditoria.' 
-                  : 'Scripts SQL completos em /supabase. O app opera com persistência local garantida.'}
+                  ? 'Sincronização em nuvem ativa com as tabelas produtos, catálogo universal e logs.' 
+                  : 'Insira a URL e Chave Anon do seu projeto Supabase para gravar e importar dados na nuvem.'}
               </p>
             </div>
           </div>
-          <button
-            onClick={handleTestSupabase}
-            disabled={testingSupabase}
-            className="px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-bold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-750 transition flex items-center gap-1.5 shrink-0"
-          >
-            <RefreshCw className={`w-3.5 h-3.5 ${testingSupabase ? 'animate-spin' : ''}`} />
-            <span>Testar Conexão</span>
-          </button>
+
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setIsEditingConfig(!isEditingConfig)}
+              className="px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-bold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-750 transition"
+            >
+              {isEditingConfig ? 'Fechar Edição' : 'Configurar Conexão'}
+            </button>
+            {hasSupabase && (
+              <button
+                onClick={handleTestSupabase}
+                disabled={testingSupabase}
+                className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition flex items-center gap-1.5 shrink-0"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${testingSupabase ? 'animate-spin' : ''}`} />
+                <span>Testar Conexão</span>
+              </button>
+            )}
+          </div>
         </div>
+
+        {/* Formulário de Configuração do Supabase */}
+        {isEditingConfig && (
+          <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-850 border border-slate-200 dark:border-slate-750 space-y-3 animate-in fade-in">
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                Credenciais do Projeto Supabase
+              </span>
+              <span className="text-[10px] text-slate-400">
+                Obtido em Supabase Dashboard → Settings → API
+              </span>
+            </div>
+
+            <div className="space-y-2 text-xs">
+              <div>
+                <label className="text-[11px] font-bold text-slate-600 dark:text-slate-300 block mb-1">
+                  URL do Projeto (Project URL)
+                </label>
+                <input
+                  type="text"
+                  value={supabaseUrlInput}
+                  onChange={e => setSupabaseUrlInput(e.target.value)}
+                  placeholder="https://seu-projeto-id.supabase.co"
+                  className="w-full p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200 font-mono text-[11px] focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                />
+              </div>
+
+              <div>
+                <label className="text-[11px] font-bold text-slate-600 dark:text-slate-300 block mb-1">
+                  Chave Pública Anônima (Anon Key / Public API Key)
+                </label>
+                <input
+                  type="password"
+                  value={supabaseKeyInput}
+                  onChange={e => setSupabaseKeyInput(e.target.value)}
+                  placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+                  className="w-full p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200 font-mono text-[11px] focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                />
+              </div>
+
+              <div className="flex items-center justify-between pt-1">
+                {hasSupabase && (
+                  <button
+                    type="button"
+                    onClick={handleDisconnectSupabase}
+                    className="text-xs text-rose-500 hover:underline font-semibold"
+                  >
+                    Desconectar Supabase
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={handleSaveSupabaseConfig}
+                  disabled={!supabaseUrlInput || !supabaseKeyInput || testingSupabase}
+                  className="ml-auto px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-bold text-xs shadow-md shadow-emerald-600/20 transition flex items-center gap-1.5"
+                >
+                  <Check className="w-4 h-4" />
+                  <span>Salvar & Conectar ao Banco</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {configFeedback && (
+          <div
+            className={`p-3 rounded-2xl text-xs flex items-center gap-2 animate-in fade-in ${
+              configFeedback.success
+                ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30'
+                : 'bg-rose-500/15 text-rose-700 dark:text-rose-300 border border-rose-500/30'
+            }`}
+          >
+            {configFeedback.success ? (
+              <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-500" />
+            ) : (
+              <AlertCircle className="w-4 h-4 shrink-0 text-rose-500" />
+            )}
+            <span>{configFeedback.message}</span>
+          </div>
+        )}
 
         {supabaseTestResult && (
           <div
