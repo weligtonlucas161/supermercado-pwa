@@ -44,8 +44,8 @@ function AppContent() {
       {/* Top Header */}
       <Header />
 
-      {/* Conteúdo Principal da Aba Ativa */}
-      <main className="flex-1 p-3.5 sm:p-5 pb-28 max-w-4xl mx-auto w-full">
+      {/* Conteúdo Principal da Aba Ativa (com espaço inferior amplo para a rolagem passar da barra flutuante) */}
+      <main className="flex-1 p-3.5 sm:p-5 pb-44 sm:pb-48 max-w-4xl mx-auto w-full">
         {activeTab === 'inicio' && <InicioTab />}
         {activeTab === 'validade' && <ValidadeTab />}
         {activeTab === 'estoque' && <EstoqueTab />}

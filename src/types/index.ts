@@ -111,6 +111,13 @@ export interface AuditItem {
   auditor: string;
   department?: string;
   discrepanciesCount?: number;
+  type?: 'PRESENCA' | 'INVENTARIO' | 'VALIDADE';
+  totalItems?: number;
+  confirmedItems?: number;
+  pendingItems?: number;
+  presenceRate?: string;
+  confirmedList?: Array<{ name: string; ean: string; scannedAt: string }>;
+  pendingList?: Array<{ name: string; ean: string }>;
 }
 
 export interface Operator {
