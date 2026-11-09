@@ -1,0 +1,121 @@
+/**
+ * @license
+ * Arquivo: src/utils/encryptionUtils.ts
+ * 
+ * Função Utilitária de Descriptografia e Segurança Zero-Knowledge
+ * 
+ * Regra de Negócio:
+ * - Permite ler dados armazenados no Supabase de forma temporária na memória RAM.
+ * - Garante que o estado da interface seja atualizado apenas com os valores descriptografados para exibição.
+ * - Os dados limpos NUNCA devem ser gravados de forma persistente no localStorage ou IndexedDB.
+ */
+
+import CryptoJS from 'crypto-js';
+
+// Chave mestra de criptografia AES-256
+// Em produção: process.env.REACT_APP_ENCRYPTION_KEY ou import.meta.env.VITE_ENCRYPTION_KEY
+const MASTER_KEY =
+  (typeof process !== 'undefined' && process.env && process.env.REACT_APP_ENCRYPTION_KEY) ||
+  (typeof import.meta !== 'undefined' && import.meta.env && (import.meta.env as Record<string, string>).VITE_ENCRYPTION_KEY) ||
+  'superpwa_aes256_zero_knowledge_master_key_2026';
+
+export interface DecryptedProduct {
+  id: string;
+  nome: string;               // Descriptografado em RAM (Descrição do produto)
+  codigo_fornecedor: string;  // Descriptografado em RAM (Código de fornecedor)
+  plu: string;                // Descriptografado em RAM (Código Reduzido)
+  codigo_barras: string;      // Descriptografado em RAM (Código EAN)
+  setor: string;              // Setor (FRIOS, AÇOUGUE, PEIXARIA, MERCEARIA, PADARIA, BAZAR)
+  quantidade: number;         // Numérico para operações matemáticas de estoque
+  loja_id: string;
+  is_encrypted: boolean;
+  criado_em?: number;
+  data_vencimento?: string;
+  // Guarda referência cifrada bruta apenas para auditoria visual se necessário
+  _rawCiphertext?: {
+    nome?: string;
+    codigo_fornecedor?: string;
+    plu?: string;
+    codigo_barras?: string;
+  };
+}
+
+/**
+ * Verifica se um texto possui o formato de um hash criptografado CryptoJS AES (prefixo OpenSSL Salted__)
+ */
+export function isEncrypted(value: unknown): boolean {
+  if (typeof value !== 'string') return false;
+  return value.startsWith('U2FsdGVk');
+}
+
+/**
+ * Descriptografa um campo individual em memória RAM usando AES-256
+ */
+export function decryptSingleField(cipherText: string | null | undefined, secretKey = MASTER_KEY): string {
+  if (!cipherText || typeof cipherText !== 'string') return '';
+  const trimmed = cipherText.trim();
+  
+  // Se não estiver criptografado, retorna o texto original
+  if (!isEncrypted(trimmed)) {
+    return trimmed;
+  }
+
+  try {
+    const bytes = CryptoJS.AES.decrypt(trimmed, secretKey);
+    const decrypted = bytes.toString(CryptoJS.enc.Utf8);
+    return decrypted || trimmed;
+  } catch (error) {
+    console.warn('Erro pontual ao descriptografar campo AES:', error);
+    return '[DADO PROTEGIDO]';
+  }
+}
+
+/**
+ * Criptografa um campo individual usando AES-256 antes de enviar ao Supabase
+ */
+export function encryptSingleField(plainText: string | null | undefined, secretKey = MASTER_KEY): string {
+  if (!plainText || typeof plainText !== 'string') return '';
+  const trimmed = plainText.trim();
+  if (!trimmed) return '';
+  return CryptoJS.AES.encrypt(trimmed, secretKey).toString();
+}
+
+/**
+ * Descriptografa temporariamente na memória RAM um registro de produto vindo do Supabase.
+ * Garante que a interface receba os valores legíveis sem salvá-los no disco.
+ */
+export function decryptDatabaseProduct(raw: Record<string, unknown>, secretKey = MASTER_KEY): DecryptedProduct {
+  const rawNome = String(raw.nome || raw.name || '');
+  const rawFornecedor = String(raw.codigo_fornecedor || raw.supplierCode || '');
+  const rawPlu = String(raw.plu || raw.reducedCode || '');
+  const rawBarras = String(raw.codigo_barras || raw.ean || '');
+
+  return {
+    id: String(raw.id || `ram-${Math.random().toString(36).substring(2, 9)}`),
+    nome: decryptSingleField(rawNome, secretKey),
+    codigo_fornecedor: decryptSingleField(rawFornecedor, secretKey),
+    plu: decryptSingleField(rawPlu, secretKey),
+    codigo_barras: decryptSingleField(rawBarras, secretKey),
+    setor: String(raw.setor || raw.category || 'MERCEARIA'),
+    quantidade: Math.max(0, Number(raw.quantidade ?? raw.stock ?? 0)),
+    loja_id: String(raw.loja_id || 'loja_padrao_001'),
+    is_encrypted: Boolean(raw.is_encrypted ?? isEncrypted(rawNome)),
+    criado_em: typeof raw.criado_em === 'number' ? raw.criado_em : Date.now(),
+    data_vencimento: String(raw.data_vencimento || ''),
+    _rawCiphertext: {
+      nome: rawNome,
+      codigo_fornecedor: rawFornecedor,
+      plu: rawPlu,
+      codigo_barras: rawBarras,
+    },
+  };
+}
+
+/**
+ * Descriptografa em lote uma lista de produtos na memória RAM.
+ * Utilizado por hooks e componentes React no momento da renderização.
+ */
+export function decryptProductList(rawList: Array<Record<string, unknown>>, secretKey = MASTER_KEY): DecryptedProduct[] {
+  if (!Array.isArray(rawList)) return [];
+  return rawList.map(item => decryptDatabaseProduct(item, secretKey));
+}

@@ -302,31 +302,6 @@ export const ConfiguracoesTab: React.FC = () => {
           </button>
         </div>
 
-        {/* Simular Offline (Ideal para testes em bancada) */}
-        <div className="p-4 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className={`p-2.5 rounded-xl ${isSimulatedOffline ? 'bg-amber-500/15 text-amber-500' : 'bg-blue-500/15 text-blue-500'}`}>
-              <Radio className="w-5 h-5" />
-            </div>
-            <div>
-              <p className="text-xs font-bold text-slate-900 dark:text-white">Simular Modo Offline</p>
-              <p className="text-[11px] text-slate-400">
-                {isSimulatedOffline ? 'Forçado offline para teste de contingência' : 'Conexão padrão do navegador'}
-              </p>
-            </div>
-          </div>
-          <button
-            onClick={toggleSimulatedOffline}
-            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition ${
-              isSimulatedOffline
-                ? 'bg-amber-500 text-white'
-                : 'bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300'
-            }`}
-          >
-            {isSimulatedOffline ? 'Offline Ativo' : 'Simular'}
-          </button>
-        </div>
-
         {/* Status de Sincronização */}
         <div className="p-4 flex items-center justify-between">
           <div className="flex items-center gap-3">

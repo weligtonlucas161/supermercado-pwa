@@ -6,6 +6,10 @@ export const SUPABASE_STORAGE_KEYS = {
   KEY: 'superpwa_supabase_anon_key',
 };
 
+// Credenciais oficiais do projeto Supabase fornecidas pelo usuário
+const DEFAULT_FALLBACK_URL = 'https://senbgpiuhjtlpnhvpykh.supabase.co';
+const DEFAULT_FALLBACK_KEY = 'sb_publishable_8T__DxVCm4aYMJB_pGtIeA_79V65KbL';
+
 function resolveConfig() {
   const envUrl = import.meta.env.VITE_SUPABASE_URL || '';
   const envKey = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
@@ -13,8 +17,9 @@ function resolveConfig() {
   const localUrl = typeof window !== 'undefined' ? localStorage.getItem(SUPABASE_STORAGE_KEYS.URL) || '' : '';
   const localKey = typeof window !== 'undefined' ? localStorage.getItem(SUPABASE_STORAGE_KEYS.KEY) || '' : '';
 
-  const activeUrl = localUrl.trim() || envUrl.trim();
-  const activeKey = localKey.trim() || envKey.trim();
+  // Prioridade: LocalStorage customizado > Variável de Ambiente Vite > Credenciais do Projeto
+  const activeUrl = localUrl.trim() || envUrl.trim() || DEFAULT_FALLBACK_URL;
+  const activeKey = localKey.trim() || envKey.trim() || DEFAULT_FALLBACK_KEY;
 
   const isConfigured = Boolean(
     activeUrl &&
@@ -27,7 +32,7 @@ function resolveConfig() {
     url: activeUrl,
     key: activeKey,
     isConfigured,
-    source: (localUrl ? 'custom' : envUrl ? 'env' : 'none') as 'custom' | 'env' | 'none',
+    source: (localUrl ? 'custom' : envUrl ? 'env' : 'default') as 'custom' | 'env' | 'default',
   };
 }
 

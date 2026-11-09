@@ -69,8 +69,12 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
   const [rawRows, setRawRows] = useState<Array<Record<string, unknown>>>([]);
   const [detectedColumns, setDetectedColumns] = useState<ColumnOption[]>([]);
 
-  // Estados da Etapa 2: Mapeamento das 5 Colunas e Seleção de Setor
+  // Estados da Etapa 2: Mapeamento das 5 Colunas, Linhas (Começo e Fim) e Seleção de Setor
   const [selectedSetor, setSelectedSetor] = useState<SetorLoja>('MERCEARIA');
+  const [allMatrixRows, setAllMatrixRows] = useState<string[][]>([]);
+  const [totalSheetRows, setTotalSheetRows] = useState<number>(0);
+  const [startRow, setStartRow] = useState<number>(2);
+  const [endRow, setEndRow] = useState<number>(100);
   const [colMap, setColMap] = useState({
     name: -1,         // 1. Descrição do produto
     supplierCode: -1, // 2. Código de fornecedor
@@ -137,6 +141,14 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
         const headerRow = matrix[0] || [];
         setRawHeaders(headerRow);
         setRawMatrix(matrix.slice(1, 10)); // Primeiras linhas de preview
+        setAllMatrixRows(matrix);
+        setTotalSheetRows(matrix.length);
+        
+        // Define linha de começo e fim padrão
+        const initialStart = matrix.length >= 2 ? 2 : 1;
+        const initialEnd = matrix.length;
+        setStartRow(initialStart);
+        setEndRow(initialEnd);
 
         const firstDataRow = matrix[1] || [];
         const cols: ColumnOption[] = headerRow.map((head, idx) => ({
@@ -238,21 +250,36 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
   };
 
   // =========================================================================
-  // ETAPA 2: PROCESSAR MAPEAMENTO DAS 5 COLUNAS + SETOR SELECIONADO
+  // ETAPA 2: PROCESSAR MAPEAMENTO DAS 5 COLUNAS + LINHAS (COMEÇO/FIM) + SETOR
   // =========================================================================
-  const updateMappedItems = (currentColMap = colMap, setor = selectedSetor) => {
+  const updateMappedItems = (
+    currentColMap = colMap, 
+    setor = selectedSetor,
+    sRow = startRow,
+    eRow = endRow,
+    matrix = allMatrixRows
+  ) => {
     if (currentColMap.name === -1 || currentColMap.ean === -1 || currentColMap.quantity === -1) {
       return [];
     }
 
-    const items: SpreadsheetProductItem[] = rawRows.map((row) => {
-      const values = Object.values(row);
+    if (!matrix || matrix.length === 0) return [];
 
-      const name = String(values[currentColMap.name] ?? '').trim();
-      const supplierCode = currentColMap.supplierCode >= 0 ? String(values[currentColMap.supplierCode] ?? '').trim() : '';
-      const reducedCode = currentColMap.reducedCode >= 0 ? String(values[currentColMap.reducedCode] ?? '').trim() : '';
-      const ean = String(values[currentColMap.ean] ?? '').trim();
-      const quantityRaw = values[currentColMap.quantity];
+    const startIdx = Math.max(0, sRow - 1);
+    const endIdx = Math.min(matrix.length, Math.max(startIdx, eRow));
+    const targetSlice = matrix.slice(startIdx, endIdx);
+
+    const items: SpreadsheetProductItem[] = targetSlice.map((row) => {
+      // 1. Descrição do produto
+      const name = currentColMap.name >= 0 ? String(row[currentColMap.name] ?? '').trim() : '';
+      // 2. Código de fornecedor
+      const supplierCode = currentColMap.supplierCode >= 0 ? String(row[currentColMap.supplierCode] ?? '').trim() : '';
+      // 3. Código reduzido
+      const reducedCode = currentColMap.reducedCode >= 0 ? String(row[currentColMap.reducedCode] ?? '').trim() : '';
+      // 4. Código EAN
+      const ean = currentColMap.ean >= 0 ? String(row[currentColMap.ean] ?? '').trim() : '';
+      // 5. Quantidade
+      const quantityRaw = currentColMap.quantity >= 0 ? row[currentColMap.quantity] : 0;
       const quantity = Math.max(0, parseInt(String(quantityRaw ?? 0).replace(/[^0-9]/g, ''), 10) || 0);
 
       const errors: string[] = [];
@@ -275,12 +302,12 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
   };
 
   const handleGoToStep2 = () => {
-    if (rawRows.length === 0) {
+    if (allMatrixRows.length === 0) {
       setErrorMessage('Carregue uma planilha antes de avançar.');
       return;
     }
     setErrorMessage(null);
-    const items = updateMappedItems(colMap, selectedSetor);
+    const items = updateMappedItems(colMap, selectedSetor, startRow, endRow, allMatrixRows);
     setMappedItems(items);
     setStep(2);
     triggerScanBeep(true);
@@ -288,14 +315,28 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
 
   const handleSetorChange = (setor: SetorLoja) => {
     setSelectedSetor(setor);
-    const items = updateMappedItems(colMap, setor);
+    const items = updateMappedItems(colMap, setor, startRow, endRow, allMatrixRows);
+    setMappedItems(items);
+  };
+
+  const handleStartRowChange = (val: number) => {
+    const s = Math.max(1, val);
+    setStartRow(s);
+    const items = updateMappedItems(colMap, selectedSetor, s, endRow, allMatrixRows);
+    setMappedItems(items);
+  };
+
+  const handleEndRowChange = (val: number) => {
+    const e = Math.max(startRow, Math.min(totalSheetRows, val));
+    setEndRow(e);
+    const items = updateMappedItems(colMap, selectedSetor, startRow, e, allMatrixRows);
     setMappedItems(items);
   };
 
   const handleColMapChange = (key: keyof typeof colMap, value: number) => {
     const updated = { ...colMap, [key]: value };
     setColMap(updated);
-    const items = updateMappedItems(updated, selectedSetor);
+    const items = updateMappedItems(updated, selectedSetor, startRow, endRow, allMatrixRows);
     setMappedItems(items);
   };
 
@@ -602,11 +643,59 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
         )}
 
         {/* ================================================================= */}
-        {/* ETAPA 2: MAPEAMENTO DE COLUNAS E SELEÇÃO DE SETOR */}
+        {/* ETAPA 2: MAPEAMENTO DE COLUNAS, LINHAS E SELEÇÃO DE SETOR */}
         {/* ================================================================= */}
         {step === 2 && (
           <div className="py-4 space-y-4 overflow-y-auto flex-1">
-            {/* SELEÇÃO DO SETOR (FRIOS, AÇOUGUE, PEIXARIA, MERCEARIA, PADARIA, BAZAR) */}
+            {/* 1. SELEÇÃO DO INTERVALO DE LINHAS (COMEÇO E FIM) */}
+            <div className="p-4 rounded-3xl bg-slate-50 dark:bg-slate-850 border border-slate-200/80 dark:border-slate-800 space-y-2.5">
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <label className="text-xs font-black text-slate-900 dark:text-white flex items-center gap-1.5 uppercase tracking-wider">
+                  <SlidersHorizontal className="w-4 h-4 text-emerald-500" />
+                  Intervalo de Linhas para Leitura (Começo e Fim) *
+                </label>
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
+                  {Math.max(0, endRow - startRow + 1)} linhas selecionadas de {totalSheetRows}
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                Informe onde começam e terminam os dados na planilha para ignorar títulos ou rodapés:
+              </p>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                <div>
+                  <label className="text-[10px] font-bold text-slate-600 dark:text-slate-400 uppercase block mb-1">
+                    Linha de Começo (Início dos dados)
+                  </label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={totalSheetRows || 9999}
+                    value={startRow}
+                    onChange={(e) => handleStartRowChange(parseInt(e.target.value, 10) || 1)}
+                    className="w-full p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white font-bold"
+                  />
+                  <span className="text-[10px] text-slate-400 mt-0.5 block">Normalmente linha 2 (após o cabeçalho)</span>
+                </div>
+
+                <div>
+                  <label className="text-[10px] font-bold text-slate-600 dark:text-slate-400 uppercase block mb-1">
+                    Linha de Fim (Última linha a importar)
+                  </label>
+                  <input
+                    type="number"
+                    min={startRow}
+                    max={totalSheetRows || 9999}
+                    value={endRow}
+                    onChange={(e) => handleEndRowChange(parseInt(e.target.value, 10) || startRow)}
+                    className="w-full p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white font-bold"
+                  />
+                  <span className="text-[10px] text-slate-400 mt-0.5 block">Total de linhas detectadas: {totalSheetRows}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* 2. SELEÇÃO DO SETOR (FRIOS, AÇOUGUE, PEIXARIA, MERCEARIA, PADARIA, BAZAR) */}
             <div className="p-4 rounded-3xl bg-emerald-500/5 border border-emerald-500/20 space-y-2.5">
               <div className="flex items-center justify-between">
                 <label className="text-xs font-black text-slate-900 dark:text-white flex items-center gap-1.5 uppercase tracking-wider">
@@ -646,15 +735,15 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
               </div>
             </div>
 
-            {/* MAPEAMENTO DAS 5 COLUNAS ESTRITAS */}
+            {/* 3. MAPEAMENTO DAS 5 COLUNAS ESTRITAS */}
             <div className="p-4 rounded-3xl bg-slate-50 dark:bg-slate-850 border border-slate-100 dark:border-slate-800 space-y-3">
               <div className="flex items-center justify-between">
                 <h4 className="text-xs font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
                   <SlidersHorizontal className="w-4 h-4 text-emerald-500" />
-                  Mapeamento das 5 Colunas Requeridas
+                  Posição das 5 Colunas Requeridas
                 </h4>
                 <span className="text-[10px] text-slate-400">
-                  Vincule os campos da planilha
+                  Apenas estas 5 informações serão extraídas
                 </span>
               </div>
 

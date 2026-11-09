@@ -52,6 +52,7 @@ import {
   decryptAES,
   ENCRYPTION_SECRET_KEY 
 } from '../../utils/cryptoZeroKnowledge';
+import { decryptProductList, DecryptedProduct } from '../../utils/encryptionUtils';
 
 // ============================================================================
 // TIPOS DE ESTADO DE UX
@@ -114,38 +115,6 @@ export const ImportadorPlanilhaZeroKnowledge: React.FC<ImportadorProps> = ({
       } catch (err) {
         console.warn('Falha na consulta ao Supabase:', err);
       }
-    }
-
-    // Se estiver em modo local ou o banco estiver vazio, fornece um lote inicial demonstrativo
-    if (databaseProducts.length === 0) {
-      const demoItems: FilteredProductItem[] = [
-        {
-          produto: 'Leite UHT Integral 1L',
-          codigoFornecedor: 'FORN-8832',
-          codigoReduzido: 'RED-104',
-          codigoBarras: '7891000100011',
-          quantidade: 140,
-        },
-        {
-          produto: 'Iogurte Natural 170g',
-          codigoFornecedor: 'FORN-4421',
-          codigoReduzido: 'RED-208',
-          codigoBarras: '7891000100028',
-          quantidade: 25,
-        },
-        {
-          produto: 'Arroz Longo Fino Tipo 1 5kg',
-          codigoFornecedor: 'FORN-9910',
-          codigoReduzido: 'RED-305',
-          codigoBarras: '7891000100035',
-          quantidade: 80,
-        },
-      ];
-
-      const initialEncrypted = demoItems.map(item =>
-        prepareEncryptedPayload(item, { lojaId, usuarioId })
-      );
-      setDatabaseProducts(initialEncrypted);
     }
 
     setIsLoadingTable(false);
@@ -330,11 +299,28 @@ export const ImportadorPlanilhaZeroKnowledge: React.FC<ImportadorProps> = ({
   // ==========================================================================
   // Regra de Negócio: Os dados originais nunca ficam salvos descriptografados
   // em disco (localStorage/IndexedDB). A descriptografia ocorre unicamente
-  // no useMemo na memória RAM enquanto o componente está sendo renderizado.
+  // no useMemo na memória RAM através de 'encryptionUtils.ts' enquanto o
+  // componente está sendo renderizado.
   const displayItems = useMemo<DecryptedDisplayProduct[]>(() => {
-    return databaseProducts.map((encrypted, index) =>
-      decryptForDisplay(encrypted, `item-${index}`)
+    const ramDecrypted: DecryptedProduct[] = decryptProductList(
+      databaseProducts as unknown as Array<Record<string, unknown>>
     );
+
+    return ramDecrypted.map((item, index) => ({
+      id: item.id || `item-${index}`,
+      produto: item.nome,
+      codigoFornecedor: item.codigo_fornecedor,
+      codigoReduzido: item.plu,
+      codigoBarras: item.codigo_barras,
+      quantidade: item.quantidade,
+      isEncryptedInDatabase: true,
+      rawCiphertext: {
+        nome: item._rawCiphertext?.nome || '',
+        codigo_fornecedor: item._rawCiphertext?.codigo_fornecedor || '',
+        plu: item._rawCiphertext?.plu || '',
+        codigo_barras: item._rawCiphertext?.codigo_barras || '',
+      },
+    }));
   }, [databaseProducts]);
 
   // Filtro de busca na memória RAM

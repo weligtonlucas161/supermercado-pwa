@@ -14,20 +14,20 @@ export const PWAInstallBanner: React.FC<PWAInstallBannerProps> = ({ compact = fa
   if (isInstalled || dismissed) {
     if (compact) {
       return (
-        <span className="inline-flex items-center gap-1.5 text-xs text-emerald-500 font-medium">
-          <Check className="w-3.5 h-3.5" /> Instalado
+        <span className="inline-flex items-center gap-1.5 text-xs text-emerald-500 font-bold">
+          <Check className="w-3.5 h-3.5" /> PWA Ativo
         </span>
       );
     }
     return (
-      <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-2xl p-4 flex items-center gap-3">
-        <div className="p-2.5 bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 rounded-xl">
+      <div className="bg-emerald-500/10 border border-emerald-500/25 rounded-3xl p-4 flex items-center gap-3.5 shadow-xs">
+        <div className="p-2.5 bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 rounded-2xl">
           <Check className="w-5 h-5" />
         </div>
         <div>
-          <h4 className="text-xs font-bold text-slate-800 dark:text-slate-100">App Instalado no Dispositivo</h4>
-          <p className="text-[11px] text-slate-500 dark:text-slate-400">
-            Você está operando na versão nativa PWA com acesso local e atalhos rápidos.
+          <h4 className="text-xs font-bold text-slate-800 dark:text-slate-100">SuperPWA OpSys Instalado</h4>
+          <p className="text-[11px] text-emerald-600 dark:text-emerald-400 font-semibold">
+            O PWA já está ativo neste dispositivo.
           </p>
         </div>
       </div>
@@ -63,10 +63,10 @@ export const PWAInstallBanner: React.FC<PWAInstallBannerProps> = ({ compact = fa
           {isInstallable ? (
             <button
               onClick={install}
-              className="w-full py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-600 active:scale-[0.99] text-white text-xs font-bold flex items-center justify-center gap-2 shadow-md shadow-emerald-500/20 transition-all"
+              className="w-full py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-600 active:scale-[0.99] text-white text-xs font-bold flex items-center justify-center gap-2 shadow-md shadow-emerald-500/20 transition-all cursor-pointer"
             >
               <Download className="w-4 h-4" />
-              Instalar Aplicativo no Dispositivo
+              Instalar SuperPWA OpSys
             </button>
           ) : isIOS ? (
             <button

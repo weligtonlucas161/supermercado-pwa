@@ -41,8 +41,8 @@ export const BottomNav: React.FC = () => {
   const lowStockCount = products.filter(p => p.stock <= p.minStock).length;
 
   return (
-    <nav className="fixed bottom-0 left-0 right-0 z-40 border-t border-slate-200/80 dark:border-slate-800 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md px-2 py-1.5 pb-[max(0.5rem,env(safe-area-inset-bottom))] shadow-lg transition-colors">
-      <div className="max-w-md mx-auto flex justify-around items-center">
+    <div className="fixed bottom-3 sm:bottom-4 left-3 right-3 sm:left-4 sm:right-4 z-40 max-w-lg mx-auto pointer-events-none">
+      <nav className="pointer-events-auto rounded-3xl border border-slate-200/90 dark:border-slate-800/90 bg-white/90 dark:bg-slate-900/90 backdrop-blur-xl px-2 py-2 shadow-2xl shadow-slate-900/15 dark:shadow-black/50 transition-all flex justify-around items-center ring-1 ring-black/5 dark:ring-white/10">
         <NavItem
           icon={<Home className="w-5 h-5" />}
           label="Início"
@@ -75,7 +75,7 @@ export const BottomNav: React.FC = () => {
           active={activeTab === 'configuracoes'}
           onClick={() => setActiveTab('configuracoes')}
         />
-      </div>
-    </nav>
+      </nav>
+    </div>
   );
 };

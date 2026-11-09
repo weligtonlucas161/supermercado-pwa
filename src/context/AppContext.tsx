@@ -22,7 +22,7 @@ import {
 import { useOnlineStatus } from '../pwa/useOnlineStatus';
 import { useBackgroundSync } from '../pwa/useBackgroundSync';
 import { triggerScanBeep } from '../utils/haptics';
-import { loginUser, isSupabaseConfigured, syncOfflineQueueToSupabase } from '../services/supabaseService';
+import { loginUser, isSupabaseConfigured, syncOfflineQueueToSupabase, supabase } from '../services/supabaseService';
 
 interface AppContextType {
   // Navigation & UI
@@ -57,6 +57,7 @@ interface AppContextType {
   // Actions
   addProduct: (product: Omit<Product, 'id'>) => Product;
   updateProductStock: (id: string, options: { delta?: number; exact?: number }) => void;
+  removeProduct: (id: string) => void;
   addValidity: (validity: Omit<ValidityItem, 'id'>) => ValidityItem;
   applyDiscount: (validityId: string, percentage: number) => void;
   addAudit: (audit: Omit<AuditItem, 'id' | 'date'>) => AuditItem;
@@ -114,11 +115,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Domain Entities State
   const [products, setProducts] = useState<Product[]>(() => {
-    return loadStoredData<Product[]>(STORAGE_KEYS.PRODUCTS, INITIAL_PRODUCTS);
+    const loaded = loadStoredData<Product[]>(STORAGE_KEYS.PRODUCTS, INITIAL_PRODUCTS);
+    // Remove produtos mockados de testes anteriores (IDs '1' a '8')
+    return loaded.filter(p => !['1', '2', '3', '4', '5', '6', '7', '8'].includes(p.id));
   });
 
   const [validities, setValidities] = useState<ValidityItem[]>(() => {
-    return loadStoredData<ValidityItem[]>(STORAGE_KEYS.VALIDITIES, INITIAL_VALIDITIES);
+    const loaded = loadStoredData<ValidityItem[]>(STORAGE_KEYS.VALIDITIES, INITIAL_VALIDITIES);
+    return loaded.filter(v => !['v1', 'v2', 'v3', 'v4', 'v5'].includes(v.id));
   });
 
   const [audits, setAudits] = useState<AuditItem[]>(() => {
@@ -311,6 +315,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     triggerScanBeep(true);
   };
 
+  const removeProduct = (id: string) => {
+    setProducts(prev => prev.filter(p => p.id !== id));
+    setValidities(prev => prev.filter(v => v.productId !== id));
+    if (isSupabaseConfigured() && supabase) {
+      supabase.from('produtos').delete().eq('id', id).then((res: { error: unknown }) => {
+        if (res.error) console.warn('Erro ao deletar produto no Supabase:', res.error);
+      });
+    }
+    trackOfflineAction('UPDATE_STOCK', { id, deleted: true });
+    triggerScanBeep(true);
+  };
+
   const addValidity = (v: Omit<ValidityItem, 'id'>): ValidityItem => {
     const newValidity: ValidityItem = {
       ...v,
@@ -401,6 +417,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         logout,
         addProduct,
         updateProductStock,
+        removeProduct,
         addValidity,
         applyDiscount,
         addAudit,
