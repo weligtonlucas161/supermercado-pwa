@@ -1462,17 +1462,20 @@ export async function finalizeAuditSessionInDatabase(data: {
 
 /**
  * Assina as alterações em tempo real de auditoria (sessões e bips) para sincronizar
+/**
+ * Assina as alterações em tempo real de auditoria (sessões e bips) para sincronizar
  * instantaneamente todos os participantes do setor.
  */
 export function subscribeToAuditRealtime(
   lojaId: string,
-  onEvent: () => void
+  onEvent: () => void,
+  onNewBip?: (bip: DbAuditBip) => void
 ): () => void {
   if (!client || !isSupabaseConfigured()) return () => {};
 
   try {
     const channel = client
-      .channel(`realtime_auditoria_${lojaId}`)
+      .channel(`realtime_auditoria_${lojaId}_${Date.now()}`)
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'auditoria_presenca_sessoes' },
@@ -1482,7 +1485,17 @@ export function subscribeToAuditRealtime(
       )
       .on(
         'postgres_changes',
-        { event: '*', schema: 'public', table: 'auditoria_presenca_bips' },
+        { event: 'INSERT', schema: 'public', table: 'auditoria_presenca_bips' },
+        (payload) => {
+          if (payload.new && onNewBip) {
+            onNewBip(payload.new as DbAuditBip);
+          }
+          onEvent();
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'auditoria_presenca_bips' },
         () => {
           onEvent();
         }

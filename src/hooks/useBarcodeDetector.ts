@@ -51,6 +51,7 @@ export function useBarcodeDetector(onDetected?: (code: string, format: string) =
   });
   const [focusMode, setFocusModeState] = useState<string>('continuous');
   const [focusCapabilities, setFocusCapabilities] = useState<string[]>([]);
+  const zoomRef = useRef<number>(1);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -181,9 +182,10 @@ export function useBarcodeDetector(onDetected?: (code: string, format: string) =
     }
   }, [torchOn]);
 
-  // 3.1 Controles de Zoom de Precisão (Hardware + Assistência)
+  // 3.1 Controles de Zoom de Precisão (Hardware + Digital Óptico)
   const setZoom = useCallback(async (newZoom: number) => {
     setZoomState(newZoom);
+    zoomRef.current = newZoom;
     if (!streamRef.current) return;
     const track = streamRef.current.getVideoTracks()[0];
     if (track) {
@@ -192,7 +194,7 @@ export function useBarcodeDetector(onDetected?: (code: string, format: string) =
           advanced: [{ zoom: newZoom } as unknown as MediaTrackConstraintSet],
         });
       } catch (e) {
-        console.warn('Hardware zoom não suportado, aplicando scale visual:', e);
+        console.warn('Hardware zoom não suportado, aplicando recorte digital óptico:', e);
       }
     }
   }, []);
@@ -287,15 +289,21 @@ export function useBarcodeDetector(onDetected?: (code: string, format: string) =
     const currentAngle = rotations[rotationIndexRef.current % rotations.length];
     rotationIndexRef.current = (rotationIndexRef.current + 1) % rotations.length;
 
-    ctx.save();
-    ctx.clearRect(0, 0, targetW, targetH);
+    // Aplicar zoom digital óptico no frame decodificado (centralizar e ampliar região de interesse)
+    const currentZoom = Math.max(1, zoomRef.current || 1);
+    const vw = video.videoWidth || targetW;
+    const vh = video.videoHeight || targetH;
+    const cropW = vw / currentZoom;
+    const cropH = vh / currentZoom;
+    const cropX = (vw - cropW) / 2;
+    const cropY = (vh - cropH) / 2;
 
     if (currentAngle !== 0) {
       ctx.translate(targetW / 2, targetH / 2);
       ctx.rotate((currentAngle * Math.PI) / 180);
-      ctx.drawImage(video, -targetW / 2, -targetH / 2, targetW, targetH);
+      ctx.drawImage(video, cropX, cropY, cropW, cropH, -targetW / 2, -targetH / 2, targetW, targetH);
     } else {
-      ctx.drawImage(video, 0, 0, targetW, targetH);
+      ctx.drawImage(video, cropX, cropY, cropW, cropH, 0, 0, targetW, targetH);
     }
     ctx.restore();
 
@@ -410,13 +418,13 @@ export function useBarcodeDetector(onDetected?: (code: string, format: string) =
       }
 
       try {
-        // Solicita câmera traseira (environment) em alta resolução
+        // Solicita câmera traseira (environment) em resolução Full HD para leitura veloz em gôndolas
         const stream = await navigator.mediaDevices.getUserMedia({
           video: {
             facingMode: { ideal: 'environment' },
-            width: { ideal: 1280, min: 640 },
-            height: { ideal: 720, min: 480 },
-            frameRate: { ideal: 30 },
+            width: { ideal: 1920, min: 1280 },
+            height: { ideal: 1080, min: 720 },
+            frameRate: { ideal: 30, max: 60 },
           },
           audio: false,
         });

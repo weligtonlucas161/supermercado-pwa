@@ -10,7 +10,10 @@ import {
   Flashlight, 
   RefreshCw, 
   Zap,
-  Cpu
+  Cpu,
+  ZoomIn,
+  Target,
+  Sliders
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { triggerScanBeep } from '../../utils/haptics';
@@ -21,10 +24,11 @@ export const BarcodeModal: React.FC = () => {
   const [manualCode, setManualCode] = useState('');
   const [matchedProduct, setMatchedProduct] = useState<(typeof products)[0] | null>(null);
   const [scanNotice, setScanNotice] = useState<string | null>(null);
+  const [tapFocusPulse, setTapFocusPulse] = useState<{ x: number; y: number } | null>(null);
 
   const videoElementRef = useRef<HTMLVideoElement | null>(null);
 
-  // Hook nativo da Barcode Detector API (Google Play Services / Chromium)
+  // Hook nativo da Barcode Detector API (Google Play Services / Chromium) + ZXing tryHarder + Zoom & Focus
   const {
     isSupported: isBarcodeDetectorSupported,
     isScanning,
@@ -35,6 +39,12 @@ export const BarcodeModal: React.FC = () => {
     startScanning,
     stopScanning,
     lastScannedCode,
+    zoom,
+    setZoom,
+    zoomCapabilities,
+    focusMode,
+    setFocusMode,
+    triggerAutoFocus,
   } = useBarcodeDetector((code, format) => {
     handleBarcodeRead(code, format);
   });
@@ -44,6 +54,17 @@ export const BarcodeModal: React.FC = () => {
     const found = products.find(p => p.ean.includes(code.trim()) || code.trim().includes(p.ean));
     setMatchedProduct(found || null);
     setScanNotice(`Código ${code} detectado (${format || 'EAN-13'})!`);
+  };
+
+  const handleCameraTapToFocus = (e: React.MouseEvent<HTMLDivElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    setTapFocusPulse({ x, y });
+    triggerAutoFocus();
+    setTimeout(() => {
+      setTapFocusPulse(null);
+    }, 800);
   };
 
   // Iniciar ou parar a câmera ao abrir/fechar modal
@@ -91,8 +112,8 @@ export const BarcodeModal: React.FC = () => {
   if (!isScannerOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-xs p-3 sm:p-4 animate-in fade-in duration-200">
-      <div className="w-full max-w-md bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl shadow-2xl overflow-hidden flex flex-col max-h-[92vh]">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-xs p-3 sm:p-4 animate-in fade-in duration-200">
+      <div className="w-full max-w-lg sm:max-w-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl shadow-2xl overflow-hidden flex flex-col max-h-[92vh]">
         
         {/* Header */}
         <div className="px-5 py-3.5 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
@@ -105,10 +126,10 @@ export const BarcodeModal: React.FC = () => {
                 <h3 className="font-bold text-sm text-slate-800 dark:text-white">Leitor de Código de Barras</h3>
                 <span className="text-[10px] font-bold px-1.5 py-0.5 rounded flex items-center gap-1 bg-emerald-500/15 text-emerald-600 dark:text-emerald-400">
                   <Cpu className="w-3 h-3" />
-                  Captura Agressiva (tryHarder)
+                  Full HD • Zoom {zoom.toFixed(1)}x
                 </span>
               </div>
-              <p className="text-[11px] text-slate-400">Varredura contínua com binarização óptica e trava anti-corte</p>
+              <p className="text-[11px] text-slate-400">Área ampliada com foco contínuo e zoom digital otimizado para estoque</p>
             </div>
           </div>
           <button
@@ -122,86 +143,161 @@ export const BarcodeModal: React.FC = () => {
           </button>
         </div>
 
-        {/* Viewport da Câmera com Barcode Detector API */}
-        <div className="relative bg-slate-950 min-h-[220px] h-60 flex items-center justify-center overflow-hidden">
-          {/* Elemento de Vídeo Real da Câmera */}
+        {/* Viewport da Câmera com Área Ampliada */}
+        <div 
+          onClick={handleCameraTapToFocus}
+          className="relative bg-slate-950 min-h-[300px] h-72 sm:h-96 md:h-[400px] flex items-center justify-center overflow-hidden cursor-crosshair select-none"
+          title="Toque na tela para refocar"
+        >
+          {/* Elemento de Vídeo Real da Câmera com Zoom Óptico/Digital */}
           <video
             ref={videoElementRef}
-            className={`w-full h-full object-cover transition-opacity duration-300 ${
+            className={`w-full h-full object-cover transition-all duration-150 ${
               isScanning ? 'opacity-100' : 'opacity-0 absolute'
             }`}
+            style={{
+              transform: zoom > 1 ? `scale(${zoom})` : undefined,
+              transformOrigin: 'center center',
+            }}
             autoPlay
             playsInline
             muted
           />
 
+          {/* Animação de Tap-to-Focus */}
+          {tapFocusPulse && (
+            <div
+              style={{ left: tapFocusPulse.x, top: tapFocusPulse.y }}
+              className="absolute -translate-x-1/2 -translate-y-1/2 pointer-events-none z-30"
+            >
+              <span className="w-12 h-12 rounded-full border-2 border-emerald-400 block animate-ping opacity-80" />
+              <span className="w-8 h-8 rounded-full border border-white absolute inset-0 m-auto" />
+            </div>
+          )}
+
           {/* Placeholder / Botão Iniciar se a câmera não tiver sido ativada */}
           {!isScanning && (
             <div className="text-center p-4">
-              <div className="w-12 h-12 mx-auto rounded-2xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-emerald-400 mb-2">
-                <Camera className="w-6 h-6" />
+              <div className="w-14 h-14 mx-auto rounded-2xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-emerald-400 mb-2">
+                <Camera className="w-7 h-7" />
               </div>
-              <p className="text-xs text-slate-200 font-semibold">Câmera em Standby</p>
-              <p className="text-[11px] text-slate-400 max-w-xs mt-0.5 mb-3">
+              <p className="text-sm text-slate-200 font-semibold">Câmera em Standby</p>
+              <p className="text-xs text-slate-400 max-w-xs mt-0.5 mb-3">
                 Aponte para o código de barras impresso na embalagem ou gôndola.
               </p>
               <button
                 onClick={() => videoElementRef.current && startScanning(videoElementRef.current)}
-                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-md transition"
+                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-md transition cursor-pointer"
               >
                 <Camera className="w-3.5 h-3.5" /> Ativar Leitor Óptico
               </button>
             </div>
           )}
 
-          {/* Mira Laser & Retículo */}
+          {/* Mira Laser & Retículo Expandido */}
           {isScanning && (
             <>
-              {/* Moldura de Foco */}
-              <div className="absolute inset-8 pointer-events-none border-2 border-emerald-400/60 rounded-2xl shadow-[0_0_20px_rgba(16,185,129,0.3)]">
+              {/* Moldura de Foco Ampliada */}
+              <div className="absolute w-72 sm:w-96 h-36 sm:h-48 pointer-events-none border-2 border-emerald-400/70 rounded-2xl shadow-[0_0_25px_rgba(16,185,129,0.35)] bg-emerald-500/5 backdrop-blur-[0.5px]">
                 {/* Cantos destacados */}
-                <div className="absolute -top-1 -left-1 w-4 h-4 border-t-3 border-l-3 border-emerald-400"></div>
-                <div className="absolute -top-1 -right-1 w-4 h-4 border-t-3 border-r-3 border-emerald-400"></div>
-                <div className="absolute -bottom-1 -left-1 w-4 h-4 border-b-3 border-l-3 border-emerald-400"></div>
-                <div className="absolute -bottom-1 -right-1 w-4 h-4 border-b-3 border-r-3 border-emerald-400"></div>
+                <div className="absolute -top-1 -left-1 w-5 h-5 border-t-3 border-l-3 border-emerald-300"></div>
+                <div className="absolute -top-1 -right-1 w-5 h-5 border-t-3 border-r-3 border-emerald-300"></div>
+                <div className="absolute -bottom-1 -left-1 w-5 h-5 border-b-3 border-l-3 border-emerald-300"></div>
+                <div className="absolute -bottom-1 -right-1 w-5 h-5 border-b-3 border-r-3 border-emerald-300"></div>
               </div>
 
               {/* Linha Laser Animada */}
-              <div className="absolute inset-x-10 top-1/2 -translate-y-1/2 h-0.5 bg-rose-500 shadow-[0_0_15px_#ef4444] animate-pulse"></div>
+              <div className="absolute inset-x-12 top-1/2 -translate-y-1/2 h-0.5 bg-rose-500 shadow-[0_0_15px_#ef4444] animate-pulse"></div>
 
-              {/* Controles Flutuantes da Câmera (Lanterna / Restart) */}
-              <div className="absolute bottom-3 inset-x-4 flex justify-between items-center z-10">
-                <span className="text-[10px] font-semibold bg-black/60 text-emerald-300 px-2.5 py-1 rounded-lg backdrop-blur-xs flex items-center gap-1">
-                  <Zap className="w-3 h-3 text-emerald-400 animate-pulse" /> Scanner Ativo
+              {/* Dica de Toque Superior */}
+              <div className="absolute top-3 inset-x-4 flex justify-between items-center z-10 pointer-events-none">
+                <span className="text-[10px] font-semibold bg-black/70 text-emerald-300 px-2.5 py-1 rounded-lg backdrop-blur-md flex items-center gap-1 border border-white/10">
+                  <Zap className="w-3 h-3 text-emerald-400 animate-pulse" /> Scanner Ativo • {zoom.toFixed(1)}x
                 </span>
-
-                <div className="flex gap-2">
-                  {torchAvailable && (
-                    <button
-                      onClick={toggleTorch}
-                      className={`p-2 rounded-xl text-xs font-bold transition flex items-center gap-1 backdrop-blur-xs shadow-md ${
-                        torchOn ? 'bg-amber-500 text-white' : 'bg-black/60 text-slate-200 hover:bg-black/80'
-                      }`}
-                      title="Ligar/Desligar Lanterna"
-                    >
-                      <Flashlight className="w-3.5 h-3.5" />
-                    </button>
-                  )}
-                  <button
-                    onClick={() => {
-                      stopScanning();
-                      if (videoElementRef.current) startScanning(videoElementRef.current);
-                    }}
-                    className="p-2 rounded-xl bg-black/60 hover:bg-black/80 text-white text-xs font-medium backdrop-blur-xs"
-                    title="Reiniciar Câmera"
-                  >
-                    <RefreshCw className="w-3.5 h-3.5" />
-                  </button>
-                </div>
+                <span className="text-[10px] bg-black/70 text-slate-300 px-2 py-0.5 rounded-md backdrop-blur-md border border-white/10">
+                  👆 Toque para focar
+                </span>
               </div>
             </>
           )}
         </div>
+
+        {/* Barra de Controle de Zoom e Foco Rápido */}
+        {isScanning && (
+          <div className="p-2.5 bg-slate-900 border-b border-slate-800 text-white flex flex-wrap items-center justify-between gap-2 text-xs">
+            {/* Atalhos Rápidos de Zoom */}
+            <div className="flex items-center gap-1.5">
+              <span className="text-[10px] font-bold text-slate-400 flex items-center gap-1">
+                <ZoomIn className="w-3 h-3 text-emerald-400" /> Zoom:
+              </span>
+              {[1, 1.5, 2, 2.5, 3].map((lvl) => (
+                <button
+                  key={lvl}
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setZoom(lvl);
+                  }}
+                  className={`px-2 py-0.5 rounded-lg text-[10px] font-bold transition cursor-pointer ${
+                    Math.abs(zoom - lvl) < 0.15
+                      ? 'bg-emerald-500 text-white'
+                      : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+                  }`}
+                >
+                  {lvl}x
+                </button>
+              ))}
+            </div>
+
+            {/* Ações de Foco e Lanterna */}
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  triggerAutoFocus();
+                }}
+                className="px-2 py-1 rounded-lg bg-slate-800 hover:bg-slate-750 text-slate-200 text-[11px] font-medium flex items-center gap-1 border border-slate-700 cursor-pointer"
+                title="Refocar câmera"
+              >
+                <Target className="w-3 h-3 text-emerald-400" />
+                <span>Focar</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setFocusMode(focusMode === 'macro' ? 'continuous' : 'macro');
+                }}
+                className={`px-2 py-1 rounded-lg text-[11px] font-medium flex items-center gap-1 border cursor-pointer ${
+                  focusMode === 'macro'
+                    ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+                    : 'bg-slate-800 text-slate-300 border-slate-700'
+                }`}
+                title="Alternar modo Macro (para códigos muito próximos)"
+              >
+                <Sliders className="w-3 h-3 text-amber-400" />
+                <span>{focusMode === 'macro' ? 'Macro' : 'Auto'}</span>
+              </button>
+
+              {torchAvailable && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    toggleTorch();
+                  }}
+                  className={`p-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1 cursor-pointer ${
+                    torchOn ? 'bg-amber-500 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700'
+                  }`}
+                  title="Lanterna"
+                >
+                  <Flashlight className="w-3 h-3" />
+                </button>
+              )}
+            </div>
+          </div>
+        )}
 
         {/* Notificações / Erros da Câmera */}
         {cameraError && (

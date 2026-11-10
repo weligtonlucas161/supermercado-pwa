@@ -216,17 +216,58 @@ export const AuditoriaTab: React.FC = () => {
     }
   }, [operator.loja_id, operator.name, triggerBorderFlash]);
 
-  // Assinatura em Tempo Real (Supabase Realtime Channel)
+  // Assinatura em Tempo Real (Supabase Realtime Channel com push instantâneo)
   useEffect(() => {
     const lojaId = operator.loja_id || 'loja_padrao_001';
     refreshRemoteSessions();
 
-    const unsubscribe = subscribeToAuditRealtime(lojaId, () => {
-      refreshRemoteSessions();
-      if (currentSessionIdRef.current) {
-        syncSessionBips(currentSessionIdRef.current);
+    const unsubscribe = subscribeToAuditRealtime(
+      lojaId,
+      () => {
+        refreshRemoteSessions();
+        if (currentSessionIdRef.current) {
+          syncSessionBips(currentSessionIdRef.current);
+        }
+      },
+      (newBip) => {
+        if (!currentSessionIdRef.current || newBip.sessao_id !== currentSessionIdRef.current) return;
+        
+        const cleanEan = (newBip.codigo_barras || '').replace(/[^0-9A-Za-z]/g, '').trim();
+        const alreadyInConfirmados = confirmadosRef.current.some(
+          c => c.ean.replace(/[^0-9A-Za-z]/g, '').trim() === cleanEan
+        );
+        if (alreadyInConfirmados) return;
+
+        const isOther = (newBip.operador_nome || '').toLowerCase() !== (operator.name || 'Operador').toLowerCase();
+        const newConfirmedItem: ConfirmedProductItem = {
+          id: newBip.produto_id || cleanEan,
+          name: newBip.produto_nome,
+          ean: newBip.codigo_barras,
+          scannedAt: new Date(newBip.timestamp).toLocaleTimeString('pt-BR'),
+          scannedBy: newBip.operador_nome,
+        };
+
+        const updatedConfirmados = [newConfirmedItem, ...confirmadosRef.current];
+        const updatedPendentes = pendentesRef.current.filter(p => {
+          const cleanP = (p.ean || '').replace(/[^0-9A-Za-z]/g, '').trim();
+          return cleanP !== cleanEan;
+        });
+
+        confirmadosRef.current = updatedConfirmados;
+        pendentesRef.current = updatedPendentes;
+        setConfirmados(updatedConfirmados);
+        setPendentes(updatedPendentes);
+
+        if (isOther) {
+          triggerBorderFlash('orange');
+          setLastBipFeedback({
+            type: 'warning',
+            message: `✓ Em Tempo Real: "${newBip.produto_nome}" acabou de ser bipado por ${newBip.operador_nome}!`,
+            ean: newBip.codigo_barras,
+          });
+        }
       }
-    });
+    );
 
     // Polling de contingência a cada 3.5 segundos caso realtime webhooks oscilem
     const interval = setInterval(() => {
@@ -240,7 +281,7 @@ export const AuditoriaTab: React.FC = () => {
       unsubscribe();
       clearInterval(interval);
     };
-  }, [operator.loja_id, refreshRemoteSessions, syncSessionBips]);
+  }, [operator.loja_id, operator.name, refreshRemoteSessions, syncSessionBips, triggerBorderFlash]);
 
   // =========================================================================
   // PROCESSAMENTO CONTÍNUO DE CÓDIGO DE BARRAS (SEM FECHAR CÂMERA)
@@ -1094,6 +1135,20 @@ export const AuditoriaTab: React.FC = () => {
                   </div>
                 </div>
 
+                {/* ATIVIDADE EM TEMPO REAL DA EQUIPE NO SETOR */}
+                {confirmados.length > 0 && (
+                  <div className="p-2.5 rounded-2xl bg-emerald-500/10 dark:bg-emerald-950/30 border border-emerald-500/30 flex items-center justify-between text-xs animate-in fade-in">
+                    <div className="flex items-center gap-2 truncate">
+                      <Radio className="w-4 h-4 text-emerald-500 animate-pulse shrink-0" />
+                      <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400 shrink-0">Última bipagem na equipe:</span>
+                      <span className="font-bold text-slate-900 dark:text-white truncate">"{confirmados[0].name}"</span>
+                    </div>
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30 shrink-0">
+                      {confirmados[0].scannedBy || 'Operador'} às {confirmados[0].scannedAt}
+                    </span>
+                  </div>
+                )}
+
                 {/* PAINEL DE LEITURA CONTÍNUA COM GOOGLE SERVICE (BARCODE DETECTOR API) */}
                 <div className="p-4 sm:p-5 rounded-2xl bg-gradient-to-br from-emerald-500/10 via-teal-500/5 to-slate-900/10 border border-emerald-500/30 space-y-3.5">
                   <div className="flex items-center justify-between flex-wrap gap-2">
@@ -1472,32 +1527,45 @@ export const AuditoriaTab: React.FC = () => {
                         Nenhum produto auditado ainda. Use a câmera ou digite o EAN acima para conferir os itens.
                       </div>
                     ) : (
-                      confirmados.map(item => (
-                        <div
-                          key={item.id}
-                          className="p-3 rounded-2xl border border-emerald-500/30 bg-emerald-500/5 dark:bg-emerald-950/20 flex items-center justify-between gap-3 text-xs"
-                        >
-                          <div className="space-y-0.5">
-                            <h5 className="font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
-                              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" />
-                              <span>{item.name}</span>
-                            </h5>
-                            <div className="flex items-center gap-2 text-[11px] text-slate-400 font-mono">
-                              <span>EAN: {item.ean}</span>
-                              {item.reducedCode && <span>• Red: {item.reducedCode}</span>}
+                      confirmados.map(item => {
+                        const isSelf = !item.scannedBy || item.scannedBy.toLowerCase() === (operator.name || 'Operador').toLowerCase();
+                        return (
+                          <div
+                            key={item.id}
+                            className={`p-3 rounded-2xl border flex items-center justify-between gap-3 text-xs transition-all ${
+                              isSelf 
+                                ? 'border-emerald-500/30 bg-emerald-500/5 dark:bg-emerald-950/20' 
+                                : 'border-amber-500/40 bg-amber-500/10 dark:bg-amber-950/25 shadow-xs'
+                            }`}
+                          >
+                            <div className="space-y-0.5">
+                              <h5 className="font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
+                                <CheckCircle2 className={`w-3.5 h-3.5 ${isSelf ? 'text-emerald-500' : 'text-amber-500'}`} />
+                                <span>{item.name}</span>
+                              </h5>
+                              <div className="flex items-center gap-2 text-[11px] text-slate-400 font-mono">
+                                <span>EAN: {item.ean}</span>
+                                {item.reducedCode && <span>• Red: {item.reducedCode}</span>}
+                              </div>
+                            </div>
+
+                            <div className="text-right shrink-0 space-y-1">
+                              {isSelf ? (
+                                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30 inline-flex items-center gap-1">
+                                  <Check className="w-3 h-3 text-emerald-500" /> Você • {item.scannedAt}
+                                </span>
+                              ) : (
+                                <span className="text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-amber-500/20 text-amber-800 dark:text-amber-200 border border-amber-500/40 inline-flex items-center gap-1">
+                                  <Users className="w-3 h-3 text-amber-500" /> Bipado por: <strong>{item.scannedBy}</strong> • {item.scannedAt}
+                                </span>
+                              )}
+                              <span className="text-[10px] text-slate-400 block font-mono">
+                                Realtime Supabase
+                              </span>
                             </div>
                           </div>
-
-                          <div className="text-right shrink-0">
-                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30 block">
-                              Auditado via Google Service
-                            </span>
-                            <span className="text-[10px] text-slate-400 mt-0.5 block">
-                              {item.scannedAt}
-                            </span>
-                          </div>
-                        </div>
-                      ))
+                        );
+                      })
                     )}
                   </div>
                 )}
