@@ -11,7 +11,8 @@ import {
   ShieldCheck, 
   Trash2,
   X,
-  AlertCircle
+  AlertCircle,
+  RefreshCw
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { Product } from '../../types';
@@ -282,7 +283,17 @@ const ProductCard: React.FC<ProductCardProps> = ({
 };
 
 export const EstoqueTab: React.FC = () => {
-  const { products, updateProductStock, removeProduct, darkMode, openScanner, operator } = useApp();
+  const { 
+    products, 
+    updateProductStock, 
+    removeProduct, 
+    darkMode, 
+    openScanner, 
+    operator,
+    refreshProductsFromDatabase,
+    isSyncingWithDatabase,
+    lastDatabaseSyncTime 
+  } = useApp();
   const [subTab, setSubTab] = useState<'estoque' | 'zero_knowledge'>('estoque');
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('all');
@@ -321,17 +332,33 @@ export const EstoqueTab: React.FC = () => {
       {/* Header */}
       <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-3">
         <div>
-          <h2 className="text-xl font-black text-slate-900 dark:text-white tracking-tight">
-            Consulta de Estoque
-          </h2>
+          <div className="flex items-center gap-2">
+            <h2 className="text-xl font-black text-slate-900 dark:text-white tracking-tight">
+              Consulta de Estoque
+            </h2>
+            {lastDatabaseSyncTime && (
+              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20" title={`Sincronizado com Supabase às ${lastDatabaseSyncTime}`}>
+                🟢 Nuvem {lastDatabaseSyncTime}
+              </span>
+            )}
+          </div>
           <p className="text-xs text-slate-500 dark:text-slate-400">
-            Localização em gôndola, saldos e consulta de código EAN-13.
+            Localização em gôndola, saldos e consulta de código EAN-13 (Multissessão Realtime).
           </p>
         </div>
         <div className="flex items-center gap-2">
           <button
+            onClick={() => refreshProductsFromDatabase()}
+            disabled={isSyncingWithDatabase}
+            className="border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-750 text-slate-700 dark:text-slate-200 px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition shadow-xs cursor-pointer"
+            title="Atualizar produtos do banco de dados na nuvem"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 text-emerald-500 ${isSyncingWithDatabase ? 'animate-spin' : ''}`} />
+            <span className="hidden sm:inline">{isSyncingWithDatabase ? 'Sincronizando...' : 'Sincronizar'}</span>
+          </button>
+          <button
             onClick={() => setIsSpreadsheetModalOpen(true)}
-            className="border border-emerald-500/40 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-700 dark:text-emerald-400 px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition"
+            className="border border-emerald-500/40 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-700 dark:text-emerald-400 px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition cursor-pointer"
             title="Importar planilha Excel ou CSV"
           >
             <FileSpreadsheet className="w-4 h-4" />
@@ -339,7 +366,7 @@ export const EstoqueTab: React.FC = () => {
           </button>
           <button
             onClick={() => setIsModalOpen(true)}
-            className="bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-md shadow-emerald-600/20 transition"
+            className="bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-md shadow-emerald-600/20 transition cursor-pointer"
           >
             <Plus className="w-4 h-4" />
             <span>Cadastrar Produto</span>

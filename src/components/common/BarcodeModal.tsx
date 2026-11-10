@@ -103,16 +103,12 @@ export const BarcodeModal: React.FC = () => {
             <div>
               <div className="flex items-center gap-2">
                 <h3 className="font-bold text-sm text-slate-800 dark:text-white">Leitor de Código de Barras</h3>
-                <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded flex items-center gap-1 ${
-                  isBarcodeDetectorSupported 
-                    ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400' 
-                    : 'bg-blue-500/15 text-blue-600 dark:text-blue-400'
-                }`}>
+                <span className="text-[10px] font-bold px-1.5 py-0.5 rounded flex items-center gap-1 bg-emerald-500/15 text-emerald-600 dark:text-emerald-400">
                   <Cpu className="w-3 h-3" />
-                  {isBarcodeDetectorSupported ? 'Google Barcode API' : 'Scanner Web'}
+                  Captura Agressiva (tryHarder)
                 </span>
               </div>
-              <p className="text-[11px] text-slate-400">Leitura contínua com mira laser e detecção óptica</p>
+              <p className="text-[11px] text-slate-400">Varredura contínua com binarização óptica e trava anti-corte</p>
             </div>
           </div>
           <button

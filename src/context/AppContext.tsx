@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { 
   Product, 
   ValidityItem, 
@@ -22,7 +22,14 @@ import {
 import { useOnlineStatus } from '../pwa/useOnlineStatus';
 import { useBackgroundSync } from '../pwa/useBackgroundSync';
 import { triggerScanBeep } from '../utils/haptics';
-import { loginUser, isSupabaseConfigured, syncOfflineQueueToSupabase, supabase } from '../services/supabaseService';
+import { 
+  loginUser, 
+  isSupabaseConfigured, 
+  syncOfflineQueueToSupabase, 
+  supabase,
+  fetchProductsFromSupabase,
+  subscribeToProductsRealtime
+} from '../services/supabaseService';
 
 interface AppContextType {
   // Navigation & UI
@@ -74,6 +81,11 @@ interface AppContextType {
   openScanner: (callback?: (barcode: string) => void) => void;
   closeScanner: () => void;
   scannerCallback: ((barcode: string) => void) | null;
+
+  // Supabase Cloud Multi-Session Sync
+  isSyncingWithDatabase: boolean;
+  lastDatabaseSyncTime: string | null;
+  refreshProductsFromDatabase: () => Promise<void>;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -158,6 +170,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         loja_id: result.user!.loja_id || prev.loja_id,
       }));
       triggerScanBeep(true);
+      setTimeout(() => {
+        refreshProductsFromDatabase();
+      }, 100);
       return { success: true };
     }
     return { success: false, message: result.message || 'Falha na autenticação' };
@@ -212,6 +227,40 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   useEffect(() => {
     saveStoredData(STORAGE_KEYS.NOTIFICATIONS, notifications);
   }, [notifications]);
+
+  // Supabase Cloud Multi-Session Sync
+  const [isSyncingWithDatabase, setIsSyncingWithDatabase] = useState(false);
+  const [lastDatabaseSyncTime, setLastDatabaseSyncTime] = useState<string | null>(null);
+
+  const refreshProductsFromDatabase = useCallback(async () => {
+    if (!isSupabaseConfigured()) return;
+    setIsSyncingWithDatabase(true);
+    try {
+      const lojaId = operator.loja_id || currentUser?.loja_id;
+      const dbProducts = await fetchProductsFromSupabase(lojaId);
+      if (dbProducts && dbProducts.length > 0) {
+        setProducts(dbProducts);
+        saveStoredData(STORAGE_KEYS.PRODUCTS, dbProducts);
+        const now = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        setLastDatabaseSyncTime(now);
+      }
+    } catch (err) {
+      console.warn('Erro ao sincronizar produtos da nuvem:', err);
+    } finally {
+      setIsSyncingWithDatabase(false);
+    }
+  }, [operator.loja_id, currentUser?.loja_id]);
+
+  // Sincronização automática no mount e via Realtime do Supabase para todas as sessões
+  useEffect(() => {
+    refreshProductsFromDatabase();
+    const unsubscribe = subscribeToProductsRealtime(() => {
+      refreshProductsFromDatabase();
+    });
+    return () => {
+      unsubscribe();
+    };
+  }, [refreshProductsFromDatabase]);
 
   // Scanner state
   const [isScannerOpen, setIsScannerOpen] = useState(false);
@@ -430,6 +479,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         openScanner,
         closeScanner,
         scannerCallback,
+        isSyncingWithDatabase,
+        lastDatabaseSyncTime,
+        refreshProductsFromDatabase,
       }}
     >
       {children}

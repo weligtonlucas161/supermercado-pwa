@@ -1,5 +1,6 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { Product, ValidityItem, AuditItem, SpreadsheetProductItem, LoginResult, AuthUser, OfflineAction } from '../types';
+import { decryptSingleField, isEncrypted } from '../utils/encryptionUtils';
 
 export const SUPABASE_STORAGE_KEYS = {
   URL: 'superpwa_supabase_url',
@@ -454,43 +455,131 @@ export async function uploadEncryptedProductsRealtime(
 
 /**
  * Consulta de produtos no banco Synk com conversão para o modelo do aplicativo
+ * e suporte completo a múltiplas sessões (Session A -> Session B).
+ * Se os dados estiverem criptografados no banco (Zero-Knowledge AES),
+ * descriptografa temporariamente em RAM para exibição correta em todas as sessões.
  */
-export async function fetchProductsFromSupabase(lojaId = 'loja_padrao_001'): Promise<Product[]> {
+export async function fetchProductsFromSupabase(lojaId?: string): Promise<Product[]> {
   if (!client) return [];
 
   try {
-    const { data, error } = await client
-      .from('produtos')
-      .select('*')
-      .eq('loja_id', lojaId)
-      .order('criado_em', { ascending: false });
+    let data: Record<string, unknown>[] | null = null;
 
-    if (error || !data) return [];
+    // 1. Tenta buscar pela loja específica se informada
+    if (lojaId && lojaId !== 'loja_padrao_001') {
+      const res = await client
+        .from('produtos')
+        .select('*')
+        .or(`loja_id.eq.${lojaId},loja_id.eq.loja_padrao_001,loja_id.is.null`)
+        .order('criado_em', { ascending: false });
+      if (res.data && res.data.length > 0) {
+        data = res.data;
+      }
+    }
 
-    return data.map((row: Record<string, unknown>) => ({
-      id: String(row.id || ''),
-      ean: String(row.codigo_barras || ''),
-      name: String(row.nome || ''),
-      supplierCode: String(row.codigo_fornecedor || ''),
-      reducedCode: String(row.plu || ''),
-      category: String(row.setor || 'MERCEARIA'),
-      stock: Number(row.quantidade) || 0,
-      minStock: 10,
-      price: 0,
-      location: `Gôndola - ${row.setor || 'Estoque'}`,
-      loja_id: String(row.loja_id || lojaId),
-      data_vencimento: String(row.data_vencimento || ''),
-      isEncryptedInStorage: Boolean(row.is_encrypted),
-      encryptedPayload: row.ciphertext
-        ? {
-            ciphertext: String(row.ciphertext),
-            iv: String(row.iv || ''),
-          }
-        : undefined,
-    }));
+    // 2. Fallback: se não passou loja ou não retornou nada, busca todos os produtos disponíveis
+    if (!data || data.length === 0) {
+      const globalRes = await client
+        .from('produtos')
+        .select('*')
+        .order('criado_em', { ascending: false });
+
+      if (globalRes.data && globalRes.data.length > 0) {
+        data = globalRes.data;
+      }
+    }
+
+    // 3. Fallback adicional em 'produtos_catalogo_universal' se a tabela 'produtos' estiver vazia
+    if (!data || data.length === 0) {
+      const catRes = await client
+        .from('produtos_catalogo_universal')
+        .select('*')
+        .limit(100);
+
+      if (catRes.data && catRes.data.length > 0) {
+        return catRes.data.map((row: Record<string, unknown>, idx: number) => {
+          const rawNome = String(row.nome || '');
+          const rawEan = String(row.codigo_barras || '');
+          return {
+            id: `cat-${idx}-${rawEan}`,
+            ean: decryptSingleField(rawEan),
+            name: decryptSingleField(rawNome) || 'Produto Universal',
+            category: 'MERCEARIA',
+            stock: 0,
+            minStock: 10,
+            price: 0,
+            location: 'Gôndola - Catálogo',
+            loja_id: lojaId || 'loja_padrao_001',
+            isEncryptedInStorage: isEncrypted(rawNome),
+          };
+        });
+      }
+      return [];
+    }
+
+    // 4. Mapeamento com descriptografia pontual na RAM para dados AES-256
+    return data.map((row: Record<string, unknown>) => {
+      const rawNome = String(row.nome || '');
+      const rawEan = String(row.codigo_barras || '');
+      const rawPlu = String(row.plu || '');
+      const rawForn = String(row.codigo_fornecedor || '');
+
+      const isEnc = Boolean(row.is_encrypted || isEncrypted(rawNome) || isEncrypted(rawEan));
+
+      return {
+        id: String(row.id || `prod-${Math.random().toString(36).substring(2, 9)}`),
+        ean: decryptSingleField(rawEan),
+        name: decryptSingleField(rawNome) || 'Produto Cadastrado',
+        supplierCode: decryptSingleField(rawForn),
+        reducedCode: decryptSingleField(rawPlu),
+        category: String(row.setor || 'MERCEARIA'),
+        stock: Math.max(0, Number(row.quantidade ?? 0)),
+        minStock: 10,
+        price: 0,
+        location: `Gôndola - ${row.setor || 'Estoque'}`,
+        loja_id: String(row.loja_id || lojaId || 'loja_padrao_001'),
+        data_vencimento: String(row.data_vencimento || ''),
+        isEncryptedInStorage: isEnc,
+        encryptedPayload: row.ciphertext
+          ? {
+              ciphertext: String(row.ciphertext),
+              iv: String(row.iv || ''),
+            }
+          : undefined,
+        lastUpdated: new Date().toISOString(),
+      };
+    });
   } catch (err) {
     console.warn('Erro ao consultar produtos no Supabase:', err);
     return [];
+  }
+}
+
+/**
+ * Inscreve no canal Realtime do Supabase para atualizar todas as sessões conectadas
+ * assim que um produto for criado, alterado ou excluído.
+ */
+export function subscribeToProductsRealtime(onChanged: () => void): () => void {
+  if (!client) return () => {};
+
+  try {
+    const channel = client
+      .channel('realtime_produtos_sync')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'produtos' },
+        () => {
+          onChanged();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      client?.removeChannel(channel);
+    };
+  } catch (err) {
+    console.warn('Aviso ao registrar canal realtime de produtos:', err);
+    return () => {};
   }
 }
 

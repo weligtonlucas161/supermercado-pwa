@@ -47,7 +47,7 @@ interface ColumnOption {
 }
 
 export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ isOpen, onClose }) => {
-  const { addProduct, operator } = useApp();
+  const { addProduct, operator, refreshProductsFromDatabase } = useApp();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   // Estados de Conexão com Supabase
@@ -432,6 +432,7 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
         setUploadSuccess(true);
         setDbSaveStatus('SAVED_TO_SUPABASE');
         triggerScanBeep(true);
+        refreshProductsFromDatabase();
       } else if (res.isLocalOnly) {
         setUploadSuccess(false);
         setDbSaveStatus('LOCAL_ONLY');

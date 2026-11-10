@@ -1,4 +1,15 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { 
+  MultiFormatReader, 
+  BarcodeFormat, 
+  DecodeHintType, 
+  RGBLuminanceSource, 
+  HybridBinarizer, 
+  BinaryBitmap,
+  NotFoundException,
+  ChecksumException,
+  FormatException
+} from '@zxing/library';
 import { triggerScanBeep } from '../utils/haptics';
 
 interface DetectedBarcode {
@@ -6,7 +17,7 @@ interface DetectedBarcode {
   format: string;
 }
 
-// Extensão de tipos para BarcodeDetector API (W3C Community Group / Google Play Services)
+// Extensão de tipos para BarcodeDetector nativo (Google Play Services / W3C Community)
 interface NativeBarcodeDetector {
   detect(image: ImageBitmapSource): Promise<DetectedBarcode[]>;
   getSupportedFormats?(): Promise<string[]>;
@@ -22,7 +33,7 @@ declare global {
 }
 
 export function useBarcodeDetector(onDetected?: (code: string, format: string) => void) {
-  const [isSupported, setIsSupported] = useState<boolean>(false);
+  const [isSupported, setIsSupported] = useState<boolean>(true);
   const [isScanning, setIsScanning] = useState<boolean>(false);
   const [hasCameraPermission, setHasCameraPermission] = useState<boolean | null>(null);
   const [cameraError, setCameraError] = useState<string | null>(null);
@@ -33,33 +44,79 @@ export function useBarcodeDetector(onDetected?: (code: string, format: string) =
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const animationFrameId = useRef<number | null>(null);
-  const detectorRef = useRef<NativeBarcodeDetector | null>(null);
+  const nativeDetectorRef = useRef<NativeBarcodeDetector | null>(null);
+  const zxingReaderRef = useRef<MultiFormatReader | null>(null);
   const scanLockRef = useRef<boolean>(false);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const rotationIndexRef = useRef<number>(0);
 
-  // 1. Detectar suporte nativo à Barcode Detector API
+  // 1. Inicializar Leitores: Google BarcodeDetector API + ZXing com tryHarder: true
   useEffect(() => {
+    // 1.1 Tentativa de Leitor Nativo (Google Play Services / Chromium)
     if (typeof window !== 'undefined' && 'BarcodeDetector' in window && window.BarcodeDetector) {
       try {
-        detectorRef.current = new window.BarcodeDetector({
-          formats: ['ean_13', 'ean_8', 'code_128', 'qr_code', 'upc_a', 'upc_e'],
+        nativeDetectorRef.current = new window.BarcodeDetector({
+          formats: ['ean_13', 'ean_8', 'code_128', 'upc_a', 'upc_e', 'itf'],
         });
-        setIsSupported(true);
       } catch (e) {
-        console.warn('BarcodeDetector instantiation failed:', e);
-        setIsSupported(false);
+        console.warn('Native BarcodeDetector indisponível:', e);
       }
-    } else {
-      setIsSupported(false);
     }
+
+    // 1.2 Leitor Avançado ZXing com Captura Agressiva (tryHarder: true)
+    try {
+      const hints = new Map<DecodeHintType, unknown>();
+      const formats: BarcodeFormat[] = [
+        BarcodeFormat.EAN_13,
+        BarcodeFormat.EAN_8,
+        BarcodeFormat.CODE_128,
+        BarcodeFormat.UPC_A,
+        BarcodeFormat.UPC_E,
+        BarcodeFormat.ITF,
+        BarcodeFormat.CODE_39,
+      ];
+      hints.set(DecodeHintType.POSSIBLE_FORMATS, formats);
+      // Forçar algoritmo em modo avançado para ler códigos borrados, tortos ou distantes
+      hints.set(DecodeHintType.TRY_HARDER, true);
+
+      const reader = new MultiFormatReader();
+      reader.setHints(hints);
+      zxingReaderRef.current = reader;
+      setIsSupported(true);
+    } catch (e) {
+      console.warn('Erro ao inicializar motor ZXing:', e);
+    }
+
+    // Canvas reutilizável em memória para filtros e rotação
+    if (typeof document !== 'undefined') {
+      const canvas = document.createElement('canvas');
+      canvas.width = 640;
+      canvas.height = 480;
+      canvasRef.current = canvas;
+    }
+
+    return () => {
+      if (zxingReaderRef.current) {
+        try {
+          zxingReaderRef.current.reset();
+        } catch {
+          // ignore
+        }
+        zxingReaderRef.current = null;
+      }
+      canvasRef.current = null;
+    };
   }, []);
 
-  // 2. Parar câmera e limpar stream
+  // 2. Desligamento do Hardware e Limpeza Completa da Memória
   const stopScanning = useCallback(() => {
+    // Cancela o loop de animação
     if (animationFrameId.current) {
       cancelAnimationFrame(animationFrameId.current);
       animationFrameId.current = null;
     }
 
+    // Desliga fisicamente os trilhos de vídeo da câmera para economizar bateria
     if (streamRef.current) {
       streamRef.current.getTracks().forEach(track => {
         try {
@@ -71,10 +128,26 @@ export function useBarcodeDetector(onDetected?: (code: string, format: string) =
       streamRef.current = null;
     }
 
+    // Desconecta o stream do elemento de vídeo
     if (videoRef.current) {
-      videoRef.current.srcObject = null;
+      try {
+        videoRef.current.pause();
+        videoRef.current.srcObject = null;
+      } catch {
+        // ignore
+      }
     }
 
+    // Reseta o leitor na memória
+    if (zxingReaderRef.current) {
+      try {
+        zxingReaderRef.current.reset();
+      } catch {
+        // ignore
+      }
+    }
+
+    scanLockRef.current = false;
     setIsScanning(false);
     setTorchOn(false);
     setTorchAvailable(false);
@@ -97,48 +170,177 @@ export function useBarcodeDetector(onDetected?: (code: string, format: string) =
     }
   }, [torchOn]);
 
-  // 4. Loop contínuo de detecção de frames
+  // 4. Validação Rigorosa: Trava de Leitura por Tamanho Mínimo
+  // Descarta leituras cortadas, incompletas ou adivinhações parciais do leitor
+  const processAndValidateCode = useCallback((rawCode: string, format = 'EAN-13') => {
+    const cleanCode = rawCode.replace(/[^0-9A-Za-z]/g, '').trim();
+
+    // Regra: Bloquear leituras incompletas.
+    // Produtos comerciais padrão (EAN-13) exigem 13 dígitos.
+    // Exceções aceitas: EAN-8 (8 dígitos), UPC-A (12 dígitos), ITF-14 (14 dígitos), Boletos (44 dígitos).
+    const isExactValidLength = 
+      cleanCode.length === 13 || 
+      cleanCode.length === 8 || 
+      cleanCode.length === 12 || 
+      cleanCode.length === 14 || 
+      cleanCode.length === 44;
+
+    if (!isExactValidLength || cleanCode.length < 8) {
+      // Ignora silenciosamente e continua a amostragem contínua
+      return false;
+    }
+
+    if (scanLockRef.current) return false;
+    scanLockRef.current = true;
+    setLastScannedCode(cleanCode);
+    triggerScanBeep(true);
+
+    if (onDetected) {
+      onDetected(cleanCode, format);
+    }
+
+    // Libera a trava após 1.5s para evitar leituras repetidas em loop
+    setTimeout(() => {
+      scanLockRef.current = false;
+    }, 1500);
+
+    return true;
+  }, [onDetected]);
+
+  // 5. Motor de Decodificação Avançada (Binarização Extrema + Rotações Digitais)
+  const decodeWithFiltersAndRotation = useCallback((video: HTMLVideoElement): boolean => {
+    const reader = zxingReaderRef.current;
+    if (!reader) return false;
+
+    const canvas = canvasRef.current || document.createElement('canvas');
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    if (!ctx) return false;
+
+    const targetW = 480;
+    const targetH = Math.round((targetW * video.videoHeight) / (video.videoWidth || 1)) || 360;
+
+    if (canvas.width !== targetW || canvas.height !== targetH) {
+      canvas.width = targetW;
+      canvas.height = targetH;
+    }
+
+    // Alternar rotação digital: 0°, 90°, 180°, 270° para ler códigos tortos ou invertidos
+    const rotations = [0, 90, 180, 270];
+    const currentAngle = rotations[rotationIndexRef.current % rotations.length];
+    rotationIndexRef.current = (rotationIndexRef.current + 1) % rotations.length;
+
+    ctx.save();
+    ctx.clearRect(0, 0, targetW, targetH);
+
+    if (currentAngle !== 0) {
+      ctx.translate(targetW / 2, targetH / 2);
+      ctx.rotate((currentAngle * Math.PI) / 180);
+      ctx.drawImage(video, -targetW / 2, -targetH / 2, targetW, targetH);
+    } else {
+      ctx.drawImage(video, 0, 0, targetW, targetH);
+    }
+    ctx.restore();
+
+    // 1. Tentar ler frame original
+    try {
+      const imgData = ctx.getImageData(0, 0, targetW, targetH);
+      const luminanceSource = new RGBLuminanceSource(imgData.data, targetW, targetH);
+      const binarizer = new HybridBinarizer(luminanceSource);
+      const bitmap = new BinaryBitmap(binarizer);
+      const result = reader.decode(bitmap);
+
+      if (result && result.getText()) {
+        const fmtName = result.getBarcodeFormat ? String(result.getBarcodeFormat()) : 'EAN-13';
+        return processAndValidateCode(result.getText(), fmtName);
+      }
+    } catch (e: unknown) {
+      // Ignora silenciosamente NotFoundException, ChecksumException, FormatException
+      if (!(e instanceof NotFoundException) && !(e instanceof ChecksumException) && !(e instanceof FormatException)) {
+        // Ignora outros erros temporários de frame
+      }
+    }
+
+    // 2. Aplicar Binarização Extrema (Contraste Máximo Preto e Branco para códigos borrados)
+    try {
+      const imgData = ctx.getImageData(0, 0, targetW, targetH);
+      const d = imgData.data;
+      const len = d.length;
+
+      // Calcular limiar médio
+      let sum = 0;
+      for (let i = 0; i < len; i += 16) {
+        sum += (d[i] * 299 + d[i + 1] * 587 + d[i + 2] * 114) / 1000;
+      }
+      const threshold = (sum / (len / 16)) || 128;
+
+      for (let i = 0; i < len; i += 4) {
+        const lum = (d[i] * 299 + d[i + 1] * 587 + d[i + 2] * 114) / 1000;
+        const val = lum > threshold ? 255 : 0;
+        d[i] = val;
+        d[i + 1] = val;
+        d[i + 2] = val;
+      }
+
+      ctx.putImageData(imgData, 0, 0);
+
+      const binarizedSource = new RGBLuminanceSource(d, targetW, targetH);
+      const binarizer2 = new HybridBinarizer(binarizedSource);
+      const bitmap2 = new BinaryBitmap(binarizer2);
+      const result2 = reader.decode(bitmap2);
+
+      if (result2 && result2.getText()) {
+        const fmtName = result2.getBarcodeFormat ? String(result2.getBarcodeFormat()) : 'EAN-13';
+        return processAndValidateCode(result2.getText(), fmtName);
+      }
+    } catch {
+      // Ignora silenciosamente
+    }
+
+    return false;
+  }, [processAndValidateCode]);
+
+  // 6. Laço de Amostragem Contínua (Stream sem travamento)
   const scanFrame = useCallback(() => {
     if (!videoRef.current || !isScanning) return;
 
     const video = videoRef.current;
     if (video.readyState >= 2 && video.videoWidth > 0 && !scanLockRef.current) {
-      if (detectorRef.current) {
-        detectorRef.current
+      let detectedInThisFrame = false;
+
+      // 6.1 Primeiro tenta Leitor Nativo (Google Service) se disponível
+      if (nativeDetectorRef.current) {
+        nativeDetectorRef.current
           .detect(video)
           .then(barcodes => {
             if (barcodes && barcodes.length > 0) {
-              const detected = barcodes[0];
-              const code = detected.rawValue;
-              if (code && code !== lastScannedCode) {
-                scanLockRef.current = true;
-                setLastScannedCode(code);
-                triggerScanBeep(true);
-
-                if (onDetected) {
-                  onDetected(code, detected.format);
-                }
-
-                // Desbloqueia após 1.5s para evitar leituras repetidas em loop
-                setTimeout(() => {
-                  scanLockRef.current = false;
-                }, 1500);
+              const code = barcodes[0].rawValue;
+              if (code) {
+                detectedInThisFrame = processAndValidateCode(code, barcodes[0].format);
               }
             }
           })
-          .catch(err => {
-            // Frame skip normal durante movimento
-            console.debug('Detector frame skip:', err);
+          .catch(() => {
+            // Frame skip normal em movimento - não trava
           });
+      }
+
+      // 6.2 Se o nativo não encontrou, executa ZXing Agressivo (tryHarder + binarização + rotações)
+      if (!detectedInThisFrame && !scanLockRef.current) {
+        try {
+          decodeWithFiltersAndRotation(video);
+        } catch {
+          // Descarte silencioso de erro de frame
+        }
       }
     }
 
+    // Mantém o laço contínuo ativo
     if (isScanning) {
       animationFrameId.current = requestAnimationFrame(scanFrame);
     }
-  }, [isScanning, lastScannedCode, onDetected]);
+  }, [isScanning, processAndValidateCode, decodeWithFiltersAndRotation]);
 
-  // 5. Iniciar Câmera e Scanner
+  // 7. Iniciar Câmera e Scanner com Resolução Apropriada
   const startScanning = useCallback(
     async (videoElement: HTMLVideoElement) => {
       setCameraError(null);
@@ -150,12 +352,13 @@ export function useBarcodeDetector(onDetected?: (code: string, format: string) =
       }
 
       try {
-        // Solicita câmera traseira (environment) em alta resolução para leitura de EAN
+        // Solicita câmera traseira (environment) em alta resolução
         const stream = await navigator.mediaDevices.getUserMedia({
           video: {
             facingMode: { ideal: 'environment' },
-            width: { ideal: 1280 },
-            height: { ideal: 720 },
+            width: { ideal: 1280, min: 640 },
+            height: { ideal: 720, min: 480 },
+            frameRate: { ideal: 30 },
           },
           audio: false,
         });
@@ -164,9 +367,10 @@ export function useBarcodeDetector(onDetected?: (code: string, format: string) =
         videoRef.current = videoElement;
         videoElement.srcObject = stream;
         videoElement.setAttribute('playsinline', 'true');
+        videoElement.muted = true;
         await videoElement.play();
 
-        // Verificar suporte a lanterna
+        // Verificar suporte a lanterna física
         const track = stream.getVideoTracks()[0];
         if (track && 'getCapabilities' in track) {
           const capabilities = (track as unknown as { getCapabilities: () => { torch?: boolean } }).getCapabilities();
@@ -184,13 +388,14 @@ export function useBarcodeDetector(onDetected?: (code: string, format: string) =
         if (msg.includes('NotAllowedError') || msg.includes('Permission')) {
           setCameraError('Permissão para usar a câmera foi negada. Habilite a permissão nas configurações do navegador.');
         } else {
-          setCameraError('Câmera indisponível no momento. Use o leitor manual ou atalhos abaixo.');
+          setCameraError('Câmera indisponível no momento. Use o leitor manual ou produtos pré-carregados.');
         }
       }
     },
     []
   );
 
+  // Efeito do Laço de Animação
   useEffect(() => {
     if (isScanning) {
       animationFrameId.current = requestAnimationFrame(scanFrame);
@@ -198,10 +403,12 @@ export function useBarcodeDetector(onDetected?: (code: string, format: string) =
     return () => {
       if (animationFrameId.current) {
         cancelAnimationFrame(animationFrameId.current);
+        animationFrameId.current = null;
       }
     };
   }, [isScanning, scanFrame]);
 
+  // Efeito de Limpeza estrito ao Desmontar (Liberação Física do Hardware)
   useEffect(() => {
     return () => {
       stopScanning();
