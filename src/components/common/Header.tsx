@@ -8,7 +8,6 @@ import {
   CheckCircle2, 
   AlertTriangle,
   X,
-  SlidersHorizontal,
   LogOut
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
@@ -23,16 +22,10 @@ export const Header: React.FC = () => {
     markAllNotificationsAsRead,
     openScanner,
     operator,
-    logout,
-    activeTab,
-    setActiveTab,
-    isDesktop,
-    isGerente,
-    currentUser
+    logout
   } = useApp();
 
   const [showNotifications, setShowNotifications] = useState(false);
-  const hasStoreAccess = isGerente || currentUser?.cargo === 'gerente' || currentUser?.cargo === 'adm';
 
   return (
     <>
@@ -57,49 +50,7 @@ export const Header: React.FC = () => {
           </div>
         </div>
 
-        {/* Desktop Quick Nav Tabs */}
-        {isDesktop && (
-          <nav className="flex items-center gap-1 bg-slate-100 dark:bg-slate-800/80 p-1 rounded-2xl border border-slate-200/60 dark:border-slate-700/60 text-xs font-bold">
-            <button
-              onClick={() => setActiveTab('inicio')}
-              className={`px-3 py-1.5 rounded-xl transition ${activeTab === 'inicio' ? 'bg-white dark:bg-slate-700 text-emerald-600 dark:text-emerald-400 shadow-xs' : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'}`}
-            >
-              Início
-            </button>
-            <button
-              onClick={() => setActiveTab('validade')}
-              className={`px-3 py-1.5 rounded-xl transition ${activeTab === 'validade' ? 'bg-white dark:bg-slate-700 text-emerald-600 dark:text-emerald-400 shadow-xs' : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'}`}
-            >
-              Validade
-            </button>
-            <button
-              onClick={() => setActiveTab('estoque')}
-              className={`px-3 py-1.5 rounded-xl transition ${activeTab === 'estoque' ? 'bg-white dark:bg-slate-700 text-emerald-600 dark:text-emerald-400 shadow-xs' : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'}`}
-            >
-              Estoque
-            </button>
-            <button
-              onClick={() => setActiveTab('auditoria')}
-              className={`px-3 py-1.5 rounded-xl transition ${activeTab === 'auditoria' ? 'bg-white dark:bg-slate-700 text-emerald-600 dark:text-emerald-400 shadow-xs' : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'}`}
-            >
-              Auditoria
-            </button>
-            {hasStoreAccess && (
-              <button
-                onClick={() => setActiveTab('loja')}
-                className={`px-3 py-1.5 rounded-xl transition ${activeTab === 'loja' ? 'bg-white dark:bg-slate-700 text-emerald-600 dark:text-emerald-400 shadow-xs' : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'}`}
-              >
-                Loja
-              </button>
-            )}
-            <button
-              onClick={() => setActiveTab('configuracoes')}
-              className={`px-3 py-1.5 rounded-xl transition ${activeTab === 'configuracoes' ? 'bg-white dark:bg-slate-700 text-emerald-600 dark:text-emerald-400 shadow-xs' : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'}`}
-            >
-              Ajustes
-            </button>
-          </nav>
-        )}
+
 
         {/* Right action controls */}
         <div className="flex items-center gap-2">

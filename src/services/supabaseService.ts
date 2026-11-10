@@ -337,6 +337,103 @@ export function verifyUserStillActive(matricula: string, lojaId?: string): { act
 }
 
 /**
+ * Verificação remota direta no banco Supabase: desconecta instantaneamente se o usuário
+ * for excluído da tabela 'usuarios' ou tiver 'ativo = false'.
+ */
+export async function verifyUserStillActiveRemote(
+  matricula: string,
+  lojaId?: string
+): Promise<{ active: boolean; companyName?: string }> {
+  const cleanMatricula = matricula.trim();
+  if (cleanMatricula === '@200309' || cleanMatricula === '111111') {
+    return { active: true };
+  }
+
+  // 1. Consulta remota no Supabase se cliente conectado
+  if (client && isSupabaseConfigured()) {
+    try {
+      const { data, error } = await client
+        .from('usuarios')
+        .select('id, matricula, ativo, loja_id')
+        .eq('matricula', cleanMatricula)
+        .maybeSingle();
+
+      if (!error) {
+        if (!data) {
+          // Usuário NÃO EXISTE mais no banco de dados (apagado)
+          const stores = getStoredStores();
+          const store = stores.find(s => s.id === lojaId);
+          return {
+            active: false,
+            companyName: store ? store.nome_loja : 'Supermercado Silva',
+          };
+        }
+
+        if (data.ativo === false) {
+          // Usuário foi DESATIVADO no banco de dados
+          const stores = getStoredStores();
+          const store = stores.find(s => s.id === (data.loja_id || lojaId));
+          return {
+            active: false,
+            companyName: store ? store.nome_loja : 'Supermercado Silva',
+          };
+        }
+
+        return { active: true };
+      }
+    } catch (err) {
+      console.debug('Aviso ao consultar usuário ativo no Supabase:', err);
+    }
+  }
+
+  // 2. Fallback de verificação local
+  return verifyUserStillActive(matricula, lojaId);
+}
+
+/**
+ * Assina o canal Realtime da tabela 'usuarios' para desconectar o usuário
+ * instantaneamente no milissegundo em que ele for deletado ou desativado.
+ */
+export function subscribeToUserStatusRealtime(
+  matricula: string,
+  onDeactivated: (companyName?: string) => void
+): () => void {
+  if (!client || !isSupabaseConfigured()) return () => {};
+
+  try {
+    const cleanMatricula = matricula.trim().toLowerCase();
+    const channel = client
+      .channel(`realtime_watchdog_user_${cleanMatricula}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'usuarios' },
+        (payload) => {
+          const oldRec = payload.old as Record<string, unknown> | null;
+          const newRec = payload.new as Record<string, unknown> | null;
+          const targetMatricula = String(newRec?.matricula || oldRec?.matricula || '').trim().toLowerCase();
+
+          if (targetMatricula === cleanMatricula) {
+            if (payload.eventType === 'DELETE' || (newRec && newRec.ativo === false)) {
+              const stores = getStoredStores();
+              const storeId = String(newRec?.loja_id || oldRec?.loja_id || '');
+              const store = stores.find(s => s.id === storeId);
+              onDeactivated(store ? store.nome_loja : 'Supermercado Silva');
+            }
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      client?.removeChannel(channel);
+    };
+  } catch (err) {
+    console.warn('Aviso ao registrar canal realtime de watchdog do usuário:', err);
+    return () => {};
+  }
+}
+
+/**
  * Autenticação Segura por Matrícula e Senha (Script 03 & SaaS Admin)
  */
 export async function loginUser(matricula: string, senha: string): Promise<LoginResult> {
@@ -1061,3 +1158,343 @@ export async function syncOfflineQueueToSupabase(
     return { success: false, syncedCount: synced, error: msg };
   }
 }
+
+// ============================================================================
+// GESTÃO EM TEMPO REAL DAS 4 TABELAS DE AUDITORIA (MULTI-USUÁRIOS / REALTIME)
+// 1. auditoria_presenca_sessoes (sessões ativas no setor)
+// 2. auditoria_presenca_bips (produtos bipados ao vivo por cada membro)
+// 3. produtos (produtos do setor a serem conferidos)
+// 4. auditorias_finalizadas & auditoria_produtos (histórico permanente e relatórios)
+// ============================================================================
+
+export interface DbActiveAuditSession {
+  id: string;
+  loja_id: string;
+  setor: string;
+  iniciada_por_nome: string;
+  iniciada_por_matricula: string;
+  status: 'ATIVA' | 'PAUSADA' | 'CONCLUIDA';
+  timestamp: number;
+  created_at?: string;
+}
+
+export interface DbAuditBip {
+  id: string;
+  sessao_id: string;
+  loja_id: string;
+  produto_id: string;
+  codigo_barras: string;
+  produto_nome: string;
+  setor: string;
+  operador_matricula: string;
+  operador_nome: string;
+  timestamp: number;
+}
+
+const LOCAL_ACTIVE_SESSIONS_KEY = 'superpwa_active_audit_sessions';
+const LOCAL_AUDIT_BIPS_KEY = 'superpwa_audit_bips_';
+
+/**
+ * Consulta sessões ativas de auditoria (para notificar todos do setor)
+ */
+export async function fetchActiveAuditSessions(lojaId: string): Promise<DbActiveAuditSession[]> {
+  if (client && isSupabaseConfigured()) {
+    try {
+      const { data, error } = await client
+        .from('auditoria_presenca_sessoes')
+        .select('*')
+        .eq('loja_id', lojaId)
+        .eq('status', 'ATIVA')
+        .order('timestamp', { ascending: false });
+
+      if (!error && data) {
+        if (typeof window !== 'undefined') {
+          localStorage.setItem(LOCAL_ACTIVE_SESSIONS_KEY, JSON.stringify(data));
+        }
+        return data as DbActiveAuditSession[];
+      }
+    } catch (err) {
+      console.debug('Aviso ao consultar sessões ativas no banco:', err);
+    }
+  }
+
+  // Fallback local
+  if (typeof window !== 'undefined') {
+    try {
+      const raw = localStorage.getItem(LOCAL_ACTIVE_SESSIONS_KEY);
+      if (raw) return JSON.parse(raw);
+    } catch {
+      // ignore
+    }
+  }
+  return [];
+}
+
+/**
+ * Inicia uma nova sessão de auditoria no setor e transmite para todos os operadores
+ */
+export async function startAuditSessionInDatabase(data: {
+  lojaId: string;
+  setor: string;
+  matricula: string;
+  nome: string;
+}): Promise<{ success: boolean; session?: DbActiveAuditSession; error?: string }> {
+  const newSession: DbActiveAuditSession = {
+    id: `sessao_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+    loja_id: data.lojaId,
+    setor: data.setor,
+    iniciada_por_nome: data.nome,
+    iniciada_por_matricula: data.matricula,
+    status: 'ATIVA',
+    timestamp: Date.now(),
+    created_at: new Date().toISOString(),
+  };
+
+  // Salva no Supabase se conectado
+  if (client && isSupabaseConfigured()) {
+    try {
+      await ensureStoreExists(data.lojaId);
+      const { error } = await client.from('auditoria_presenca_sessoes').insert({
+        id: newSession.id,
+        loja_id: newSession.loja_id,
+        setor: newSession.setor,
+        iniciada_por_nome: newSession.iniciada_por_nome,
+        iniciada_por_matricula: newSession.iniciada_por_matricula,
+        status: newSession.status,
+        timestamp: newSession.timestamp,
+      });
+
+      if (error) {
+        console.warn('Aviso insert sessao auditoria:', error.message);
+      }
+    } catch (err) {
+      console.warn('Erro ao salvar sessão de auditoria no Supabase:', err);
+    }
+  }
+
+  // Atualiza cache local
+  if (typeof window !== 'undefined') {
+    const active = await fetchActiveAuditSessions(data.lojaId);
+    const updated = [newSession, ...active.filter(s => s.id !== newSession.id)];
+    localStorage.setItem(LOCAL_ACTIVE_SESSIONS_KEY, JSON.stringify(updated));
+  }
+
+  return { success: true, session: newSession };
+}
+
+/**
+ * Consulta todos os bips em tempo real de uma sessão ativa
+ */
+export async function fetchSessionBipsFromDatabase(sessaoId: string): Promise<DbAuditBip[]> {
+  if (client && isSupabaseConfigured()) {
+    try {
+      const { data, error } = await client
+        .from('auditoria_presenca_bips')
+        .select('*')
+        .eq('sessao_id', sessaoId)
+        .order('timestamp', { ascending: false });
+
+      if (!error && data) {
+        if (typeof window !== 'undefined') {
+          localStorage.setItem(LOCAL_AUDIT_BIPS_KEY + sessaoId, JSON.stringify(data));
+        }
+        return data as DbAuditBip[];
+      }
+    } catch (err) {
+      console.debug('Aviso ao consultar bips no banco:', err);
+    }
+  }
+
+  // Fallback local
+  if (typeof window !== 'undefined') {
+    try {
+      const raw = localStorage.getItem(LOCAL_AUDIT_BIPS_KEY + sessaoId);
+      if (raw) return JSON.parse(raw);
+    } catch {
+      // ignore
+    }
+  }
+  return [];
+}
+
+/**
+ * Grava um bip no banco Supabase em tempo real (notificando os demais operadores do setor)
+ */
+export async function insertAuditBipInDatabase(bip: DbAuditBip): Promise<{ success: boolean; error?: string }> {
+  // Salva no banco de dados Supabase
+  if (client && isSupabaseConfigured()) {
+    try {
+      await ensureStoreExists(bip.loja_id);
+      const { error } = await client.from('auditoria_presenca_bips').upsert({
+        id: bip.id,
+        sessao_id: bip.sessao_id,
+        loja_id: bip.loja_id,
+        produto_id: bip.produto_id,
+        codigo_barras: bip.codigo_barras,
+        produto_nome: bip.produto_nome,
+        setor: bip.setor,
+        operador_matricula: bip.operador_matricula,
+        operador_nome: bip.operador_nome,
+        timestamp: bip.timestamp,
+      });
+
+      if (error) {
+        console.warn('Aviso upsert bip auditoria:', error.message);
+      }
+    } catch (err) {
+      console.warn('Erro ao inserir bip de auditoria no Supabase:', err);
+    }
+  }
+
+  // Atualiza cache local
+  if (typeof window !== 'undefined') {
+    try {
+      const key = LOCAL_AUDIT_BIPS_KEY + bip.sessao_id;
+      const raw = localStorage.getItem(key);
+      const currentBips: DbAuditBip[] = raw ? JSON.parse(raw) : [];
+      const updated = [bip, ...currentBips.filter(b => b.id !== bip.id)];
+      localStorage.setItem(key, JSON.stringify(updated));
+    } catch {
+      // ignore
+    }
+  }
+
+  return { success: true };
+}
+
+/**
+ * Finaliza a sessão no Supabase e arquiva os dados em 'auditorias_finalizadas' e 'auditoria_produtos'
+ */
+export async function finalizeAuditSessionInDatabase(data: {
+  sessaoId: string;
+  lojaId: string;
+  setor: string;
+  iniciadaPorNome: string;
+  iniciadaPorMatricula: string;
+  finalizadaPorNome: string;
+  finalizadaPorMatricula: string;
+  totalEsperado: number;
+  totalAuditado: number;
+  totalDivergentes: number;
+  iniciadaEm: number;
+  finalizadaEm: number;
+  confirmedItems: Array<{ name: string; ean: string; reducedCode?: string; supplierCode?: string; scannedAt: string; scannedBy?: string }>;
+  pendingItems: Array<{ name: string; ean: string; reducedCode?: string; supplierCode?: string; stock?: number; minStock?: number }>;
+  ruptureItems: Array<{ name: string; ean: string; stock: number; minStock: number }>;
+}): Promise<{ success: boolean; error?: string }> {
+  if (client && isSupabaseConfigured()) {
+    try {
+      // 1. Marca status como 'CONCLUIDA' na tabela auditoria_presenca_sessoes
+      await client
+        .from('auditoria_presenca_sessoes')
+        .update({ status: 'CONCLUIDA' })
+        .eq('id', data.sessaoId);
+
+      // 2. Grava na tabela auditorias_finalizadas
+      await client.from('auditorias_finalizadas').upsert({
+        id: data.sessaoId,
+        loja_id: data.lojaId,
+        setor: data.setor,
+        tipo: 'PRESENCA',
+        iniciada_por_nome: data.iniciadaPorNome,
+        iniciada_por_matricula: data.iniciadaPorMatricula,
+        finalizada_por_nome: data.finalizadaPorNome,
+        finalizada_por_matricula: data.finalizadaPorMatricula,
+        total_esperado: data.totalEsperado,
+        total_auditado: data.totalAuditado,
+        total_divergentes: data.totalDivergentes,
+        iniciada_em: data.iniciadaEm,
+        finalizada_em: data.finalizadaEm,
+        status: 'CONCLUIDA',
+      });
+
+      // 3. Grava itens individuais em auditoria_produtos
+      const produtosPayload = [
+        ...data.confirmedItems.map(c => ({
+          id: `${data.sessaoId}_${c.ean}`,
+          sessao_id: data.sessaoId,
+          produto_id: c.ean,
+          codigo_barras: c.ean,
+          plu: c.reducedCode || null,
+          nome: c.name,
+          setor: data.setor,
+          quantidade_sistema: 0,
+          status_presenca: 'CONFIRMADO',
+          operador_nome: c.scannedBy || data.finalizadaPorNome,
+          operador_matricula: data.finalizadaPorMatricula,
+          auditado_em: Date.now(),
+        })),
+        ...data.pendingItems.map(p => ({
+          id: `${data.sessaoId}_${p.ean}`,
+          sessao_id: data.sessaoId,
+          produto_id: p.ean,
+          codigo_barras: p.ean,
+          plu: p.reducedCode || null,
+          nome: p.name,
+          setor: data.setor,
+          quantidade_sistema: p.stock ?? 0,
+          status_presenca: 'AUSENTE',
+          operador_nome: null,
+          operador_matricula: null,
+          auditado_em: Date.now(),
+        })),
+      ];
+
+      if (produtosPayload.length > 0) {
+        await client.from('auditoria_produtos').upsert(produtosPayload);
+      }
+    } catch (err) {
+      console.warn('Erro ao finalizar auditoria no Supabase:', err);
+    }
+  }
+
+  // Limpa cache local de sessão ativa
+  if (typeof window !== 'undefined') {
+    const raw = localStorage.getItem(LOCAL_ACTIVE_SESSIONS_KEY);
+    if (raw) {
+      const active: DbActiveAuditSession[] = JSON.parse(raw);
+      localStorage.setItem(LOCAL_ACTIVE_SESSIONS_KEY, JSON.stringify(active.filter(s => s.id !== data.sessaoId)));
+    }
+  }
+
+  return { success: true };
+}
+
+/**
+ * Assina as alterações em tempo real de auditoria (sessões e bips) para sincronizar
+ * instantaneamente todos os participantes do setor.
+ */
+export function subscribeToAuditRealtime(
+  lojaId: string,
+  onEvent: () => void
+): () => void {
+  if (!client || !isSupabaseConfigured()) return () => {};
+
+  try {
+    const channel = client
+      .channel(`realtime_auditoria_${lojaId}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'auditoria_presenca_sessoes' },
+        () => {
+          onEvent();
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'auditoria_presenca_bips' },
+        () => {
+          onEvent();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      client?.removeChannel(channel);
+    };
+  } catch (err) {
+    console.warn('Aviso ao registrar canal realtime de auditoria:', err);
+    return () => {};
+  }
+}
+

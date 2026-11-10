@@ -41,6 +41,17 @@ export function useBarcodeDetector(onDetected?: (code: string, format: string) =
   const [torchOn, setTorchOn] = useState<boolean>(false);
   const [lastScannedCode, setLastScannedCode] = useState<string | null>(null);
 
+  // Controles de Zoom e Foco para Leitura de Precisão
+  const [zoom, setZoomState] = useState<number>(1);
+  const [zoomCapabilities, setZoomCapabilities] = useState<{ min: number; max: number; step: number; supported: boolean }>({
+    min: 1,
+    max: 3,
+    step: 0.1,
+    supported: false,
+  });
+  const [focusMode, setFocusModeState] = useState<string>('continuous');
+  const [focusCapabilities, setFocusCapabilities] = useState<string[]>([]);
+
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const animationFrameId = useRef<number | null>(null);
@@ -169,6 +180,53 @@ export function useBarcodeDetector(onDetected?: (code: string, format: string) =
       }
     }
   }, [torchOn]);
+
+  // 3.1 Controles de Zoom de Precisão (Hardware + Assistência)
+  const setZoom = useCallback(async (newZoom: number) => {
+    setZoomState(newZoom);
+    if (!streamRef.current) return;
+    const track = streamRef.current.getVideoTracks()[0];
+    if (track) {
+      try {
+        await track.applyConstraints({
+          advanced: [{ zoom: newZoom } as unknown as MediaTrackConstraintSet],
+        });
+      } catch (e) {
+        console.warn('Hardware zoom não suportado, aplicando scale visual:', e);
+      }
+    }
+  }, []);
+
+  // 3.2 Controles de Modo de Foco (Priorizar Leitura Contínua / Macro)
+  const setFocusMode = useCallback(async (mode: string) => {
+    setFocusModeState(mode);
+    if (!streamRef.current) return;
+    const track = streamRef.current.getVideoTracks()[0];
+    if (track) {
+      try {
+        await track.applyConstraints({
+          advanced: [{ focusMode: mode } as unknown as MediaTrackConstraintSet],
+        });
+      } catch (e) {
+        console.warn('Alteração de modo de foco não aceita pelo hardware:', e);
+      }
+    }
+  }, []);
+
+  // 3.3 Tap-to-focus / Re-foco instantâneo
+  const triggerAutoFocus = useCallback(async () => {
+    if (!streamRef.current) return;
+    const track = streamRef.current.getVideoTracks()[0];
+    if (track) {
+      try {
+        await track.applyConstraints({
+          advanced: [{ focusMode: 'continuous' } as unknown as MediaTrackConstraintSet],
+        });
+      } catch {
+        // ignore
+      }
+    }
+  }, []);
 
   // 4. Validação Rigorosa: Trava de Leitura por Tamanho Mínimo
   // Descarta leituras cortadas, incompletas ou adivinhações parciais do leitor
@@ -370,12 +428,40 @@ export function useBarcodeDetector(onDetected?: (code: string, format: string) =
         videoElement.muted = true;
         await videoElement.play();
 
-        // Verificar suporte a lanterna física
+        // Verificar suporte a lanterna física, zoom e foco por hardware
         const track = stream.getVideoTracks()[0];
         if (track && 'getCapabilities' in track) {
-          const capabilities = (track as unknown as { getCapabilities: () => { torch?: boolean } }).getCapabilities();
-          if (capabilities && capabilities.torch) {
-            setTorchAvailable(true);
+          try {
+            const capabilities = (track as unknown as { 
+              getCapabilities: () => { 
+                torch?: boolean;
+                zoom?: { min: number; max: number; step: number };
+                focusMode?: string[];
+              } 
+            }).getCapabilities();
+
+            if (capabilities && capabilities.torch) {
+              setTorchAvailable(true);
+            }
+            if (capabilities && capabilities.zoom) {
+              setZoomCapabilities({
+                min: capabilities.zoom.min ?? 1,
+                max: capabilities.zoom.max ?? 4,
+                step: capabilities.zoom.step ?? 0.1,
+                supported: true,
+              });
+            }
+            if (capabilities && capabilities.focusMode) {
+              setFocusCapabilities(capabilities.focusMode);
+              // Tentar forçar modo contínuo por padrão para melhor leitura
+              if (capabilities.focusMode.includes('continuous')) {
+                track.applyConstraints({
+                  advanced: [{ focusMode: 'continuous' } as unknown as MediaTrackConstraintSet],
+                }).catch(() => {});
+              }
+            }
+          } catch (e) {
+            console.warn('Erro ao ler capacidades da câmera:', e);
           }
         }
 
@@ -426,5 +512,12 @@ export function useBarcodeDetector(onDetected?: (code: string, format: string) =
     startScanning,
     stopScanning,
     lastScannedCode,
+    zoom,
+    setZoom,
+    zoomCapabilities,
+    focusMode,
+    setFocusMode,
+    focusCapabilities,
+    triggerAutoFocus,
   };
 }

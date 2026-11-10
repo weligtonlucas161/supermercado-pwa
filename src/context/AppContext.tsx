@@ -41,7 +41,9 @@ import {
   getStoredEmployees,
   getStoredRoles,
   changeUserPassword,
-  verifyUserStillActive
+  verifyUserStillActive,
+  verifyUserStillActiveRemote,
+  subscribeToUserStatusRealtime
 } from '../services/supabaseService';
 
 interface AppContextType {
@@ -374,19 +376,38 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!isAuthenticated || !currentUser) return;
     if (currentUser.cargo === 'saas_admin') return;
 
-    const checkActive = () => {
-      const status = verifyUserStillActive(currentUser.matricula, currentUser.loja_id);
-      if (!status.active) {
-        logout();
-        setDisconnectedMessage(`Você foi desconectado por desligamento da empresa ${status.companyName || 'da empresa'}.`);
-        triggerScanBeep(false);
+    let isSubscribed = true;
+
+    const performDisconnect = (companyName?: string) => {
+      logout();
+      setDisconnectedMessage(`Você foi desconectado por desligamento da empresa ${companyName || operator.store || 'da empresa'}.`);
+      triggerScanBeep(false);
+    };
+
+    const checkActive = async () => {
+      if (!isSubscribed) return;
+      try {
+        const status = await verifyUserStillActiveRemote(currentUser.matricula, currentUser.loja_id || operator.loja_id);
+        if (!status.active && isSubscribed) {
+          performDisconnect(status.companyName);
+        }
+      } catch (err) {
+        console.warn('Erro verificação ativa de usuário:', err);
       }
     };
 
-    // Verificação periódica a cada 3.5s
-    const timer = setInterval(checkActive, 3500);
+    // 1. Verificação imediata no carregamento
+    checkActive();
 
-    // Ouve alterações no localStorage (ex: gerente desativou ou excluiu funcionário em outra aba)
+    // 2. Verificação periódica a cada 2.5s
+    const timer = setInterval(checkActive, 2500);
+
+    // 3. Assinatura em Tempo Real (Supabase Realtime) na tabela 'usuarios'
+    const unsubscribeRealtime = subscribeToUserStatusRealtime(currentUser.matricula, (comp) => {
+      performDisconnect(comp);
+    });
+
+    // 4. Ouve alterações no localStorage (ex: gerente desativou ou excluiu funcionário em outra aba)
     const handleStorageEvent = (e: StorageEvent) => {
       if (e.key === 'superpwa_employees_data') {
         checkActive();
@@ -397,11 +418,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     window.addEventListener('focus', checkActive);
 
     return () => {
+      isSubscribed = false;
       clearInterval(timer);
+      unsubscribeRealtime();
       window.removeEventListener('storage', handleStorageEvent);
       window.removeEventListener('focus', checkActive);
     };
-  }, [isAuthenticated, currentUser]);
+  }, [isAuthenticated, currentUser, operator.store, operator.loja_id]);
 
   const logout = () => {
     setCurrentUser(null);

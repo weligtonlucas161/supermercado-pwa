@@ -25,13 +25,29 @@ import {
   CameraOff,
   Flashlight,
   Volume2,
-  Sparkles
+  Sparkles,
+  Users,
+  Radio,
+  ZoomIn,
+  ZoomOut,
+  Target,
+  Sliders
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { useApp } from '../../context/AppContext';
 import { SETORES_DISPONIVEIS, SetorLoja, Product, AuditItem } from '../../types';
 import { triggerScanBeep } from '../../utils/haptics';
 import { useBarcodeDetector } from '../../hooks/useBarcodeDetector';
+import {
+  fetchActiveAuditSessions,
+  startAuditSessionInDatabase,
+  fetchSessionBipsFromDatabase,
+  insertAuditBipInDatabase,
+  finalizeAuditSessionInDatabase,
+  subscribeToAuditRealtime,
+  DbActiveAuditSession,
+  DbAuditBip,
+} from '../../services/supabaseService';
 
 type AuditoriaInterface = 'presenca' | 'inventario' | 'validade' | 'relatorio';
 
@@ -58,6 +74,17 @@ export const AuditoriaTab: React.FC = () => {
   const [isAuditing, setIsAuditing] = useState(false);
   const [sessionSetor, setSessionSetor] = useState<SetorLoja>('MERCEARIA');
   const [sessionStartTime, setSessionStartTime] = useState<string>('');
+  const [sessionStartTimeMs, setSessionStartTimeMs] = useState<number>(Date.now());
+  const [sessionIniciadaPor, setSessionIniciadaPor] = useState<{ nome: string; matricula: string } | null>(null);
+
+  // Sessões em tempo real no banco de dados (tabela auditoria_presenca_sessoes)
+  const [activeRemoteSessions, setActiveRemoteSessions] = useState<DbActiveAuditSession[]>([]);
+  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
+  const currentSessionIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    currentSessionIdRef.current = currentSessionId;
+  }, [currentSessionId]);
   
   // Listas de Controle da Auditoria de Presença
   const [pendentes, setPendentes] = useState<Product[]>([]);
@@ -95,6 +122,7 @@ export const AuditoriaTab: React.FC = () => {
   const pendentesRef = useRef<Product[]>([]);
   const confirmadosRef = useRef<ConfirmedProductItem[]>([]);
   const continuousVideoRef = useRef<HTMLVideoElement | null>(null);
+  const [tapFocusPulse, setTapFocusPulse] = useState<{ x: number; y: number } | null>(null);
 
   useEffect(() => {
     pendentesRef.current = pendentes;
@@ -109,9 +137,114 @@ export const AuditoriaTab: React.FC = () => {
     p => p.category?.toUpperCase() === selectedSetor.toUpperCase()
   );
 
+  // -------------------------------------------------------------------------
+  // SINCRONIZAÇÃO EM TEMPO REAL: SESSOES E BIPS MULTI-USUÁRIO
+  // -------------------------------------------------------------------------
+  const refreshRemoteSessions = useCallback(async () => {
+    const lojaId = operator.loja_id || 'loja_padrao_001';
+    try {
+      const sessions = await fetchActiveAuditSessions(lojaId);
+      setActiveRemoteSessions(sessions);
+    } catch (err) {
+      console.warn('Erro ao carregar sessões ativas:', err);
+    }
+  }, [operator.loja_id]);
+
+  // Sincroniza bips da sessão ativa com o banco de dados (tabela auditoria_presenca_bips)
+  const syncSessionBips = useCallback(async (sessId: string) => {
+    try {
+      const bips = await fetchSessionBipsFromDatabase(sessId);
+      if (!bips || bips.length === 0) return;
+
+      const currentConfs = confirmadosRef.current;
+      const currentPends = pendentesRef.current;
+      const knownEans = new Set(currentConfs.map(c => c.ean.replace(/[^0-9A-Za-z]/g, '').trim()));
+
+      let hasNewExternalBip = false;
+      let lastOtherBipName = '';
+      let lastOtherOperator = '';
+
+      const newlyConfirmed: ConfirmedProductItem[] = [];
+      const eansToRemoveFromPending = new Set<string>();
+
+      bips.forEach(b => {
+        const cleanBipEan = (b.codigo_barras || '').replace(/[^0-9A-Za-z]/g, '').trim();
+        if (!knownEans.has(cleanBipEan)) {
+          knownEans.add(cleanBipEan);
+          const isOther = (b.operador_nome || '').toLowerCase() !== (operator.name || 'Operador').toLowerCase();
+          
+          if (isOther) {
+            hasNewExternalBip = true;
+            lastOtherBipName = b.produto_nome;
+            lastOtherOperator = b.operador_nome;
+          }
+
+          newlyConfirmed.push({
+            id: b.produto_id || cleanBipEan,
+            name: b.produto_nome,
+            ean: b.codigo_barras,
+            scannedAt: new Date(b.timestamp).toLocaleTimeString('pt-BR'),
+            scannedBy: b.operador_nome,
+          });
+
+          eansToRemoveFromPending.add(cleanBipEan);
+        }
+      });
+
+      if (newlyConfirmed.length > 0) {
+        const updatedConfirmados = [...newlyConfirmed, ...currentConfs];
+        const updatedPendentes = currentPends.filter(p => {
+          const cleanP = (p.ean || '').replace(/[^0-9A-Za-z]/g, '').trim();
+          return !eansToRemoveFromPending.has(cleanP);
+        });
+
+        confirmadosRef.current = updatedConfirmados;
+        pendentesRef.current = updatedPendentes;
+        setConfirmados(updatedConfirmados);
+        setPendentes(updatedPendentes);
+
+        if (hasNewExternalBip) {
+          triggerBorderFlash('orange');
+          setLastBipFeedback({
+            type: 'warning',
+            message: `✓ Sincronizado: "${lastOtherBipName}" foi conferido em tempo real por ${lastOtherOperator}!`,
+          });
+        }
+      }
+    } catch (err) {
+      console.warn('Erro ao sincronizar bips remotos:', err);
+    }
+  }, [operator.loja_id, operator.name, triggerBorderFlash]);
+
+  // Assinatura em Tempo Real (Supabase Realtime Channel)
+  useEffect(() => {
+    const lojaId = operator.loja_id || 'loja_padrao_001';
+    refreshRemoteSessions();
+
+    const unsubscribe = subscribeToAuditRealtime(lojaId, () => {
+      refreshRemoteSessions();
+      if (currentSessionIdRef.current) {
+        syncSessionBips(currentSessionIdRef.current);
+      }
+    });
+
+    // Polling de contingência a cada 3.5 segundos caso realtime webhooks oscilem
+    const interval = setInterval(() => {
+      refreshRemoteSessions();
+      if (currentSessionIdRef.current) {
+        syncSessionBips(currentSessionIdRef.current);
+      }
+    }, 3500);
+
+    return () => {
+      unsubscribe();
+      clearInterval(interval);
+    };
+  }, [operator.loja_id, refreshRemoteSessions, syncSessionBips]);
+
   // =========================================================================
   // PROCESSAMENTO CONTÍNUO DE CÓDIGO DE BARRAS (SEM FECHAR CÂMERA)
-  // Identificou o produto da lista -> marca como confirmado -> pronto para o próximo!
+  // Identificou o produto da lista -> marca como confirmado -> grava no banco em tempo real!
   // =========================================================================
   const processContinuousBarcode = useCallback((scannedCode: string) => {
     const cleanEan = scannedCode.replace(/[^0-9A-Za-z]/g, '').trim();
@@ -172,6 +305,24 @@ export const AuditoriaTab: React.FC = () => {
       confirmadosRef.current = newConfirmados;
       setConfirmados(newConfirmados);
 
+      // Persistir bip em tempo real na tabela 'auditoria_presenca_bips' para sincronizar a equipe
+      if (currentSessionIdRef.current) {
+        insertAuditBipInDatabase({
+          id: `bip_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+          sessao_id: currentSessionIdRef.current,
+          loja_id: operator.loja_id || 'loja_padrao_001',
+          produto_id: foundProduct.id,
+          codigo_barras: foundProduct.ean,
+          produto_nome: foundProduct.name,
+          setor: sessionSetor,
+          operador_matricula: operator.code || operator.matricula || '4092',
+          operador_nome: operator.name || 'Operador',
+          timestamp: Date.now(),
+        }).catch(err => {
+          console.warn('Aviso ao registrar bip no banco:', err);
+        });
+      }
+
       // Bip sonoro e feedback visual com borda VERDE
       triggerScanBeep(true);
       triggerBorderFlash('green');
@@ -181,7 +332,6 @@ export const AuditoriaTab: React.FC = () => {
         ean: foundProduct.ean,
       });
       setManualBarcodeInput('');
-      // CÂMERA PERMANECE ABERTA E PRONTA PARA O PRÓXIMO PRODUTO!
       return;
     }
 
@@ -201,7 +351,7 @@ export const AuditoriaTab: React.FC = () => {
         triggerBorderFlash('orange');
         setLastBipFeedback({
           type: 'warning',
-          message: `Item já conferido por outro operador (${alreadyConfirmed.scannedBy}) às ${alreadyConfirmed.scannedAt}`,
+          message: `Item já conferido por outro membro da seção (${alreadyConfirmed.scannedBy}) às ${alreadyConfirmed.scannedAt}`,
           ean: cleanEan,
         });
       } else {
@@ -226,9 +376,9 @@ export const AuditoriaTab: React.FC = () => {
       ean: cleanEan,
     });
     setManualBarcodeInput('');
-  }, [operator.name, sessionSetor, triggerBorderFlash]);
+  }, [operator.name, operator.loja_id, operator.code, operator.matricula, operator.role, operator.setor_restrito, sessionSetor, triggerBorderFlash]);
 
-  // Hook do Leitor com Google Barcode Service + ZXing tryHarder
+  // Hook do Leitor com Google Barcode Service + ZXing tryHarder + Zoom & Focus
   const {
     isScanning,
     hasCameraPermission,
@@ -238,6 +388,13 @@ export const AuditoriaTab: React.FC = () => {
     toggleTorch,
     startScanning,
     stopScanning,
+    zoom,
+    setZoom,
+    zoomCapabilities,
+    focusMode,
+    setFocusMode,
+    focusCapabilities,
+    triggerAutoFocus,
   } = useBarcodeDetector(processContinuousBarcode);
 
   // Iniciar/Parar câmera contínua automaticamente durante a auditoria ativa
@@ -255,8 +412,20 @@ export const AuditoriaTab: React.FC = () => {
     };
   }, [isAuditing, isContinuousCameraActive, startScanning, stopScanning]);
 
+  // Efeito de toque na tela para focar (Tap-to-Focus)
+  const handleCameraTapToFocus = (e: React.MouseEvent<HTMLDivElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    setTapFocusPulse({ x, y });
+    triggerAutoFocus();
+    setTimeout(() => {
+      setTapFocusPulse(null);
+    }, 800);
+  };
+
   // =========================================================================
-  // AÇÕES DA AUDITORIA DE PRESENÇA
+  // AÇÕES DA AUDITORIA DE PRESENÇA COM SINCRONIZAÇÃO EM TEMPO REAL
   // =========================================================================
   const handleStartPresenceAudit = () => {
     // Restrição Estrita por Setor: Somente operadores daquele setor podem participar
@@ -285,17 +454,119 @@ export const AuditoriaTab: React.FC = () => {
       return;
     }
 
+    const nowMs = Date.now();
+    const startTimeFormatted = new Date(nowMs).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+
     setSessionSetor(selectedSetor);
     pendentesRef.current = [...sectorProducts];
     confirmadosRef.current = [];
     setPendentes([...sectorProducts]);
     setConfirmados([]);
-    setSessionStartTime(new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }));
+    setSessionStartTime(startTimeFormatted);
+    setSessionStartTimeMs(nowMs);
+    setSessionIniciadaPor({
+      nome: operator.name || 'Operador',
+      matricula: operator.code || operator.matricula || '4092',
+    });
     setIsAuditing(true);
     setIsContinuousCameraActive(true);
     setViewListTab('pendentes');
     setLastBipFeedback(null);
     triggerScanBeep(true);
+
+    // Registra sessão ativa no Supabase na tabela 'auditoria_presenca_sessoes'
+    const lojaId = operator.loja_id || 'loja_padrao_001';
+    startAuditSessionInDatabase({
+      lojaId,
+      setor: selectedSetor,
+      nome: operator.name || 'Operador',
+      matricula: operator.code || operator.matricula || '4092',
+    }).then(result => {
+      if (result.session?.id) {
+        setCurrentSessionId(result.session.id);
+        currentSessionIdRef.current = result.session.id;
+        refreshRemoteSessions();
+      }
+    }).catch(err => {
+      console.warn('Erro ao criar sessão remota:', err);
+    });
+  };
+
+  // Entrar em sessão já iniciada por outro operador do mesmo setor
+  const handleJoinActiveSession = async (sess: DbActiveAuditSession) => {
+    const isManager = operator.role === 'gerente' || operator.role === 'saas_admin' || operator.role === 'adm';
+    if (!isManager && operator.setor_restrito && operator.setor_restrito !== 'TODOS') {
+      if (operator.setor_restrito.toUpperCase() !== sess.setor.toUpperCase()) {
+        triggerScanBeep(false);
+        triggerBorderFlash('red');
+        setLastBipFeedback({
+          type: 'error',
+          message: `Acesso Restrito: Somente operadores vinculados ao setor ${sess.setor} podem entrar nesta sessão. Seu setor registrado é ${operator.setor_restrito}.`,
+        });
+        return;
+      }
+    }
+
+    const sectorProducts = products.filter(
+      p => p.category?.toUpperCase() === sess.setor.toUpperCase()
+    );
+
+    setCurrentSessionId(sess.id);
+    currentSessionIdRef.current = sess.id;
+    setSessionSetor(sess.setor as SetorLoja);
+    setSessionStartTimeMs(sess.timestamp);
+    setSessionStartTime(new Date(sess.timestamp).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }));
+    setSessionIniciadaPor({
+      nome: sess.iniciada_por_nome,
+      matricula: sess.iniciada_por_matricula,
+    });
+
+    // Puxa bips já registrados na tabela 'auditoria_presenca_bips'
+    try {
+      const bips = await fetchSessionBipsFromDatabase(sess.id);
+      const bipMap = new Map<string, DbAuditBip>();
+      bips.forEach(b => {
+        const clean = (b.codigo_barras || '').replace(/[^0-9A-Za-z]/g, '').trim();
+        bipMap.set(clean, b);
+      });
+
+      const initConfirmed: ConfirmedProductItem[] = [];
+      const initPendentes: Product[] = [];
+
+      sectorProducts.forEach(prod => {
+        const clean = (prod.ean || '').replace(/[^0-9A-Za-z]/g, '').trim();
+        const foundBip = bipMap.get(clean);
+        if (foundBip) {
+          initConfirmed.push({
+            id: prod.id,
+            name: prod.name,
+            ean: prod.ean,
+            reducedCode: prod.reducedCode,
+            supplierCode: prod.supplierCode,
+            scannedAt: new Date(foundBip.timestamp).toLocaleTimeString('pt-BR'),
+            scannedBy: foundBip.operador_nome,
+          });
+        } else {
+          initPendentes.push(prod);
+        }
+      });
+
+      confirmadosRef.current = initConfirmed;
+      pendentesRef.current = initPendentes;
+      setConfirmados(initConfirmed);
+      setPendentes(initPendentes);
+    } catch {
+      confirmadosRef.current = [];
+      pendentesRef.current = [...sectorProducts];
+      setConfirmados([]);
+      setPendentes([...sectorProducts]);
+    }
+
+    setIsAuditing(true);
+    setIsContinuousCameraActive(true);
+    setViewListTab('pendentes');
+    triggerScanBeep(true);
+    triggerBorderFlash('green');
   };
 
   // Dispara a câmera externa/modal com Google Service como alternativa se preferir
@@ -306,7 +577,7 @@ export const AuditoriaTab: React.FC = () => {
   };
 
   // Finalizar e salvar a auditoria de presença
-  const handleFinishAndSaveAudit = () => {
+  const handleFinishAndSaveAudit = async () => {
     stopScanning();
     const totalItems = confirmados.length + pendentes.length;
     const rate = totalItems > 0 ? ((confirmados.length / totalItems) * 100).toFixed(0) : '0';
@@ -326,11 +597,51 @@ export const AuditoriaTab: React.FC = () => {
         minStock: p.minStock ?? 5,
       }));
 
+    const sessId = currentSessionIdRef.current || `aud_${Date.now()}`;
+    const lojaId = operator.loja_id || 'loja_padrao_001';
+
+    // Grava no banco de dados nas tabelas 'auditoria_presenca_sessoes', 'auditorias_finalizadas' e 'auditoria_produtos'
+    try {
+      await finalizeAuditSessionInDatabase({
+        sessaoId: sessId,
+        lojaId,
+        setor: sessionSetor,
+        iniciadaPorNome: sessionIniciadaPor?.nome || operator.name || 'Operador',
+        iniciadaPorMatricula: sessionIniciadaPor?.matricula || operator.code || operator.matricula || '4092',
+        finalizadaPorNome: operator.name || 'Operador',
+        finalizadaPorMatricula: operator.code || operator.matricula || '4092',
+        totalEsperado: totalItems,
+        totalAuditado: confirmados.length,
+        totalDivergentes: pendentes.length,
+        iniciadaEm: sessionStartTimeMs,
+        finalizadaEm: Date.now(),
+        confirmedItems: confirmados.map(c => ({
+          name: c.name,
+          ean: c.ean,
+          reducedCode: c.reducedCode,
+          supplierCode: c.supplierCode,
+          scannedAt: c.scannedAt,
+          scannedBy: c.scannedBy || operator.name || 'Operador',
+        })),
+        pendingItems: pendentes.map(p => ({
+          name: p.name,
+          ean: p.ean,
+          reducedCode: p.reducedCode,
+          supplierCode: p.supplierCode,
+          stock: p.stock,
+          minStock: p.minStock ?? 5,
+        })),
+        ruptureItems,
+      });
+    } catch (err) {
+      console.warn('Erro ao finalizar auditoria remotamente:', err);
+    }
+
     addAudit({
       title: `Auditoria de Presença - ${sessionSetor}`,
       itemsCount: confirmados.length,
       status: 'Concluída',
-      auditor: `${operator.name || 'Operador'} (${operator.code || '4092'})`,
+      auditor: `${operator.name || 'Operador'} (${operator.code || operator.matricula || '4092'})`,
       department: sessionSetor,
       type: 'PRESENCA',
       totalItems,
@@ -356,10 +667,13 @@ export const AuditoriaTab: React.FC = () => {
       ruptureList: ruptureItems,
     });
 
+    setCurrentSessionId(null);
+    currentSessionIdRef.current = null;
     setIsAuditing(false);
     setPendentes([]);
     setConfirmados([]);
     setLastBipFeedback(null);
+    refreshRemoteSessions();
     setActiveInterface('relatorio');
     triggerScanBeep(true);
   };
@@ -554,20 +868,91 @@ export const AuditoriaTab: React.FC = () => {
         <div className="space-y-4">
           {!isAuditing ? (
             /* CONFIGURAÇÃO E INÍCIO DA AUDITORIA DE PRESENÇA */
-            <div className="p-5 sm:p-6 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xl space-y-5">
-              <div className="flex items-center gap-3 pb-3 border-b border-slate-100 dark:border-slate-800">
-                <div className="p-2.5 rounded-2xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
-                  <CheckSquare className="w-6 h-6" />
+            <div className="space-y-4">
+              {/* SESSÕES ATIVAS EM TEMPO REAL NO BANCO DE DADOS (COLABORATIVO POR SETOR) */}
+              {activeRemoteSessions.length > 0 && (
+                <div className="p-4 sm:p-5 rounded-3xl bg-gradient-to-r from-emerald-500/15 via-teal-500/10 to-emerald-500/5 border-2 border-emerald-500/40 shadow-lg space-y-3 animate-in fade-in">
+                  <div className="flex items-center justify-between flex-wrap gap-2">
+                    <div className="flex items-center gap-2">
+                      <Radio className="w-5 h-5 text-emerald-500 animate-pulse" />
+                      <div>
+                        <h4 className="text-xs sm:text-sm font-black text-slate-900 dark:text-white uppercase tracking-wide flex items-center gap-2">
+                          <span>Sessão de Auditoria Ativa no Setor</span>
+                          <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500 text-white font-extrabold uppercase">
+                            Em Tempo Real
+                          </span>
+                        </h4>
+                        <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                          Outro operador da sua loja já iniciou uma conferência. Você pode entrar e auditar em equipe simultaneamente!
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                    {activeRemoteSessions.map((sess) => {
+                      const canJoin =
+                        operator.role === 'gerente' ||
+                        operator.role === 'saas_admin' ||
+                        operator.role === 'adm' ||
+                        !operator.setor_restrito ||
+                        operator.setor_restrito === 'TODOS' ||
+                        operator.setor_restrito.toUpperCase() === sess.setor.toUpperCase();
+
+                      return (
+                        <div
+                          key={sess.id}
+                          className="p-3.5 rounded-2xl bg-white dark:bg-slate-900 border border-emerald-500/30 flex items-center justify-between gap-3 shadow-sm hover:border-emerald-500 transition"
+                        >
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs font-black text-emerald-600 dark:text-emerald-400 uppercase tracking-wide">
+                                Setor {sess.setor}
+                              </span>
+                              <span className="text-[10px] text-slate-400">
+                                {new Date(sess.timestamp).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                              </span>
+                            </div>
+                            <p className="text-[11px] text-slate-600 dark:text-slate-300">
+                              Iniciada por: <strong className="text-slate-900 dark:text-white">{sess.iniciada_por_nome}</strong>
+                            </p>
+                          </div>
+
+                          {canJoin ? (
+                            <button
+                              type="button"
+                              onClick={() => handleJoinActiveSession(sess)}
+                              className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-black shadow-md shadow-emerald-600/25 transition flex items-center gap-1.5 cursor-pointer shrink-0"
+                            >
+                              <Users className="w-4 h-4" />
+                              <span>Entrar na Sessão</span>
+                            </button>
+                          ) : (
+                            <span className="text-[10px] text-slate-400 italic">
+                              Restrito ao setor {sess.setor}
+                            </span>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
-                <div>
-                  <h3 className="font-black text-base text-slate-900 dark:text-white">
-                    Auditoria de Presença por Setor
-                  </h3>
-                  <p className="text-xs text-slate-500 dark:text-slate-400">
-                    Selecione o setor da loja para carregar a lista de produtos pendentes e auditar via Google Barcode Service.
-                  </p>
+              )}
+
+              <div className="p-5 sm:p-6 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xl space-y-5">
+                <div className="flex items-center gap-3 pb-3 border-b border-slate-100 dark:border-slate-800">
+                  <div className="p-2.5 rounded-2xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
+                    <CheckSquare className="w-6 h-6" />
+                  </div>
+                  <div>
+                    <h3 className="font-black text-base text-slate-900 dark:text-white">
+                      Iniciar Nova Auditoria de Presença
+                    </h3>
+                    <p className="text-xs text-slate-500 dark:text-slate-400">
+                      Selecione o setor da loja para carregar a lista de produtos pendentes e auditar via Google Barcode Service.
+                    </p>
+                  </div>
                 </div>
-              </div>
 
               {/* Botões dos 6 Setores Oficiais */}
               <div className="space-y-2.5">
@@ -634,6 +1019,7 @@ export const AuditoriaTab: React.FC = () => {
                   <span>{lastBipFeedback.message}</span>
                 </div>
               )}
+            </div>
             </div>
           ) : (
             /* =============================================================== */
@@ -785,74 +1171,170 @@ export const AuditoriaTab: React.FC = () => {
                     </div>
                   </div>
 
-                  {/* VIEWPORT DA CÂMERA CONTÍNUA */}
+                  {/* VIEWPORT DA CÂMERA CONTÍNUA AMPLIADO COM CONTROLE DE ZOOM E FOCO */}
                   {isContinuousCameraActive ? (
-                    <div className="relative w-full h-56 sm:h-72 bg-black rounded-2xl overflow-hidden border-2 border-emerald-500/40 shadow-inner flex items-center justify-center">
-                      <video
-                        ref={continuousVideoRef}
-                        autoPlay
-                        playsInline
-                        muted
-                        className="w-full h-full object-cover"
-                      />
+                    <div className="space-y-2">
+                      <div 
+                        onClick={handleCameraTapToFocus}
+                        className="relative w-full h-80 sm:h-96 md:h-[430px] bg-black rounded-3xl overflow-hidden border-2 border-emerald-500/50 shadow-2xl flex items-center justify-center cursor-crosshair group select-none"
+                        title="Toque em qualquer ponto da imagem para refocar a câmera"
+                      >
+                        <video
+                          ref={continuousVideoRef}
+                          autoPlay
+                          playsInline
+                          muted
+                          style={{
+                            transform: zoom > 1 ? `scale(${zoom})` : undefined,
+                            transformOrigin: 'center center',
+                            transition: 'transform 0.15s ease-out'
+                          }}
+                          className="w-full h-full object-cover"
+                        />
 
-                      {/* HUD DE MIRA E LASER ANIMADO */}
-                      <div className="absolute inset-0 pointer-events-none flex flex-col items-center justify-center p-4">
-                        {/* Caixa de Enquadramento */}
-                        <div className="w-64 sm:w-80 h-32 sm:h-40 border-2 border-emerald-400/90 rounded-2xl relative shadow-[0_0_15px_rgba(16,185,129,0.3)] bg-emerald-500/5">
-                          {/* Cantoneiras Brilhantes */}
-                          <div className="absolute -top-1 -left-1 w-4 h-4 border-t-2 border-l-2 border-emerald-300" />
-                          <div className="absolute -top-1 -right-1 w-4 h-4 border-t-2 border-r-2 border-emerald-300" />
-                          <div className="absolute -bottom-1 -left-1 w-4 h-4 border-b-2 border-l-2 border-emerald-300" />
-                          <div className="absolute -bottom-1 -right-1 w-4 h-4 border-b-2 border-r-2 border-emerald-300" />
-                          
-                          {/* Linha Laser de Varredura */}
-                          <div className="absolute inset-x-2 h-0.5 bg-gradient-to-r from-transparent via-red-500 to-transparent shadow-[0_0_10px_#ef4444] animate-pulse top-1/2 -translate-y-1/2" />
+                        {/* ANIMAÇÃO VISUAL DE TAP-TO-FOCUS */}
+                        {tapFocusPulse && (
+                          <div
+                            style={{ left: tapFocusPulse.x, top: tapFocusPulse.y }}
+                            className="absolute -translate-x-1/2 -translate-y-1/2 pointer-events-none z-30"
+                          >
+                            <span className="w-12 h-12 rounded-full border-2 border-emerald-400 block animate-ping opacity-80" />
+                            <span className="w-8 h-8 rounded-full border border-white absolute inset-0 m-auto" />
+                          </div>
+                        )}
+
+                        {/* HUD DE MIRA E LASER ANIMADO */}
+                        <div className="absolute inset-0 pointer-events-none flex flex-col items-center justify-center p-4">
+                          {/* Caixa de Enquadramento Ampliada */}
+                          <div className="w-72 sm:w-96 h-40 sm:h-52 border-2 border-emerald-400/90 rounded-2xl relative shadow-[0_0_25px_rgba(16,185,129,0.35)] bg-emerald-500/5 backdrop-blur-[0.5px]">
+                            {/* Cantoneiras Brilhantes */}
+                            <div className="absolute -top-1 -left-1 w-5 h-5 border-t-3 border-l-3 border-emerald-300" />
+                            <div className="absolute -top-1 -right-1 w-5 h-5 border-t-3 border-r-3 border-emerald-300" />
+                            <div className="absolute -bottom-1 -left-1 w-5 h-5 border-b-3 border-l-3 border-emerald-300" />
+                            <div className="absolute -bottom-1 -right-1 w-5 h-5 border-b-3 border-r-3 border-emerald-300" />
+                            
+                            {/* Linha Laser de Varredura */}
+                            <div className="absolute inset-x-2 h-0.5 bg-gradient-to-r from-transparent via-red-500 to-transparent shadow-[0_0_12px_#ef4444] animate-pulse top-1/2 -translate-y-1/2" />
+                          </div>
+
+                          {/* Legenda Superior no Viewport */}
+                          <div className="absolute top-3 inset-x-4 flex items-center justify-between text-[11px] font-bold text-white pointer-events-none">
+                            <span className="px-3 py-1 rounded-full bg-black/75 backdrop-blur-md border border-white/15 flex items-center gap-1.5 shadow-md">
+                              <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping" />
+                              <span>Leitura Contínua • {zoom.toFixed(1)}x</span>
+                            </span>
+                            <span className="px-3 py-1 rounded-full bg-emerald-600/90 backdrop-blur-md border border-emerald-400/40 shadow-md">
+                              {confirmados.length} auditados / {pendentes.length} pendentes
+                            </span>
+                          </div>
+
+                          {/* Indicador de Foco e Dica de Toque */}
+                          <div className="absolute bottom-3 inset-x-4 flex items-center justify-between pointer-events-none">
+                            <span className="px-2.5 py-1 rounded-full bg-black/70 backdrop-blur-md border border-white/10 text-[10px] text-slate-300 font-medium">
+                              👆 Toque na tela para focar
+                            </span>
+                            <span className="px-2.5 py-1 rounded-full bg-black/70 backdrop-blur-md border border-white/10 text-[10px] text-emerald-300 font-mono">
+                              Modo: {focusMode === 'macro' ? 'Macro (Perto)' : 'Auto Foco'}
+                            </span>
+                          </div>
                         </div>
 
-                        {/* Legenda Superior no Viewport */}
-                        <div className="absolute top-3 inset-x-4 flex items-center justify-between text-[11px] font-bold text-white pointer-events-none">
-                          <span className="px-2.5 py-1 rounded-full bg-black/60 backdrop-blur-md border border-white/10 flex items-center gap-1.5">
-                            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
-                            Amostragem Contínua Ativa
-                          </span>
-                          <span className="px-2.5 py-1 rounded-full bg-emerald-600/80 backdrop-blur-md border border-emerald-400/30">
-                            {confirmados.length} auditados / {pendentes.length} pendentes
-                          </span>
-                        </div>
-
-                        {/* Legenda Inferior no Viewport */}
-                        <div className="absolute bottom-3 inset-x-4 flex items-center justify-center pointer-events-none">
-                          <span className="px-3 py-1 rounded-full bg-black/70 backdrop-blur-md border border-white/10 text-[10px] text-emerald-300 font-mono tracking-wide">
-                            Aponte sucessivamente para as embalagens da prateleira
-                          </span>
-                        </div>
+                        {/* Erro de Câmera / Permissão */}
+                        {cameraError && (
+                          <div className="absolute inset-0 bg-slate-900/95 backdrop-blur-xs flex flex-col items-center justify-center p-4 text-center space-y-3 z-40">
+                            <AlertTriangle className="w-10 h-10 text-amber-400" />
+                            <p className="text-xs text-white max-w-sm">{cameraError}</p>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (continuousVideoRef.current) startScanning(continuousVideoRef.current);
+                              }}
+                              className="px-4 py-2 rounded-xl bg-emerald-600 text-white text-xs font-bold hover:bg-emerald-700 shadow-md"
+                            >
+                              Tentar Acessar Câmera Novamente
+                            </button>
+                          </div>
+                        )}
                       </div>
 
-                      {/* Erro de Câmera / Permissão */}
-                      {cameraError && (
-                        <div className="absolute inset-0 bg-slate-900/90 backdrop-blur-xs flex flex-col items-center justify-center p-4 text-center space-y-3">
-                          <AlertTriangle className="w-8 h-8 text-amber-400" />
-                          <p className="text-xs text-white max-w-sm">{cameraError}</p>
+                      {/* BARRA DE CONTROLE AVANÇADO DE ZOOM E FOCO */}
+                      <div className="p-3 rounded-2xl bg-slate-900 text-white border border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-3 shadow-md">
+                        {/* Seletor Rápido de Zoom (1x, 1.5x, 2x, 3x) */}
+                        <div className="flex items-center gap-2 w-full sm:w-auto">
+                          <span className="text-[11px] font-bold text-slate-400 flex items-center gap-1 shrink-0">
+                            <ZoomIn className="w-3.5 h-3.5 text-emerald-400" />
+                            Zoom:
+                          </span>
+                          <div className="flex items-center gap-1.5 flex-1 sm:flex-initial">
+                            {[1, 1.5, 2, 2.5, 3].map((level) => (
+                              <button
+                                key={level}
+                                type="button"
+                                onClick={() => setZoom(level)}
+                                className={`px-2.5 py-1 rounded-xl text-[11px] font-black transition cursor-pointer ${
+                                  Math.abs(zoom - level) < 0.15
+                                    ? 'bg-emerald-500 text-white shadow-xs'
+                                    : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+                                }`}
+                              >
+                                {level}x
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        {/* Slider Fino de Zoom */}
+                        <div className="flex items-center gap-2 w-full sm:w-44">
+                          <input
+                            type="range"
+                            min={zoomCapabilities.min}
+                            max={zoomCapabilities.max}
+                            step={zoomCapabilities.step}
+                            value={zoom}
+                            onChange={(e) => setZoom(parseFloat(e.target.value))}
+                            className="w-full h-1.5 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-emerald-500"
+                            aria-label="Ajuste de Zoom da Câmera"
+                          />
+                          <span className="text-[10px] font-mono text-emerald-400 font-bold w-8 text-right">
+                            {zoom.toFixed(1)}x
+                          </span>
+                        </div>
+
+                        {/* Botões de Foco e Calibração */}
+                        <div className="flex items-center gap-1.5 w-full sm:w-auto justify-end">
                           <button
                             type="button"
-                            onClick={() => {
-                              if (continuousVideoRef.current) startScanning(continuousVideoRef.current);
-                            }}
-                            className="px-4 py-2 rounded-xl bg-emerald-600 text-white text-xs font-bold hover:bg-emerald-700"
+                            onClick={() => triggerAutoFocus()}
+                            className="px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-750 text-slate-200 text-xs font-bold transition flex items-center gap-1 border border-slate-700 cursor-pointer"
+                            title="Refocar lente da câmera"
                           >
-                            Tentar Acessar Câmera Novamente
+                            <Target className="w-3.5 h-3.5 text-emerald-400" />
+                            <span>Re-focar</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => setFocusMode(focusMode === 'macro' ? 'continuous' : 'macro')}
+                            className={`px-2.5 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1 border cursor-pointer ${
+                              focusMode === 'macro'
+                                ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+                                : 'bg-slate-800 text-slate-200 border-slate-700 hover:bg-slate-750'
+                            }`}
+                            title="Alternar entre modo Macro (bipagem muito próxima) e Contínuo"
+                          >
+                            <Sliders className="w-3.5 h-3.5 text-amber-400" />
+                            <span>{focusMode === 'macro' ? 'Macro' : 'Normal'}</span>
                           </button>
                         </div>
-                      )}
+                      </div>
                     </div>
                   ) : (
-                    <div className="p-6 rounded-2xl bg-slate-100 dark:bg-slate-800 border border-dashed border-slate-300 dark:border-slate-700 text-center space-y-2">
-                      <CameraOff className="w-8 h-8 text-slate-400 mx-auto" />
-                      <p className="text-xs font-bold text-slate-700 dark:text-slate-300">
+                    <div className="p-8 rounded-3xl bg-slate-100 dark:bg-slate-800 border-2 border-dashed border-slate-300 dark:border-slate-700 text-center space-y-2">
+                      <CameraOff className="w-10 h-10 text-slate-400 mx-auto" />
+                      <p className="text-sm font-bold text-slate-700 dark:text-slate-200">
                         Câmera Contínua Pausada
                       </p>
-                      <p className="text-[11px] text-slate-400 max-w-sm mx-auto">
+                      <p className="text-xs text-slate-400 max-w-sm mx-auto">
                         Clique no botão acima "Ativar Câmera" para retomar a conferência contínua com bipagem instantânea.
                       </p>
                     </div>
