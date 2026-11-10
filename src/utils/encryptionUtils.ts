@@ -22,21 +22,41 @@ const MASTER_KEY =
 export interface DecryptedProduct {
   id: string;
   nome: string;               // Descriptografado em RAM (Descrição do produto)
+  produto: string;            // Alias compatível para descrição do produto
   codigo_fornecedor: string;  // Descriptografado em RAM (Código de fornecedor)
+  codigoFornecedor: string;   // Alias compatível
   plu: string;                // Descriptografado em RAM (Código Reduzido)
+  codigoReduzido: string;     // Alias compatível
   codigo_barras: string;      // Descriptografado em RAM (Código EAN)
+  codigoBarras: string;       // Alias compatível
   setor: string;              // Setor (FRIOS, AÇOUGUE, PEIXARIA, MERCEARIA, PADARIA, BAZAR)
   quantidade: number;         // Numérico para operações matemáticas de estoque
-  loja_id: string;
-  is_encrypted: boolean;
+  loja_id?: string;
+  lojaId?: string;
+  is_encrypted?: boolean;
+  isEncrypted?: boolean;
   criado_em?: number;
   data_vencimento?: string;
   // Guarda referência cifrada bruta apenas para auditoria visual se necessário
   _rawCiphertext?: {
     nome?: string;
+    produto?: string;
     codigo_fornecedor?: string;
+    codigoFornecedor?: string;
     plu?: string;
+    codigoReduzido?: string;
     codigo_barras?: string;
+    codigoBarras?: string;
+  };
+  rawCiphertext?: {
+    nome?: string;
+    produto?: string;
+    codigo_fornecedor?: string;
+    codigoFornecedor?: string;
+    plu?: string;
+    codigoReduzido?: string;
+    codigo_barras?: string;
+    codigoBarras?: string;
   };
 }
 
@@ -90,24 +110,40 @@ export function decryptDatabaseProduct(raw: Record<string, unknown>, secretKey =
   const rawPlu = String(raw.plu || raw.reducedCode || '');
   const rawBarras = String(raw.codigo_barras || raw.ean || '');
 
+  const decNome = decryptSingleField(rawNome, secretKey);
+  const decForn = decryptSingleField(rawFornecedor, secretKey);
+  const decPlu = decryptSingleField(rawPlu, secretKey);
+  const decBarras = decryptSingleField(rawBarras, secretKey);
+
+  const rawCiph = {
+    nome: rawNome,
+    produto: rawNome,
+    codigo_fornecedor: rawFornecedor,
+    codigoFornecedor: rawFornecedor,
+    plu: rawPlu,
+    codigoReduzido: rawPlu,
+    codigo_barras: rawBarras,
+    codigoBarras: rawBarras,
+  };
+
   return {
     id: String(raw.id || `ram-${Math.random().toString(36).substring(2, 9)}`),
-    nome: decryptSingleField(rawNome, secretKey),
-    codigo_fornecedor: decryptSingleField(rawFornecedor, secretKey),
-    plu: decryptSingleField(rawPlu, secretKey),
-    codigo_barras: decryptSingleField(rawBarras, secretKey),
+    nome: decNome,
+    produto: decNome,
+    codigo_fornecedor: decForn,
+    codigoFornecedor: decForn,
+    plu: decPlu,
+    codigoReduzido: decPlu,
+    codigo_barras: decBarras,
+    codigoBarras: decBarras,
     setor: String(raw.setor || raw.category || 'MERCEARIA'),
     quantidade: Math.max(0, Number(raw.quantidade ?? raw.stock ?? 0)),
     loja_id: String(raw.loja_id || 'loja_padrao_001'),
     is_encrypted: Boolean(raw.is_encrypted ?? isEncrypted(rawNome)),
     criado_em: typeof raw.criado_em === 'number' ? raw.criado_em : Date.now(),
     data_vencimento: String(raw.data_vencimento || ''),
-    _rawCiphertext: {
-      nome: rawNome,
-      codigo_fornecedor: rawFornecedor,
-      plu: rawPlu,
-      codigo_barras: rawBarras,
-    },
+    _rawCiphertext: rawCiph,
+    rawCiphertext: rawCiph,
   };
 }
 
@@ -119,3 +155,10 @@ export function decryptProductList(rawList: Array<Record<string, unknown>>, secr
   if (!Array.isArray(rawList)) return [];
   return rawList.map(item => decryptDatabaseProduct(item, secretKey));
 }
+
+// Aliases para compatibilidade total com ImportadorEstoque
+export const ENCRYPTION_KEY = MASTER_KEY;
+export const encryptField = encryptSingleField;
+export const decryptField = decryptSingleField;
+export const decryptProductsList = decryptProductList;
+

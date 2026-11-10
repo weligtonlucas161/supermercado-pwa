@@ -206,14 +206,6 @@ const ProductCard: React.FC<ProductCardProps> = ({
           <div className="space-y-1">
             <div className="flex items-center gap-2 flex-wrap">
               <h4 className="text-xs font-bold text-slate-900 dark:text-white">{product.name}</h4>
-              {product.isEncryptedInStorage && (
-                <span 
-                  className="text-[10px] font-bold px-1.5 py-0.2 rounded bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 flex items-center gap-1" 
-                  title="Criptografado com AES-256 no banco e descriptografado no software"
-                >
-                  <Lock className="w-2.5 h-2.5" /> Protegido AES
-                </span>
-              )}
               {isLow && (
                 <span className="bg-amber-500/15 text-amber-700 dark:text-amber-400 text-[10px] px-2 py-0.5 rounded-md font-bold border border-amber-500/20 flex items-center gap-1">
                   <AlertTriangle className="w-3 h-3 text-amber-500" /> Ruptura Iminente
@@ -293,24 +285,51 @@ export const EstoqueTab: React.FC = () => {
     isSyncingWithDatabase,
     lastDatabaseSyncTime 
   } = useApp();
+  type SortOption = 'default' | 'qtd-desc' | 'qtd-asc' | 'name-asc' | 'name-desc' | 'forn-asc';
+
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('all');
+  const [sortBy, setSortBy] = useState<SortOption>('default');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isSpreadsheetModalOpen, setIsSpreadsheetModalOpen] = useState(false);
 
   // Modal de Confirmação de Remoção de Produto
   const [productToDelete, setProductToDelete] = useState<Product | null>(null);
 
+  // 1. Produtos em Ruptura Iminente (Estoque <= Mínimo ou Zerado)
+  const ruptureProducts = products.filter(p => p.stock <= p.minStock || p.stock === 0);
+  const hasRuptures = ruptureProducts.length > 0;
+  const [stockSubTab, setStockSubTab] = useState<'todos' | 'rupturas'>('todos');
+
   const categories = ['all', ...Array.from(new Set(products.map(p => p.category)))];
 
-  const filtered = products.filter(p => {
-    const matchesSearch =
-      p.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      p.ean.includes(searchTerm) ||
-      (p.location ? p.location.toLowerCase().includes(searchTerm.toLowerCase()) : false);
-    const matchesCategory = selectedCategory === 'all' || p.category === selectedCategory;
-    return matchesSearch && matchesCategory;
-  });
+  // Base filtrada pela sub-aba ativa se houver rupturas
+  const baseProducts = (stockSubTab === 'rupturas' && hasRuptures) ? ruptureProducts : products;
+
+  // Busca Multicampos: Nome, EAN, Código Reduzido, Código de Fornecedor
+  const filtered = baseProducts
+    .filter(p => {
+      const term = searchTerm.toLowerCase().trim();
+      const matchesCategory = selectedCategory === 'all' || p.category === selectedCategory;
+      if (!term) return matchesCategory;
+
+      const matchesSearch =
+        p.name.toLowerCase().includes(term) ||
+        p.ean.includes(term) ||
+        (p.reducedCode ? p.reducedCode.toLowerCase().includes(term) : false) ||
+        (p.supplierCode ? p.supplierCode.toLowerCase().includes(term) : false) ||
+        (p.location ? p.location.toLowerCase().includes(term) : false);
+
+      return matchesSearch && matchesCategory;
+    })
+    .sort((a, b) => {
+      if (sortBy === 'qtd-desc') return b.stock - a.stock;
+      if (sortBy === 'qtd-asc') return a.stock - b.stock;
+      if (sortBy === 'name-asc') return a.name.localeCompare(b.name, 'pt-BR');
+      if (sortBy === 'name-desc') return b.name.localeCompare(a.name, 'pt-BR');
+      if (sortBy === 'forn-asc') return (a.supplierCode || '').localeCompare(b.supplierCode || '', 'pt-BR');
+      return 0;
+    });
 
   const handleScanForSearch = () => {
     openScanner((scannedEan) => {
@@ -372,40 +391,179 @@ export const EstoqueTab: React.FC = () => {
         </div>
       </div>
 
+      {/* INTERFACE EXCLUSIVA DE RUPTURAS IMINENTES (SÓ APARECE QUANDO HÁ PRODUTOS NESSE ESTADO) */}
+      {hasRuptures && (
+        <div className="p-4 rounded-3xl bg-gradient-to-r from-amber-500/15 via-amber-500/10 to-rose-500/10 border-2 border-amber-500/40 shadow-sm space-y-3 animate-in fade-in slide-in-from-top-2 duration-300">
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <div className="flex items-center gap-2">
+              <div className="p-2 rounded-2xl bg-amber-500 text-slate-950 shadow-sm">
+                <AlertTriangle className="w-5 h-5 animate-bounce" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h3 className="font-black text-sm text-slate-900 dark:text-white">
+                    Alerta de Rupturas Iminentes
+                  </h3>
+                  <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-amber-500 text-slate-950 uppercase tracking-wide">
+                    {ruptureProducts.length} {ruptureProducts.length === 1 ? 'Produto Crítico' : 'Produtos Críticos'}
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                  Estes produtos atingiram o estoque de segurança ou estão zerados. Reponha ou contate o fornecedor imediatamente.
+                </p>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setStockSubTab(prev => prev === 'rupturas' ? 'todos' : 'rupturas')}
+              className={`px-3 py-1.5 rounded-xl font-black text-xs transition cursor-pointer flex items-center gap-1.5 shadow-xs ${
+                stockSubTab === 'rupturas'
+                  ? 'bg-amber-600 text-white'
+                  : 'bg-amber-500/20 text-amber-800 dark:text-amber-300 hover:bg-amber-500/30'
+              }`}
+            >
+              <span>{stockSubTab === 'rupturas' ? 'Ver Todos os Produtos' : 'Filtrar Somente Rupturas'}</span>
+              <span>→</span>
+            </button>
+          </div>
+
+          {/* Cards Rápidos de Ruptura (Carrossel Horizontal) */}
+          <div className="flex gap-2.5 overflow-x-auto pb-1 scrollbar-thin">
+            {ruptureProducts.slice(0, 8).map(prod => (
+              <div
+                key={`rupture-card-${prod.id}`}
+                className="min-w-[210px] p-3 rounded-2xl bg-white dark:bg-slate-900 border border-amber-500/30 shadow-xs flex flex-col justify-between space-y-2 shrink-0"
+              >
+                <div>
+                  <div className="flex items-center justify-between text-[10px] text-slate-400 font-bold uppercase">
+                    <span>{prod.category}</span>
+                    <span className="text-amber-600 dark:text-amber-400 font-mono">EAN: {prod.ean.slice(-5)}</span>
+                  </div>
+                  <h4 className="font-extrabold text-xs text-slate-900 dark:text-white line-clamp-1 mt-0.5" title={prod.name}>
+                    {prod.name}
+                  </h4>
+                  <div className="flex items-center gap-2 mt-1">
+                    <span className="text-sm font-black text-amber-600 dark:text-amber-400">
+                      {prod.stock} un
+                    </span>
+                    <span className="text-[10px] text-slate-400">
+                      (Mínimo: {prod.minStock} un)
+                    </span>
+                  </div>
+                </div>
+
+                <div className="pt-2 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between">
+                  <span className="text-[10px] text-slate-400 font-mono truncate max-w-[110px]">
+                    {prod.supplierCode ? `Forn: ${prod.supplierCode}` : 'Gôndola'}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => updateProductStock(prod.id, { delta: 1 })}
+                    className="px-2 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[10px] transition shadow-xs flex items-center gap-1 cursor-pointer"
+                    title="Adicionar 1 unidade ao estoque"
+                  >
+                    <Plus className="w-3 h-3" />
+                    <span>Repor +1</span>
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ABA CONDICIONAL: SÓ APARECE QUANDO HÁ PRODUTOS EM RUPTURA IMINENTE */}
+      {hasRuptures && (
+        <div className="flex items-center gap-2 border-b border-slate-200 dark:border-slate-800 pb-2">
+          <button
+            type="button"
+            onClick={() => setStockSubTab('todos')}
+            className={`px-4 py-2 rounded-2xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
+              stockSubTab === 'todos'
+                ? 'bg-emerald-600 text-white shadow-md shadow-emerald-600/25 ring-2 ring-emerald-500/30'
+                : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700 hover:bg-slate-100'
+            }`}
+          >
+            <Package className="w-4 h-4" />
+            <span>Todos os Produtos ({products.length})</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setStockSubTab('rupturas')}
+            className={`px-4 py-2 rounded-2xl text-xs font-black transition flex items-center gap-1.5 cursor-pointer border ${
+              stockSubTab === 'rupturas'
+                ? 'bg-amber-500 text-slate-950 border-amber-600 shadow-md ring-2 ring-amber-400/50'
+                : 'bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/30 hover:bg-amber-500/20'
+            }`}
+          >
+            <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0" />
+            <span>Aba Rupturas Iminentes ({ruptureProducts.length})</span>
+            <span className="text-[9px] px-1.5 py-0.2 rounded-full bg-amber-400/80 text-slate-950 font-black">
+              Crítico
+            </span>
+          </button>
+        </div>
+      )}
+
       {/* Dica de Uso de Gestos */}
       <div className="px-3.5 py-2 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/80 dark:border-slate-700 text-[11px] text-slate-500 dark:text-slate-400 flex items-center justify-between">
         <span>💡 Dica: <strong>Pressione um produto</strong> para mudar para vermelho com lixeira, ou <strong>arraste para o lado</strong> para remover.</span>
       </div>
 
-      {/* Busca & Scanner Trigger */}
-      <div className="flex gap-2">
+      {/* Busca, Filtro de Ordenação e Scanner Trigger */}
+      <div className="flex flex-col sm:flex-row gap-2">
         <div className="relative flex-1">
           <Search className="w-4 h-4 absolute left-3 top-3 text-slate-400" />
           <input
             type="text"
-            placeholder="Nome, EAN ou localização..."
+            placeholder="Buscar por nome, EAN, cód. reduzido ou fornecedor..."
             value={searchTerm}
-                onChange={e => setSearchTerm(e.target.value)}
-                className={`w-full pl-9 pr-4 py-2.5 rounded-2xl text-xs border focus:outline-none focus:ring-2 focus:ring-emerald-500 transition ${
-                  darkMode
-                    ? 'bg-slate-800/80 border-slate-700 text-slate-100 placeholder:text-slate-500'
-                    : 'bg-white border-slate-200 text-slate-800 placeholder:text-slate-400'
-                }`}
-              />
-            </div>
-            <button
-              onClick={handleScanForSearch}
-              className={`p-2.5 rounded-2xl border transition flex items-center gap-1.5 text-xs font-semibold ${
+            onChange={e => setSearchTerm(e.target.value)}
+            className={`w-full pl-9 pr-4 py-2.5 rounded-2xl text-xs border focus:outline-none focus:ring-2 focus:ring-emerald-500 transition ${
+              darkMode
+                ? 'bg-slate-800/80 border-slate-700 text-slate-100 placeholder:text-slate-500'
+                : 'bg-white border-slate-200 text-slate-800 placeholder:text-slate-400'
+            }`}
+          />
+        </div>
+
+        <div className="flex items-center gap-2">
+          {/* Seletor de Ordenação */}
+          <div className="relative flex-1 sm:flex-initial">
+            <select
+              value={sortBy}
+              onChange={e => setSortBy(e.target.value as SortOption)}
+              className={`w-full sm:w-auto px-3.5 py-2.5 rounded-2xl text-xs font-bold border transition focus:outline-none focus:ring-2 focus:ring-emerald-500 cursor-pointer ${
                 darkMode
-                  ? 'bg-slate-800 border-slate-700 text-slate-200 hover:bg-slate-700'
-                  : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
+                  ? 'bg-slate-800 border-slate-700 text-slate-200'
+                  : 'bg-white border-slate-200 text-slate-700'
               }`}
-              title="Bipar código de barras com Barcode Detector API"
             >
-              <Barcode className="w-5 h-5 text-emerald-500" />
-              <span className="hidden sm:inline">Bipar</span>
-            </button>
+              <option value="default">Padrão (Recentes)</option>
+              <option value="qtd-desc">Maior Quantidade → Menor</option>
+              <option value="qtd-asc">Menor Quantidade → Maior</option>
+              <option value="name-asc">Nome (A-Z)</option>
+              <option value="name-desc">Nome (Z-A)</option>
+              <option value="forn-asc">Código de Fornecedor</option>
+            </select>
           </div>
+
+          <button
+            onClick={handleScanForSearch}
+            className={`p-2.5 rounded-2xl border transition flex items-center gap-1.5 text-xs font-semibold shrink-0 cursor-pointer ${
+              darkMode
+                ? 'bg-slate-800 border-slate-700 text-slate-200 hover:bg-slate-700'
+                : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
+            }`}
+            title="Bipar código de barras com Barcode Detector API"
+          >
+            <Barcode className="w-5 h-5 text-emerald-500" />
+            <span className="hidden sm:inline">Bipar</span>
+          </button>
+        </div>
+      </div>
 
           {/* Categorias (Filtro Horizontal) */}
           <div className="flex gap-1.5 overflow-x-auto pb-1 scrollbar-none">

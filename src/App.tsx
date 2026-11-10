@@ -18,17 +18,43 @@ import { AuditoriaTab } from './components/tabs/AuditoriaTab';
 import { LojaTab } from './components/tabs/LojaTab';
 import { ConfiguracoesTab } from './components/tabs/ConfiguracoesTab';
 
+import { FirstLoginPasswordModal } from './components/auth/FirstLoginPasswordModal';
+
 function AppContent() {
-  const { activeTab, darkMode, effectiveOnline, isAuthenticated, isSaasAdmin } = useApp();
+  const { 
+    activeTab, 
+    darkMode, 
+    effectiveOnline, 
+    isAuthenticated, 
+    isSaasAdmin, 
+    currentUser, 
+    updateUserPassword 
+  } = useApp();
 
   // 1. Se não estiver autenticado, exibe a tela de login
   if (!isAuthenticated) {
     return <LoginScreen />;
   }
 
-  // 2. Se for o Administrador de SaaS (@200309 / 2003@09), renderiza a página exclusiva de gestão de servidor
+  // 2. Modal Obrigatório de Alteração de Senha no Primeiro Login (para todos os usuários inclusive SaaS Admin)
+  const isFirstLogin = Boolean(currentUser && currentUser.primeiro_login);
+
+  // 3. Se for o Administrador de SaaS (@200309 / 2003@09), renderiza a página exclusiva de gestão de servidor
   if (isSaasAdmin) {
-    return <AdminSaasScreen />;
+    return (
+      <>
+        <AdminSaasScreen />
+        {isFirstLogin && (
+          <FirstLoginPasswordModal
+            isOpen={true}
+            matricula={currentUser?.matricula || '@200309'}
+            userName={currentUser?.nome || 'Administrador SaaS'}
+            isSaasAdmin={true}
+            onPasswordChanged={updateUserPassword}
+          />
+        )}
+      </>
+    );
   }
 
   // 3. Painel Operacional da Loja (Operadores e Gerentes de Loja)
@@ -67,6 +93,17 @@ function AppContent() {
 
       {/* Modal Global do Leitor de Código de Barras */}
       <BarcodeModal />
+
+      {/* Modal Obrigatório de Alteração de Senha no Primeiro Login */}
+      {isFirstLogin && (
+        <FirstLoginPasswordModal
+          isOpen={true}
+          matricula={currentUser?.matricula || ''}
+          userName={currentUser?.nome || 'Usuário'}
+          isSaasAdmin={false}
+          onPasswordChanged={updateUserPassword}
+        />
+      )}
     </div>
   );
 }

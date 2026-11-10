@@ -42,10 +42,11 @@ interface ConfirmedProductItem {
   reducedCode?: string;
   supplierCode?: string;
   scannedAt: string;
+  scannedBy?: string;
 }
 
 export const AuditoriaTab: React.FC = () => {
-  const { products, audits, addAudit, operator, darkMode, openScanner } = useApp();
+  const { products, audits, addAudit, updateAudit, operator, darkMode, openScanner } = useApp();
 
   // Interface Ativa das 4 requeridas
   const [activeInterface, setActiveInterface] = useState<AuditoriaInterface>('presenca');
@@ -69,11 +70,26 @@ export const AuditoriaTab: React.FC = () => {
     ean?: string;
   } | null>(null);
 
+  // Efeito Visual de Bipagem: Piscar Bordas da Interface
+  // verde = sucesso; amarelo = duplo por si mesmo; vermelho = sem resultado; laranja = feito por outro membro
+  const [scanFlashBorder, setScanFlashBorder] = useState<'green' | 'yellow' | 'red' | 'orange' | null>(null);
+  const flashTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  const triggerBorderFlash = useCallback((color: 'green' | 'yellow' | 'red' | 'orange') => {
+    if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
+    setScanFlashBorder(color);
+    flashTimerRef.current = setTimeout(() => {
+      setScanFlashBorder(null);
+    }, 1000);
+  }, []);
+
   // Sub-Aba dentro da auditoria ativa (Pendentes vs Confirmados)
   const [viewListTab, setViewListTab] = useState<'pendentes' | 'confirmados'>('pendentes');
 
   // Modal de Detalhes de Auditoria do Relatório
   const [selectedAuditForModal, setSelectedAuditForModal] = useState<AuditItem | null>(null);
+  const [modalActiveTab, setModalActiveTab] = useState<'bipados' | 'nao_bipados' | 'rupturas'>('bipados');
+  const [modalFeedback, setModalFeedback] = useState<string | null>(null);
 
   // Referências para evitar stale state durante o streaming contínuo a 30fps
   const pendentesRef = useRef<Product[]>([]);
@@ -100,6 +116,20 @@ export const AuditoriaTab: React.FC = () => {
   const processContinuousBarcode = useCallback((scannedCode: string) => {
     const cleanEan = scannedCode.replace(/[^0-9A-Za-z]/g, '').trim();
     if (!cleanEan) return;
+
+    // Validação de setor do operador: Somente pessoal daquele setor participa
+    const isManager = operator.role === 'gerente' || operator.role === 'saas_admin' || operator.role === 'adm';
+    if (!isManager && operator.setor_restrito && operator.setor_restrito !== 'TODOS') {
+      if (operator.setor_restrito.toUpperCase() !== sessionSetor.toUpperCase()) {
+        triggerScanBeep(false);
+        triggerBorderFlash('red');
+        setLastBipFeedback({
+          type: 'error',
+          message: `Acesso Restrito: Somente operadores vinculados ao setor ${sessionSetor} podem bipar itens nesta sessão. Seu setor registrado é ${operator.setor_restrito}.`,
+        });
+        return;
+      }
+    }
 
     const currentPendentes = pendentesRef.current;
     const currentConfirmados = confirmadosRef.current;
@@ -128,7 +158,7 @@ export const AuditoriaTab: React.FC = () => {
       pendentesRef.current = newPendentes;
       setPendentes(newPendentes);
 
-      // Adiciona em confirmados e atualiza ref imediatamente
+      // Adiciona em confirmados e atualiza ref imediatamente com operador responsável
       const confirmedItem: ConfirmedProductItem = {
         id: foundProduct.id,
         name: foundProduct.name,
@@ -136,13 +166,15 @@ export const AuditoriaTab: React.FC = () => {
         reducedCode: foundProduct.reducedCode,
         supplierCode: foundProduct.supplierCode,
         scannedAt: nowTime,
+        scannedBy: operator.name || 'Operador',
       };
       const newConfirmados = [confirmedItem, ...currentConfirmados];
       confirmadosRef.current = newConfirmados;
       setConfirmados(newConfirmados);
 
-      // Bip sonoro e feedback visual
+      // Bip sonoro e feedback visual com borda VERDE
       triggerScanBeep(true);
+      triggerBorderFlash('green');
       setLastBipFeedback({
         type: 'success',
         message: `✓ Confirmado: "${foundProduct.name}"`,
@@ -161,24 +193,40 @@ export const AuditoriaTab: React.FC = () => {
     });
 
     if (alreadyConfirmed) {
-      setLastBipFeedback({
-        type: 'warning',
-        message: `Item já conferido: "${alreadyConfirmed.name}" às ${alreadyConfirmed.scannedAt}`,
-        ean: cleanEan,
-      });
+      const isOtherOperator = alreadyConfirmed.scannedBy && 
+        alreadyConfirmed.scannedBy.toLowerCase() !== (operator.name || 'Operador').toLowerCase();
+
+      if (isOtherOperator) {
+        // Bipagem feita por outro membro da seção: piscar LARANJA
+        triggerBorderFlash('orange');
+        setLastBipFeedback({
+          type: 'warning',
+          message: `Item já conferido por outro operador (${alreadyConfirmed.scannedBy}) às ${alreadyConfirmed.scannedAt}`,
+          ean: cleanEan,
+        });
+      } else {
+        // Bipagem dupla pelo próprio operador: piscar AMARELO
+        triggerBorderFlash('yellow');
+        setLastBipFeedback({
+          type: 'warning',
+          message: `Item já conferido por você: "${alreadyConfirmed.name}" às ${alreadyConfirmed.scannedAt}`,
+          ean: cleanEan,
+        });
+      }
       setManualBarcodeInput('');
       return;
     }
 
-    // 3. Código não encontrado entre os itens pendentes do setor
+    // 3. Código não encontrado entre os itens pendentes do setor: piscar VERMELHO
     triggerScanBeep(false);
+    triggerBorderFlash('red');
     setLastBipFeedback({
       type: 'error',
       message: `Código ${cleanEan} não consta nos pendentes deste setor (${sessionSetor}).`,
       ean: cleanEan,
     });
     setManualBarcodeInput('');
-  }, [sessionSetor]);
+  }, [operator.name, sessionSetor, triggerBorderFlash]);
 
   // Hook do Leitor com Google Barcode Service + ZXing tryHarder
   const {
@@ -211,6 +259,20 @@ export const AuditoriaTab: React.FC = () => {
   // AÇÕES DA AUDITORIA DE PRESENÇA
   // =========================================================================
   const handleStartPresenceAudit = () => {
+    // Restrição Estrita por Setor: Somente operadores daquele setor podem participar
+    const isManager = operator.role === 'gerente' || operator.role === 'saas_admin' || operator.role === 'adm';
+    if (!isManager && operator.setor_restrito && operator.setor_restrito !== 'TODOS') {
+      if (operator.setor_restrito.toUpperCase() !== selectedSetor.toUpperCase()) {
+        triggerScanBeep(false);
+        triggerBorderFlash('red');
+        setLastBipFeedback({
+          type: 'error',
+          message: `Acesso Restrito: Somente operadores do setor ${selectedSetor} podem participar desta auditoria. Seu setor registrado é ${operator.setor_restrito}.`,
+        });
+        return;
+      }
+    }
+
     const sectorProducts = products.filter(
       p => p.category?.toUpperCase() === selectedSetor.toUpperCase()
     );
@@ -249,6 +311,21 @@ export const AuditoriaTab: React.FC = () => {
     const totalItems = confirmados.length + pendentes.length;
     const rate = totalItems > 0 ? ((confirmados.length / totalItems) * 100).toFixed(0) : '0';
 
+    // Itens em ruptura iminente do setor da auditoria (estoque <= mínimo ou zerado)
+    const sectorProducts = products.filter(
+      p => p.category?.toUpperCase() === sessionSetor.toUpperCase()
+    );
+    const ruptureItems = sectorProducts
+      .filter(p => p.stock <= (p.minStock ?? 5) || p.stock === 0)
+      .map(p => ({
+        name: p.name,
+        ean: p.ean,
+        reducedCode: p.reducedCode,
+        supplierCode: p.supplierCode,
+        stock: p.stock,
+        minStock: p.minStock ?? 5,
+      }));
+
     addAudit({
       title: `Auditoria de Presença - ${sessionSetor}`,
       itemsCount: confirmados.length,
@@ -260,8 +337,23 @@ export const AuditoriaTab: React.FC = () => {
       confirmedItems: confirmados.length,
       pendingItems: pendentes.length,
       presenceRate: `${rate}%`,
-      confirmedList: confirmados.map(c => ({ name: c.name, ean: c.ean, scannedAt: c.scannedAt })),
-      pendingList: pendentes.map(p => ({ name: p.name, ean: p.ean })),
+      confirmedList: confirmados.map(c => ({
+        name: c.name,
+        ean: c.ean,
+        reducedCode: c.reducedCode,
+        supplierCode: c.supplierCode,
+        scannedAt: c.scannedAt,
+        scannedBy: c.scannedBy || operator.name || 'Operador',
+      })),
+      pendingList: pendentes.map(p => ({
+        name: p.name,
+        ean: p.ean,
+        reducedCode: p.reducedCode,
+        supplierCode: p.supplierCode,
+        stock: p.stock,
+        minStock: p.minStock ?? 5,
+      })),
+      ruptureList: ruptureItems,
     });
 
     setIsAuditing(false);
@@ -297,12 +389,84 @@ export const AuditoriaTab: React.FC = () => {
     ? Math.round((confirmados.length / totalSessionProducts) * 100)
     : 0;
 
+  // Bipagem pós-auditoria no relatório para itens não encontrados em área
+  const handleBipMissingItem = (scannedEan: string) => {
+    if (!selectedAuditForModal) return;
+    const cleanEan = scannedEan.replace(/[^0-9A-Za-z]/g, '').trim();
+    if (!cleanEan) return;
+
+    const pendingList = selectedAuditForModal.pendingList || [];
+    const itemIndex = pendingList.findIndex(p => {
+      const pEan = (p.ean || '').replace(/[^0-9A-Za-z]/g, '').trim();
+      const pRed = (p.reducedCode || '').replace(/[^0-9A-Za-z]/g, '').trim();
+      const pSup = (p.supplierCode || '').replace(/[^0-9A-Za-z]/g, '').trim();
+      return pEan === cleanEan || pEan.endsWith(cleanEan) || cleanEan.endsWith(pEan) || pRed === cleanEan || pSup === cleanEan;
+    });
+
+    if (itemIndex === -1) {
+      triggerScanBeep(false);
+      triggerBorderFlash('red');
+      setModalFeedback(`Código ${cleanEan} não consta na lista de itens não bipados deste relatório.`);
+      return;
+    }
+
+    const item = pendingList[itemIndex];
+    const newPendingList = [...pendingList];
+    newPendingList.splice(itemIndex, 1);
+
+    const nowTime = new Date().toLocaleTimeString('pt-BR');
+    const newConfirmedEntry = {
+      name: item.name,
+      ean: item.ean,
+      reducedCode: item.reducedCode,
+      supplierCode: item.supplierCode,
+      scannedAt: nowTime,
+      scannedBy: operator.name || 'Operador',
+    };
+
+    const newConfirmedList = [newConfirmedEntry, ...(selectedAuditForModal.confirmedList || [])];
+    const newConfirmedCount = newConfirmedList.length;
+    const newPendingCount = newPendingList.length;
+    const total = selectedAuditForModal.totalItems ?? (newConfirmedCount + newPendingCount);
+    const newRate = total > 0 ? `${Math.round((newConfirmedCount / total) * 100)}%` : '100%';
+
+    const updatedAudit: AuditItem = {
+      ...selectedAuditForModal,
+      confirmedItems: newConfirmedCount,
+      itemsCount: newConfirmedCount,
+      pendingItems: newPendingCount,
+      presenceRate: newRate,
+      confirmedList: newConfirmedList,
+      pendingList: newPendingList,
+    };
+
+    updateAudit(selectedAuditForModal.id, updatedAudit);
+    setSelectedAuditForModal(updatedAudit);
+    triggerScanBeep(true);
+    triggerBorderFlash('green');
+    setModalFeedback(`✓ Produto "${item.name}" localizado na área, bipado com sucesso e transferido para a lista de Bipados!`);
+  };
+
   return (
-    <div className="space-y-4 animate-in fade-in duration-300">
+    <div className="space-y-4 animate-in fade-in duration-300 relative">
       
       {/* =================================================================== */}
-      {/* HEADER DA ABA AUDITORIA COM SELEÇÃO DAS 4 INTERFACES                */}
+      {/* EFEITO VISUAL DE BIPAGEM: PISCAR BORDAS DA INTERFACE                */}
+      {/* Verde: Sucesso | Amarelo: Duplo | Vermelho: Sem resultado | Laranja: Outro membro */}
       {/* =================================================================== */}
+      {scanFlashBorder && (
+        <div
+          className={`fixed inset-0 pointer-events-none z-50 transition-all duration-150 ${
+            scanFlashBorder === 'green'
+              ? 'ring-8 sm:ring-12 ring-inset ring-emerald-500 shadow-[inset_0_0_90px_rgba(16,185,129,0.75)]'
+              : scanFlashBorder === 'yellow'
+              ? 'ring-8 sm:ring-12 ring-inset ring-amber-400 shadow-[inset_0_0_90px_rgba(251,191,36,0.75)]'
+              : scanFlashBorder === 'orange'
+              ? 'ring-8 sm:ring-12 ring-inset ring-orange-500 shadow-[inset_0_0_90px_rgba(249,115,22,0.75)]'
+              : 'ring-8 sm:ring-12 ring-inset ring-rose-500 shadow-[inset_0_0_90px_rgba(244,63,94,0.75)]'
+          }`}
+        />
+      )}
       <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-3">
         <div>
           <h2 className="text-xl font-black text-slate-900 dark:text-white tracking-tight">
@@ -1136,58 +1300,231 @@ export const AuditoriaTab: React.FC = () => {
               </div>
             </div>
 
-            {/* Listagem de Itens da Auditoria */}
+            {/* Seletor de 3 Abas do Relatório de Auditoria */}
+            <div className="flex border-b border-slate-200 dark:border-slate-800 text-xs gap-1">
+              <button
+                type="button"
+                onClick={() => setModalActiveTab('bipados')}
+                className={`py-2 px-3 font-bold border-b-2 flex items-center gap-1.5 transition cursor-pointer ${
+                  modalActiveTab === 'bipados'
+                    ? 'border-emerald-600 text-emerald-600 dark:text-emerald-400'
+                    : 'border-transparent text-slate-400 hover:text-slate-600'
+                }`}
+              >
+                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" />
+                <span>Itens Bipados ({selectedAuditForModal.confirmedList?.length ?? selectedAuditForModal.confirmedItems ?? 0})</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setModalActiveTab('nao_bipados')}
+                className={`py-2 px-3 font-bold border-b-2 flex items-center gap-1.5 transition cursor-pointer ${
+                  modalActiveTab === 'nao_bipados'
+                    ? 'border-amber-500 text-amber-600 dark:text-amber-400'
+                    : 'border-transparent text-slate-400 hover:text-slate-600'
+                }`}
+              >
+                <AlertTriangle className="w-3.5 h-3.5 text-amber-500" />
+                <span>Não Bipados ({selectedAuditForModal.pendingList?.length ?? selectedAuditForModal.pendingItems ?? 0})</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setModalActiveTab('rupturas')}
+                className={`py-2 px-3 font-bold border-b-2 flex items-center gap-1.5 transition cursor-pointer ${
+                  modalActiveTab === 'rupturas'
+                    ? 'border-rose-500 text-rose-600 dark:text-rose-400'
+                    : 'border-transparent text-slate-400 hover:text-slate-600'
+                }`}
+              >
+                <Tag className="w-3.5 h-3.5 text-rose-500" />
+                <span>Rupturas Iminentes ({selectedAuditForModal.ruptureList?.length ?? 0})</span>
+              </button>
+            </div>
+
+            {/* Feedback de Bipagem Pós-Auditoria */}
+            {modalFeedback && (
+              <div className="p-3 rounded-2xl bg-emerald-500/10 border border-emerald-500/25 text-emerald-800 dark:text-emerald-300 text-xs flex items-center justify-between gap-2 animate-in fade-in">
+                <span>{modalFeedback}</span>
+                <button
+                  type="button"
+                  onClick={() => setModalFeedback(null)}
+                  className="p-1 text-slate-400 hover:text-slate-600"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            )}
+
+            {/* Conteúdo das 3 Abas */}
             <div className="space-y-3 overflow-y-auto flex-1 text-xs">
-              {/* Itens Confirmados */}
-              {selectedAuditForModal.confirmedList && selectedAuditForModal.confirmedList.length > 0 && (
-                <div className="space-y-1.5">
-                  <h5 className="font-bold text-emerald-600 dark:text-emerald-400 flex items-center gap-1.5">
-                    <CheckCircle2 className="w-3.5 h-3.5" />
-                    Itens Confirmados na Gôndola ({selectedAuditForModal.confirmedList.length})
-                  </h5>
-                  <div className="border border-slate-200 dark:border-slate-800 rounded-xl divide-y divide-slate-100 dark:divide-slate-800 max-h-40 overflow-y-auto">
-                    {selectedAuditForModal.confirmedList.map((item, idx) => (
-                      <div key={idx} className="p-2 flex items-center justify-between">
-                        <div>
-                          <p className="font-bold text-slate-900 dark:text-white">{item.name}</p>
-                          <p className="font-mono text-[10px] text-slate-400">EAN: {item.ean}</p>
+              
+              {/* ABA 1: ITENS BIPADOS */}
+              {modalActiveTab === 'bipados' && (
+                <div className="space-y-2">
+                  {!selectedAuditForModal.confirmedList || selectedAuditForModal.confirmedList.length === 0 ? (
+                    <div className="p-6 text-center text-slate-400 rounded-2xl border border-dashed border-slate-200 dark:border-slate-800">
+                      Nenhum item foi bipado nesta auditoria.
+                    </div>
+                  ) : (
+                    <div className="divide-y divide-slate-100 dark:divide-slate-800 border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden">
+                      {selectedAuditForModal.confirmedList.map((item, idx) => (
+                        <div key={idx} className="p-3 flex items-center justify-between bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-850">
+                          <div className="space-y-0.5">
+                            <p className="font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
+                              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+                              <span>{item.name}</span>
+                            </p>
+                            <div className="flex items-center gap-2 text-[10px] text-slate-400 font-mono">
+                              <span>EAN: {item.ean}</span>
+                              {item.reducedCode && <span>• Reduzido: {item.reducedCode}</span>}
+                              {item.supplierCode && <span>• Forn: {item.supplierCode}</span>}
+                            </div>
+                          </div>
+                          <div className="text-right shrink-0">
+                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 block">
+                              Bipado às {item.scannedAt}
+                            </span>
+                            {item.scannedBy && (
+                              <span className="text-[9px] text-slate-400 mt-0.5 block">
+                                por {item.scannedBy}
+                              </span>
+                            )}
+                          </div>
                         </div>
-                        <span className="text-[10px] text-emerald-600 font-semibold">{item.scannedAt}</span>
-                      </div>
-                    ))}
-                  </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               )}
 
-              {/* Itens Pendentes / Faltantes */}
-              {selectedAuditForModal.pendingList && selectedAuditForModal.pendingList.length > 0 && (
-                <div className="space-y-1.5">
-                  <h5 className="font-bold text-amber-600 dark:text-amber-400 flex items-center gap-1.5">
-                    <AlertTriangle className="w-3.5 h-3.5" />
-                    Itens Pendentes / Não Localizados ({selectedAuditForModal.pendingList.length})
-                  </h5>
-                  <div className="border border-slate-200 dark:border-slate-800 rounded-xl divide-y divide-slate-100 dark:divide-slate-800 max-h-40 overflow-y-auto">
-                    {selectedAuditForModal.pendingList.map((item, idx) => (
-                      <div key={idx} className="p-2 flex items-center justify-between bg-amber-500/5">
-                        <div>
-                          <p className="font-bold text-slate-900 dark:text-white">{item.name}</p>
-                          <p className="font-mono text-[10px] text-slate-400">EAN: {item.ean}</p>
-                        </div>
-                        <span className="text-[10px] text-amber-600 font-bold">Falta</span>
-                      </div>
-                    ))}
+              {/* ABA 2: ITENS NÃO BIPADOS (COM BOTÃO DE BIPAGEM PÓS-AUDITORIA) */}
+              {modalActiveTab === 'nao_bipados' && (
+                <div className="space-y-3">
+                  <div className="p-3 rounded-2xl bg-amber-500/10 border border-amber-500/25 text-amber-900 dark:text-amber-200 text-xs flex items-center justify-between gap-2">
+                    <span>
+                      Estes itens não foram encontrados na área durante a contagem. Procure-os nas gôndolas e use o botão <strong>Bipar</strong> para transferi-los para os bipados.
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        openScanner((scannedEan) => {
+                          handleBipMissingItem(scannedEan);
+                        });
+                      }}
+                      className="px-3 py-1.5 rounded-xl bg-amber-500 text-slate-950 font-black text-xs shadow-xs flex items-center gap-1 shrink-0 cursor-pointer hover:bg-amber-400 transition"
+                      title="Abrir câmera para procurar e bipar itens não encontrados"
+                    >
+                      <Barcode className="w-3.5 h-3.5" />
+                      <span>Bipar Câmera</span>
+                    </button>
                   </div>
+
+                  {!selectedAuditForModal.pendingList || selectedAuditForModal.pendingList.length === 0 ? (
+                    <div className="p-8 text-center rounded-2xl border border-dashed border-emerald-500/30 bg-emerald-500/5">
+                      <CheckCircle2 className="w-8 h-8 text-emerald-500 mx-auto mb-1.5" />
+                      <p className="font-bold text-emerald-800 dark:text-emerald-300">
+                        Todos os itens da lista foram localizados e bipados!
+                      </p>
+                      <p className="text-[11px] text-slate-400 mt-0.5">
+                        Não restam itens pendentes nesta auditoria.
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      {selectedAuditForModal.pendingList.map((item, idx) => (
+                        <div 
+                          key={idx}
+                          className="p-3 rounded-2xl border border-amber-500/30 bg-amber-500/5 dark:bg-amber-950/20 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs"
+                        >
+                          <div className="space-y-0.5">
+                            <p className="font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
+                              <AlertTriangle className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+                              <span>{item.name}</span>
+                            </p>
+                            <div className="flex items-center gap-2 text-[10px] text-slate-400 font-mono">
+                              <span>EAN: {item.ean}</span>
+                              {item.reducedCode && <span>• Reduzido: {item.reducedCode}</span>}
+                              {item.supplierCode && <span>• Forn: {item.supplierCode}</span>}
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-2 shrink-0 self-end sm:self-auto">
+                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/30">
+                              Não Localizado
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => handleBipMissingItem(item.ean)}
+                              className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs shadow-sm flex items-center gap-1.5 transition cursor-pointer"
+                              title="Bipar este produto que foi localizado na área"
+                            >
+                              <Barcode className="w-3.5 h-3.5" />
+                              <span>Bipar</span>
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               )}
+
+              {/* ABA 3: RUPTURAS IMINENTES DO SETOR AUDITADO */}
+              {modalActiveTab === 'rupturas' && (
+                <div className="space-y-3">
+                  <div className="p-3 rounded-2xl bg-rose-500/10 border border-rose-500/25 text-rose-900 dark:text-rose-200 text-xs flex items-center gap-2">
+                    <Tag className="w-4 h-4 text-rose-500 shrink-0" />
+                    <span>
+                      Itens do setor <strong>{selectedAuditForModal.department || 'auditado'}</strong> com estoque crítico ou zerado (risco iminente de desabastecimento na gôndola).
+                    </span>
+                  </div>
+
+                  {!selectedAuditForModal.ruptureList || selectedAuditForModal.ruptureList.length === 0 ? (
+                    <div className="p-8 text-center rounded-2xl border border-dashed border-slate-200 dark:border-slate-800 text-slate-400">
+                      Nenhum item em ruptura iminente registrado para este setor.
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      {selectedAuditForModal.ruptureList.map((item, idx) => (
+                        <div
+                          key={idx}
+                          className="p-3 rounded-2xl border border-rose-500/30 bg-rose-500/5 dark:bg-rose-950/20 flex items-center justify-between gap-3 text-xs"
+                        >
+                          <div className="space-y-0.5">
+                            <p className="font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
+                              <span className="w-2 h-2 rounded-full bg-rose-500 animate-pulse shrink-0" />
+                              <span>{item.name}</span>
+                            </p>
+                            <p className="text-[10px] text-slate-400 font-mono">
+                              EAN: {item.ean}
+                            </p>
+                          </div>
+
+                          <div className="text-right shrink-0">
+                            <span className="text-[11px] font-black text-rose-600 dark:text-rose-400 block">
+                              Saldo: {item.stock} un (Mín: {item.minStock} un)
+                            </span>
+                            <span className="text-[9px] font-extrabold uppercase px-1.5 py-0.2 rounded bg-rose-500 text-white mt-0.5 inline-block">
+                              Ruptura Iminente
+                            </span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
             </div>
 
             <div className="pt-2 border-t border-slate-100 dark:border-slate-800 flex justify-end">
               <button
                 type="button"
                 onClick={() => setSelectedAuditForModal(null)}
-                className="px-4 py-2 rounded-xl bg-slate-900 dark:bg-slate-800 text-white text-xs font-bold"
+                className="px-4 py-2 rounded-xl bg-slate-900 dark:bg-slate-800 text-white text-xs font-bold hover:bg-slate-800 transition cursor-pointer"
               >
-                Fechar
+                Fechar Relatório
               </button>
             </div>
           </div>

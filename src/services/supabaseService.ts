@@ -266,6 +266,77 @@ export function getStoredRoles(): StoreRole[] {
 }
 
 /**
+ * Altera a senha do usuário e marca primeiro_login como false
+ */
+export function changeUserPassword(matricula: string, newPassword: string): { success: boolean; message?: string } {
+  const cleanMatricula = matricula.trim();
+  const cleanPassword = newPassword.trim();
+
+  if (cleanPassword.length < 7) {
+    return { success: false, message: 'A nova senha deve ter no mínimo 7 caracteres.' };
+  }
+
+  // 1. Administrador SaaS Master (@200309 ou 111111)
+  if (cleanMatricula === '@200309' || cleanMatricula === '111111') {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('saas_admin_custom_password', cleanPassword);
+      localStorage.setItem('saas_admin_password_changed', 'true');
+    }
+    return { success: true, message: 'Senha do Administrador SaaS alterada com sucesso!' };
+  }
+
+  // 2. Funcionários e Gerentes de Loja
+  const emps = getStoredEmployees();
+  const idx = emps.findIndex(e => e.matricula.toLowerCase() === cleanMatricula.toLowerCase());
+  if (idx >= 0) {
+    emps[idx].senha = cleanPassword;
+    emps[idx].primeiro_login = false;
+    if (typeof window !== 'undefined') {
+      localStorage.setItem(LOCAL_STORAGE_EMPLOYEES_KEY, JSON.stringify(emps));
+    }
+
+    // Sincroniza também no Supabase se cliente estiver ativo
+    if (client) {
+      Promise.resolve(
+        client.rpc('rpc_alterar_senha', {
+          p_matricula: cleanMatricula,
+          p_nova_senha: cleanPassword,
+        })
+      ).catch((err: unknown) => console.warn('Erro ao sincronizar senha no Supabase:', err));
+    }
+
+    return { success: true, message: 'Senha alterada com sucesso!' };
+  }
+
+  return { success: false, message: 'Usuário não encontrado para alteração de senha.' };
+}
+
+/**
+ * Validação de Segurança Ativa: Verifica se o usuário ainda existe e está ativo no servidor
+ */
+export function verifyUserStillActive(matricula: string, lojaId?: string): { active: boolean; companyName?: string } {
+  const cleanMatricula = matricula.trim();
+  if (cleanMatricula === '@200309' || cleanMatricula === '111111') {
+    return { active: true };
+  }
+
+  const emps = getStoredEmployees();
+  const emp = emps.find(e => e.matricula.toLowerCase() === cleanMatricula.toLowerCase());
+
+  // Se o usuário foi removido da base ou está inativo
+  if (!emp || !emp.ativo) {
+    const stores = getStoredStores();
+    const store = stores.find(s => s.id === (lojaId || emp?.loja_id));
+    return {
+      active: false,
+      companyName: store ? store.nome_loja : 'Supermercado Silva',
+    };
+  }
+
+  return { active: true };
+}
+
+/**
  * Autenticação Segura por Matrícula e Senha (Script 03 & SaaS Admin)
  */
 export async function loginUser(matricula: string, senha: string): Promise<LoginResult> {
@@ -273,37 +344,55 @@ export async function loginUser(matricula: string, senha: string): Promise<Login
   const cleanSenha = senha.trim();
 
   // 1. CREDENCIAIS EXCLUSIVAS DO ADMINISTRADOR DE SAAS (MASTER DO SERVIDOR)
-  if (cleanMatricula === '@200309' && cleanSenha === '2003@09') {
-    return {
-      success: true,
-      token: 'tok_saas_adm_master_200309',
-      user: {
-        id: 'usr_saas_adm_master',
-        matricula: '@200309',
-        nome: 'Administrador SaaS Master',
-        cargo: 'saas_admin',
-        setor: 'Infraestrutura do Servidor',
-        loja_id: '',
-        loja_nome: 'Painel Central SaaS (Multi-Lojas)',
-      },
-    };
+  const saasSavedPassword = typeof window !== 'undefined' ? localStorage.getItem('saas_admin_custom_password') : null;
+  const saasPasswordChanged = typeof window !== 'undefined' ? localStorage.getItem('saas_admin_password_changed') === 'true' : false;
+
+  if (cleanMatricula === '@200309' || cleanMatricula === '111111') {
+    const isValid = saasSavedPassword
+      ? cleanSenha === saasSavedPassword
+      : (cleanMatricula === '@200309' ? cleanSenha === '2003@09' : cleanSenha === 'admin123');
+
+    if (isValid) {
+      return {
+        success: true,
+        token: `tok_saas_adm_master_${cleanMatricula}`,
+        user: {
+          id: 'usr_saas_adm_master',
+          matricula: cleanMatricula,
+          nome: 'Administrador do Sistema (SaaS)',
+          cargo: 'saas_admin',
+          setor: 'Infraestrutura Master',
+          loja_id: '',
+          loja_nome: 'Painel Central SaaS (Multi-Lojas)',
+          primeiro_login: !saasPasswordChanged,
+        },
+      };
+    } else {
+      return { success: false, message: 'Senha incorreta para o Administrador SaaS.' };
+    }
   }
 
   // 2. CREDENCIAL DO GERENTE DE LOJA DEMO
-  if (cleanMatricula === 'GER-001' && cleanSenha === 'gerente123') {
-    return {
-      success: true,
-      token: 'tok_gerente_loja_001',
-      user: {
-        id: 'usr_ger_001',
-        matricula: 'GER-001',
-        nome: 'Roberto Gerente',
-        cargo: 'gerente',
-        setor: 'Gerência Geral da Loja',
-        loja_id: 'loja_padrao_001',
-        loja_nome: 'Supermercado Silva - Loja 01 (Matriz)',
-      },
-    };
+  if (cleanMatricula === 'GER-001') {
+    const localEmployees = getStoredEmployees();
+    const gerEmp = localEmployees.find(e => e.matricula === 'GER-001');
+    const validPassword = gerEmp?.senha || 'gerente123';
+    if (cleanSenha === validPassword) {
+      return {
+        success: true,
+        token: 'tok_gerente_loja_001',
+        user: {
+          id: 'usr_ger_001',
+          matricula: 'GER-001',
+          nome: 'Roberto Gerente',
+          cargo: 'gerente',
+          setor: 'Gerência Geral da Loja',
+          loja_id: 'loja_padrao_001',
+          loja_nome: 'Supermercado Silva - Loja 01 (Matriz)',
+          primeiro_login: gerEmp?.primeiro_login ?? true,
+        },
+      };
+    }
   }
 
   // 3. Checagem em funcionários/gerentes cadastrados localmente
@@ -330,6 +419,7 @@ export async function loginUser(matricula: string, senha: string): Promise<Login
         setor: matchedEmp.setor_restrito === 'TODOS' ? 'Geral' : (matchedEmp.setor_restrito || 'Geral'),
         loja_id: matchedEmp.loja_id,
         loja_nome: matchedStore ? matchedStore.nome_loja : 'Supermercado Silva',
+        primeiro_login: matchedEmp.primeiro_login ?? true,
       },
     };
   }
@@ -357,6 +447,7 @@ export async function loginUser(matricula: string, senha: string): Promise<Login
             setor: data.user.setor,
             loja_id: data.user.loja_id || 'loja_padrao_001',
             loja_nome: data.user.loja_nome || 'Supermercado Silva - Loja 01',
+            primeiro_login: data.user.primeiro_login ?? true,
           },
         };
       }
@@ -410,22 +501,6 @@ export async function loginUser(matricula: string, senha: string): Promise<Login
         nome: 'Carlos Silva',
         cargo: 'operador',
         setor: 'Prevenção e Estoque',
-        loja_id: 'loja_padrao_001',
-        loja_nome: 'Supermercado Silva - Loja 01 (Matriz)',
-      },
-    };
-  }
-
-  if (cleanMatricula === '111111' && cleanSenha === 'admin123') {
-    return {
-      success: true,
-      token: 'tok_local_adm_111111',
-      user: {
-        id: 'usr_adm_global_001',
-        matricula: '111111',
-        nome: 'Administrador do Sistema (SaaS)',
-        cargo: 'saas_admin',
-        setor: 'Todos os Setores',
         loja_id: 'loja_padrao_001',
         loja_nome: 'Supermercado Silva - Loja 01 (Matriz)',
       },

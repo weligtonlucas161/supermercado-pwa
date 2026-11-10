@@ -39,7 +39,9 @@ import {
   saveStoreRole,
   getStoredStores,
   getStoredEmployees,
-  getStoredRoles
+  getStoredRoles,
+  changeUserPassword,
+  verifyUserStillActive
 } from '../services/supabaseService';
 
 interface AppContextType {
@@ -70,6 +72,9 @@ interface AppContextType {
   isGerente: boolean;
   login: (matricula: string, senha: string) => Promise<{ success: boolean; message?: string }>;
   logout: () => void;
+  disconnectedMessage: string | null;
+  clearDisconnectedMessage: () => void;
+  updateUserPassword: (newPassword: string) => Promise<{ success: boolean; message?: string }>;
 
   // Lojas & Funcionários (SaaS Admin & Gerente)
   stores: Store[];
@@ -90,6 +95,7 @@ interface AppContextType {
   addValidity: (validity: Omit<ValidityItem, 'id'>) => ValidityItem;
   applyDiscount: (validityId: string, percentage: number) => void;
   addAudit: (audit: Omit<AuditItem, 'id' | 'date'>) => AuditItem;
+  updateAudit: (auditId: string, updated: Partial<AuditItem>) => void;
   resetAllData: () => void;
 
   // Notifications
@@ -330,6 +336,72 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
     return { success: false, message: result.message || 'Falha na autenticação' };
   };
+
+  const [disconnectedMessage, setDisconnectedMessage] = useState<string | null>(null);
+
+  const clearDisconnectedMessage = () => {
+    setDisconnectedMessage(null);
+  };
+
+  const updateUserPassword = async (newPassword: string): Promise<{ success: boolean; message?: string }> => {
+    if (!currentUser) return { success: false, message: 'Nenhum usuário conectado.' };
+    const res = changeUserPassword(currentUser.matricula, newPassword);
+    if (res.success) {
+      const updatedUser: AuthUser = {
+        ...currentUser,
+        primeiro_login: false,
+      };
+      setCurrentUser(updatedUser);
+      saveStoredData(STORAGE_KEYS.AUTH_USER, updatedUser);
+      setOperator(prev => ({ ...prev, primeiro_login: false }));
+    }
+    return res;
+  };
+
+  const updateAudit = (auditId: string, updated: Partial<AuditItem>) => {
+    setAudits(prev => {
+      const idx = prev.findIndex(a => a.id === auditId);
+      if (idx === -1) return prev;
+      const copy = [...prev];
+      copy[idx] = { ...copy[idx], ...updated };
+      saveStoredData(STORAGE_KEYS.AUDITS, copy);
+      return copy;
+    });
+  };
+
+  // Watchdog de Segurança Ativa: Desconecta instantaneamente se o usuário não existir mais no servidor
+  useEffect(() => {
+    if (!isAuthenticated || !currentUser) return;
+    if (currentUser.cargo === 'saas_admin') return;
+
+    const checkActive = () => {
+      const status = verifyUserStillActive(currentUser.matricula, currentUser.loja_id);
+      if (!status.active) {
+        logout();
+        setDisconnectedMessage(`Você foi desconectado por desligamento da empresa ${status.companyName || 'da empresa'}.`);
+        triggerScanBeep(false);
+      }
+    };
+
+    // Verificação periódica a cada 3.5s
+    const timer = setInterval(checkActive, 3500);
+
+    // Ouve alterações no localStorage (ex: gerente desativou ou excluiu funcionário em outra aba)
+    const handleStorageEvent = (e: StorageEvent) => {
+      if (e.key === 'superpwa_employees_data') {
+        checkActive();
+      }
+    };
+
+    window.addEventListener('storage', handleStorageEvent);
+    window.addEventListener('focus', checkActive);
+
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener('storage', handleStorageEvent);
+      window.removeEventListener('focus', checkActive);
+    };
+  }, [isAuthenticated, currentUser]);
 
   const logout = () => {
     setCurrentUser(null);
@@ -609,6 +681,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         isGerente,
         login,
         logout,
+        disconnectedMessage,
+        clearDisconnectedMessage,
+        updateUserPassword,
 
         stores,
         refreshStores,
@@ -627,6 +702,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         addValidity,
         applyDiscount,
         addAudit,
+        updateAudit,
         resetAllData,
 
         notifications,

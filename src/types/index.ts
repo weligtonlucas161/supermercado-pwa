@@ -96,6 +96,7 @@ export interface StoreEmployee {
   setor_restrito?: string; // 'TODOS' ou setor específico e.g. 'MERCEARIA', 'FRIOS'
   loja_id: string;
   ativo: boolean;
+  primeiro_login?: boolean;
   created_at?: string;
 }
 
@@ -107,6 +108,7 @@ export interface AuthUser {
   setor?: string;
   loja_id: string;
   loja_nome?: string;
+  primeiro_login?: boolean;
 }
 
 export interface LoginResult {
@@ -141,8 +143,29 @@ export interface AuditItem {
   confirmedItems?: number;
   pendingItems?: number;
   presenceRate?: string;
-  confirmedList?: Array<{ name: string; ean: string; scannedAt: string }>;
-  pendingList?: Array<{ name: string; ean: string }>;
+  confirmedList?: Array<{ 
+    name: string; 
+    ean: string; 
+    scannedAt: string; 
+    scannedBy?: string;
+    reducedCode?: string;
+    supplierCode?: string;
+  }>;
+  pendingList?: Array<{ 
+    name: string; 
+    ean: string;
+    reducedCode?: string;
+    supplierCode?: string;
+    stock?: number;
+    minStock?: number;
+  }>;
+  ruptureList?: Array<{
+    name: string;
+    ean: string;
+    stock: number;
+    minStock: number;
+    reason?: string;
+  }>;
 }
 
 export interface Operator {
@@ -155,6 +178,7 @@ export interface Operator {
   loja_id: string;      // ID da loja vinculada
   shift: string;
   setor_restrito?: string;
+  primeiro_login?: boolean;
 }
 
 export interface OfflineAction {
