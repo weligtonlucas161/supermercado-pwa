@@ -16,8 +16,6 @@ import { useApp } from '../../context/AppContext';
 export const Header: React.FC = () => {
   const { 
     effectiveOnline, 
-    isSimulatedOffline, 
-    toggleSimulatedOffline, 
     offlineQueue, 
     syncOfflineQueue, 
     notifications, 
@@ -25,14 +23,20 @@ export const Header: React.FC = () => {
     markAllNotificationsAsRead,
     openScanner,
     operator,
-    logout
+    logout,
+    activeTab,
+    setActiveTab,
+    isDesktop,
+    isGerente,
+    currentUser
   } = useApp();
 
   const [showNotifications, setShowNotifications] = useState(false);
+  const hasStoreAccess = isGerente || currentUser?.cargo === 'gerente' || currentUser?.cargo === 'adm';
 
   return (
     <>
-      <header className="sticky top-0 z-30 px-4 py-3 flex items-center justify-between border-b border-slate-200/80 dark:border-slate-800 bg-white/90 dark:bg-slate-900/90 backdrop-blur-md transition-colors">
+      <header className="sticky top-0 z-30 px-4 py-3 flex items-center justify-between border-b border-slate-200/80 dark:border-slate-800 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md transition-colors">
         {/* Brand identity */}
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-emerald-600 via-teal-500 to-emerald-400 flex items-center justify-center text-white font-black text-xl shadow-md shadow-emerald-500/20 ring-2 ring-emerald-500/20">
@@ -47,32 +51,74 @@ export const Header: React.FC = () => {
                 OpSys
               </span>
             </div>
-            <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate max-w-[160px] sm:max-w-none">
-              {operator.store} • {operator.name.split(' ')[0]}
+            <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate max-w-[150px] sm:max-w-none">
+              {operator.store} • {operator.name.split(' ')[0]} {operator.role ? `(${operator.role})` : ''}
             </p>
           </div>
         </div>
+
+        {/* Desktop Quick Nav Tabs */}
+        {isDesktop && (
+          <nav className="flex items-center gap-1 bg-slate-100 dark:bg-slate-800/80 p-1 rounded-2xl border border-slate-200/60 dark:border-slate-700/60 text-xs font-bold">
+            <button
+              onClick={() => setActiveTab('inicio')}
+              className={`px-3 py-1.5 rounded-xl transition ${activeTab === 'inicio' ? 'bg-white dark:bg-slate-700 text-emerald-600 dark:text-emerald-400 shadow-xs' : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'}`}
+            >
+              Início
+            </button>
+            <button
+              onClick={() => setActiveTab('validade')}
+              className={`px-3 py-1.5 rounded-xl transition ${activeTab === 'validade' ? 'bg-white dark:bg-slate-700 text-emerald-600 dark:text-emerald-400 shadow-xs' : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'}`}
+            >
+              Validade
+            </button>
+            <button
+              onClick={() => setActiveTab('estoque')}
+              className={`px-3 py-1.5 rounded-xl transition ${activeTab === 'estoque' ? 'bg-white dark:bg-slate-700 text-emerald-600 dark:text-emerald-400 shadow-xs' : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'}`}
+            >
+              Estoque
+            </button>
+            <button
+              onClick={() => setActiveTab('auditoria')}
+              className={`px-3 py-1.5 rounded-xl transition ${activeTab === 'auditoria' ? 'bg-white dark:bg-slate-700 text-emerald-600 dark:text-emerald-400 shadow-xs' : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'}`}
+            >
+              Auditoria
+            </button>
+            {hasStoreAccess && (
+              <button
+                onClick={() => setActiveTab('loja')}
+                className={`px-3 py-1.5 rounded-xl transition ${activeTab === 'loja' ? 'bg-white dark:bg-slate-700 text-emerald-600 dark:text-emerald-400 shadow-xs' : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'}`}
+              >
+                Loja
+              </button>
+            )}
+            <button
+              onClick={() => setActiveTab('configuracoes')}
+              className={`px-3 py-1.5 rounded-xl transition ${activeTab === 'configuracoes' ? 'bg-white dark:bg-slate-700 text-emerald-600 dark:text-emerald-400 shadow-xs' : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'}`}
+            >
+              Ajustes
+            </button>
+          </nav>
+        )}
 
         {/* Right action controls */}
         <div className="flex items-center gap-2">
           {/* Quick Barcode Scanner trigger */}
           <button
             onClick={() => openScanner()}
-            className="p-2 rounded-xl text-slate-700 dark:text-slate-200 bg-slate-100 dark:bg-slate-800 hover:bg-emerald-50 hover:text-emerald-600 dark:hover:bg-slate-750 transition flex items-center gap-1.5 text-xs font-semibold"
+            className="p-2 rounded-xl text-slate-700 dark:text-slate-200 bg-slate-100 dark:bg-slate-800 hover:bg-emerald-50 hover:text-emerald-600 dark:hover:bg-slate-750 transition flex items-center gap-1.5 text-xs font-semibold cursor-pointer"
             title="Abrir Scanner / Bipar"
           >
             <Barcode className="w-4 h-4 text-emerald-500" />
             <span className="hidden md:inline">Bipar</span>
           </button>
 
-          {/* Online / Offline status badge */}
-          <button
-            onClick={toggleSimulatedOffline}
-            title={effectiveOnline ? 'Clique para testar Modo Offline' : 'Clique para reativar Modo Online'}
-            className={`px-2.5 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all ${
+          {/* Real Online / Offline status badge (sem simulação) */}
+          <div
+            className={`px-2.5 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 ${
               effectiveOnline
-                ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30 hover:bg-emerald-500/20'
-                : 'bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/30 hover:bg-amber-500/25 animate-pulse'
+                ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30'
+                : 'bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/30'
             }`}
           >
             {effectiveOnline ? (
@@ -80,7 +126,7 @@ export const Header: React.FC = () => {
             ) : (
               <WifiOff className="w-3.5 h-3.5 text-amber-500" />
             )}
-            <span className="text-[11px]">
+            <span className="text-[11px] hidden sm:inline">
               {effectiveOnline ? 'Online' : 'Offline'}
             </span>
             {offlineQueue.length > 0 && (
@@ -88,7 +134,7 @@ export const Header: React.FC = () => {
                 {offlineQueue.length}
               </span>
             )}
-          </button>
+          </div>
 
           {/* Sync Button if queue exists */}
           {offlineQueue.length > 0 && effectiveOnline && (
@@ -105,7 +151,7 @@ export const Header: React.FC = () => {
           {/* Notifications Button */}
           <button
             onClick={() => setShowNotifications(true)}
-            className="p-2 rounded-xl relative text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition"
+            className="p-2 rounded-xl relative text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition cursor-pointer"
             aria-label="Notificações"
           >
             <Bell className="w-5 h-5" />
@@ -117,7 +163,7 @@ export const Header: React.FC = () => {
           {/* Logout / Trocar Usuário */}
           <button
             onClick={logout}
-            className="p-2 rounded-xl text-slate-500 hover:text-rose-600 dark:text-slate-400 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/30 transition"
+            className="p-2 rounded-xl text-slate-500 hover:text-rose-600 dark:text-slate-400 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/30 transition cursor-pointer"
             title="Sair / Trocar Usuário"
             aria-label="Sair da Conta"
           >

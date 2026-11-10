@@ -266,31 +266,6 @@ export const BarcodeModal: React.FC = () => {
               </button>
             </div>
           </div>
-
-          {/* Atalhos Rápidos (Para testes imediatos no navegador) */}
-          <div>
-            <div className="flex items-center gap-1.5 text-[11px] font-bold text-slate-400 mb-2">
-              <Sparkles className="w-3.5 h-3.5 text-amber-500" />
-              <span>PRODUTOS CADASTRADOS (SIMULAÇÃO RÁPIDA)</span>
-            </div>
-            <div className="grid grid-cols-2 gap-2">
-              {products.slice(0, 4).map(product => (
-                <button
-                  key={product.id}
-                  onClick={() => {
-                    handleBarcodeRead(product.ean);
-                    handleConfirmSelection(product.ean);
-                  }}
-                  className="p-2.5 rounded-xl text-left border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-850 hover:border-emerald-500 transition group"
-                >
-                  <p className="text-[11px] font-bold text-slate-800 dark:text-slate-200 group-hover:text-emerald-600 dark:group-hover:text-emerald-400 truncate">
-                    {product.name}
-                  </p>
-                  <p className="text-[10px] text-slate-400 font-mono mt-0.5">EAN: {product.ean}</p>
-                </button>
-              ))}
-            </div>
-          </div>
         </div>
       </div>
     </div>

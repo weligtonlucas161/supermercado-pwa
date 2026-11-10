@@ -880,7 +880,7 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
                           {item.isValid ? (
                             <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-600">Válido</span>
                           ) : (
-                            <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-rose-500/15 text-rose-600">{item.errors.join(', ')}</span>
+                            <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-rose-500/15 text-rose-600">{item.errors?.join(', ') || 'Inválido'}</span>
                           )}
                         </td>
                       </tr>

@@ -7,7 +7,10 @@ import {
   NotificationItem, 
   TabId, 
   OfflineAction,
-  AuthUser 
+  AuthUser,
+  Store,
+  StoreEmployee,
+  StoreRole
 } from '../types';
 import { 
   INITIAL_PRODUCTS, 
@@ -26,9 +29,17 @@ import {
   loginUser, 
   isSupabaseConfigured, 
   syncOfflineQueueToSupabase, 
-  supabase,
-  fetchProductsFromSupabase,
-  subscribeToProductsRealtime
+  fetchProductsFromSupabase, 
+  subscribeToProductsRealtime,
+  fetchStoresFromDatabase,
+  createStoreInDatabase,
+  fetchStoreEmployees,
+  saveStoreEmployee,
+  toggleStoreEmployeeActive,
+  saveStoreRole,
+  getStoredStores,
+  getStoredEmployees,
+  getStoredRoles
 } from '../services/supabaseService';
 
 interface AppContextType {
@@ -36,14 +47,11 @@ interface AppContextType {
   activeTab: TabId;
   setActiveTab: (tab: TabId) => void;
   darkMode: boolean;
-  setDarkMode: (value: boolean) => void;
-  toggleDarkMode: () => void;
+  isDesktop: boolean;
 
-  // Connectivity & Offline Sync
+  // Connectivity & Real Sync
   isOnline: boolean;
-  isSimulatedOffline: boolean;
   effectiveOnline: boolean;
-  toggleSimulatedOffline: () => void;
   offlineQueue: OfflineAction[];
   syncOfflineQueue: () => void;
   clearOfflineQueue: () => void;
@@ -55,11 +63,25 @@ interface AppContextType {
   operator: Operator;
   updateOperator: (operator: Partial<Operator>) => void;
 
-  // Autenticação Segura (Script 03)
+  // Autenticação Segura & Papéis
   isAuthenticated: boolean;
   currentUser: AuthUser | null;
+  isSaasAdmin: boolean;
+  isGerente: boolean;
   login: (matricula: string, senha: string) => Promise<{ success: boolean; message?: string }>;
   logout: () => void;
+
+  // Lojas & Funcionários (SaaS Admin & Gerente)
+  stores: Store[];
+  refreshStores: () => Promise<void>;
+  addStore: (store: Store) => Promise<{ success: boolean; error?: string }>;
+  employees: StoreEmployee[];
+  refreshEmployees: (lojaId?: string) => Promise<void>;
+  addOrUpdateEmployee: (emp: StoreEmployee) => Promise<{ success: boolean; error?: string }>;
+  toggleEmployeeStatus: (empId: string, active: boolean) => Promise<void>;
+  roles: StoreRole[];
+  refreshRoles: () => Promise<void>;
+  addOrUpdateRole: (role: StoreRole) => Promise<boolean>;
 
   // Actions
   addProduct: (product: Omit<Product, 'id'>) => Product;
@@ -94,27 +116,69 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Navigation
   const [activeTab, setActiveTab] = useState<TabId>('inicio');
 
-  // Dark Mode
+  // =========================================================================
+  // 1. DETECÇÃO AUTOMÁTICA DO TEMA DO DISPOSITIVO (SEM ESCOLHA MANUAL)
+  // =========================================================================
   const [darkMode, setDarkMode] = useState<boolean>(() => {
-    return loadStoredData<boolean>(STORAGE_KEYS.DARK_MODE, false);
+    if (typeof window !== 'undefined' && window.matchMedia) {
+      return window.matchMedia('(prefers-color-scheme: dark)').matches;
+    }
+    return false;
   });
 
-  // Theme Class Synchronization
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.matchMedia) return;
+    const media = window.matchMedia('(prefers-color-scheme: dark)');
+    
+    // Atualiza estado inicial
+    setDarkMode(media.matches);
+
+    // Ouve alterações de preferência de tema no sistema operacional do aparelho
+    const handleThemeChange = (e: MediaQueryListEvent) => {
+      setDarkMode(e.matches);
+    };
+
+    try {
+      media.addEventListener('change', handleThemeChange);
+      return () => media.removeEventListener('change', handleThemeChange);
+    } catch {
+      // Fallback para navegadores legados
+      media.addListener(handleThemeChange);
+      return () => media.removeListener(handleThemeChange);
+    }
+  }, []);
+
+  // Sincroniza a classe 'dark' no elemento raiz do documento
   useEffect(() => {
     if (darkMode) {
       document.documentElement.classList.add('dark');
     } else {
       document.documentElement.classList.remove('dark');
     }
-    saveStoredData(STORAGE_KEYS.DARK_MODE, darkMode);
   }, [darkMode]);
 
-  const toggleDarkMode = () => setDarkMode(prev => !prev);
+  // =========================================================================
+  // 2. DETECÇÃO AUTOMÁTICA DE AMBIENTE: DESKTOP VS MOBILE
+  // =========================================================================
+  const [isDesktop, setIsDesktop] = useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      return window.innerWidth >= 1024;
+    }
+    return false;
+  });
 
-  // Network & Offline Mode
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const handleResize = () => {
+      setIsDesktop(window.innerWidth >= 1024);
+    };
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  // Network & Offline Mode Real (sem botões de simulação)
   const browserOnline = useOnlineStatus();
-  const [isSimulatedOffline, setIsSimulatedOffline] = useState(false);
-  const effectiveOnline = browserOnline && !isSimulatedOffline;
+  const effectiveOnline = browserOnline;
 
   // Offline Mutation Queue
   const [offlineQueue, setOfflineQueue] = useState<OfflineAction[]>(() => {
@@ -125,10 +189,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     saveStoredData(STORAGE_KEYS.OFFLINE_QUEUE, offlineQueue);
   }, [offlineQueue]);
 
-  // Domain Entities State
+  // Domain Entities State (Sem produtos falsos de mock)
   const [products, setProducts] = useState<Product[]>(() => {
     const loaded = loadStoredData<Product[]>(STORAGE_KEYS.PRODUCTS, INITIAL_PRODUCTS);
-    // Remove produtos mockados de testes anteriores (IDs '1' a '8')
     return loaded.filter(p => !['1', '2', '3', '4', '5', '6', '7', '8'].includes(p.id));
   });
 
@@ -141,7 +204,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return loadStoredData<AuditItem[]>(STORAGE_KEYS.AUDITS, INITIAL_AUDITS);
   });
 
-  // Autenticação Segura (Script 03)
+  // Autenticação Segura & Papéis
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(() => {
     return loadStoredData<AuthUser | null>(STORAGE_KEYS.AUTH_USER, null);
   });
@@ -150,6 +213,87 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return !!loadStoredData<AuthUser | null>(STORAGE_KEYS.AUTH_USER, null);
   });
 
+  const [operator, setOperator] = useState<Operator>(() => {
+    const savedUser = loadStoredData<AuthUser | null>(STORAGE_KEYS.AUTH_USER, null);
+    if (savedUser) {
+      return {
+        id: savedUser.id,
+        name: savedUser.nome,
+        code: savedUser.matricula,
+        matricula: savedUser.matricula,
+        role: savedUser.cargo,
+        store: savedUser.loja_nome || INITIAL_OPERATOR.store,
+        loja_id: savedUser.loja_id || INITIAL_OPERATOR.loja_id,
+        shift: INITIAL_OPERATOR.shift,
+      };
+    }
+    return loadStoredData<Operator>(STORAGE_KEYS.OPERATOR, INITIAL_OPERATOR);
+  });
+
+  // Papéis de acesso
+  const isSaasAdmin = currentUser?.cargo === 'saas_admin' || operator.role === 'saas_admin';
+  const isGerente = currentUser?.cargo === 'gerente' || operator.role === 'gerente';
+
+  // Lojas e Funcionários gerenciados
+  const [stores, setStores] = useState<Store[]>(() => getStoredStores());
+  const [employees, setEmployees] = useState<StoreEmployee[]>(() => getStoredEmployees());
+  const [roles, setRoles] = useState<StoreRole[]>(() => getStoredRoles());
+
+  const refreshStores = useCallback(async () => {
+    const s = await fetchStoresFromDatabase();
+    setStores(s);
+  }, []);
+
+  const refreshEmployees = useCallback(async (lojaId?: string) => {
+    const targetLoja = lojaId || operator.loja_id || 'loja_padrao_001';
+    const emps = await fetchStoreEmployees(targetLoja);
+    setEmployees(emps);
+  }, [operator.loja_id]);
+
+  const refreshRoles = useCallback(async () => {
+    const r = getStoredRoles();
+    setRoles(r);
+  }, []);
+
+  const addStore = async (newStore: Store) => {
+    const res = await createStoreInDatabase(newStore);
+    if (res.success) {
+      await refreshStores();
+    }
+    return res;
+  };
+
+  const addOrUpdateEmployee = async (emp: StoreEmployee) => {
+    const res = await saveStoreEmployee(emp);
+    if (res.success) {
+      await refreshEmployees(emp.loja_id);
+    }
+    return res;
+  };
+
+  const toggleEmployeeStatus = async (empId: string, active: boolean) => {
+    await toggleStoreEmployeeActive(empId, active);
+    await refreshEmployees();
+  };
+
+  const addOrUpdateRole = async (role: StoreRole) => {
+    const res = await saveStoreRole(role);
+    if (res) {
+      await refreshRoles();
+    }
+    return res;
+  };
+
+  // Carregar dados de lojas e funcionários ao autenticar
+  useEffect(() => {
+    if (isAuthenticated) {
+      refreshStores();
+      refreshEmployees();
+      refreshRoles();
+    }
+  }, [isAuthenticated, refreshStores, refreshEmployees, refreshRoles]);
+
+  // Login
   const login = async (matricula: string, senha: string): Promise<{ success: boolean; message?: string }> => {
     const result = await loginUser(matricula, senha);
     if (result.success && result.user) {
@@ -168,8 +312,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         role: result.user!.cargo,
         store: result.user!.loja_nome || prev.store,
         loja_id: result.user!.loja_id || prev.loja_id,
+        setor_restrito: result.user!.setor,
       }));
       triggerScanBeep(true);
+
+      // Redireciona para início ou loja
+      if (result.user.cargo === 'gerente') {
+        setActiveTab('loja');
+      } else {
+        setActiveTab('inicio');
+      }
+
       setTimeout(() => {
         refreshProductsFromDatabase();
       }, 100);
@@ -185,23 +338,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     localStorage.removeItem(STORAGE_KEYS.AUTH_TOKEN);
     setActiveTab('inicio');
   };
-
-  const [operator, setOperator] = useState<Operator>(() => {
-    const savedUser = loadStoredData<AuthUser | null>(STORAGE_KEYS.AUTH_USER, null);
-    if (savedUser) {
-      return {
-        id: savedUser.id,
-        name: savedUser.nome,
-        code: savedUser.matricula,
-        matricula: savedUser.matricula,
-        role: savedUser.cargo,
-        store: savedUser.loja_nome || INITIAL_OPERATOR.store,
-        loja_id: savedUser.loja_id || INITIAL_OPERATOR.loja_id,
-        shift: INITIAL_OPERATOR.shift,
-      };
-    }
-    return loadStoredData<Operator>(STORAGE_KEYS.OPERATOR, INITIAL_OPERATOR);
-  });
 
   const [notifications, setNotifications] = useState<NotificationItem[]>(() => {
     return loadStoredData<NotificationItem[]>(STORAGE_KEYS.NOTIFICATIONS, INITIAL_NOTIFICATIONS);
@@ -249,101 +385,82 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } finally {
       setIsSyncingWithDatabase(false);
     }
-  }, [operator.loja_id, currentUser?.loja_id]);
+  }, [currentUser?.loja_id, operator.loja_id]);
 
-  // Sincronização automática no mount e via Realtime do Supabase para todas as sessões
+  // Assinatura em Tempo Real (Realtime Channel) para multi-sessões
   useEffect(() => {
-    refreshProductsFromDatabase();
+    if (!isAuthenticated || !isSupabaseConfigured()) return;
     const unsubscribe = subscribeToProductsRealtime(() => {
       refreshProductsFromDatabase();
     });
     return () => {
       unsubscribe();
     };
-  }, [refreshProductsFromDatabase]);
+  }, [isAuthenticated, refreshProductsFromDatabase]);
 
-  // Scanner state
-  const [isScannerOpen, setIsScannerOpen] = useState(false);
-  const [scannerCallback, setScannerCallback] = useState<((barcode: string) => void) | null>(null);
+  // Background Sync when online
+  useBackgroundSync({
+    onSyncTriggered: async () => {
+      if (offlineQueue.length > 0) {
+        const res = await syncOfflineQueueToSupabase(offlineQueue, operator.loja_id);
+        if (res.success) {
+          setOfflineQueue([]);
+          refreshProductsFromDatabase();
+        }
+      }
+    },
+    hasPendingItems: offlineQueue.length > 0
+  });
 
-  const openScanner = (cb?: (barcode: string) => void) => {
-    setScannerCallback(() => cb || null);
-    setIsScannerOpen(true);
-  };
-
-  const closeScanner = () => {
-    setIsScannerOpen(false);
-    setScannerCallback(null);
-  };
-
-  // Record an offline change if disconnected
-  const trackOfflineAction = (type: OfflineAction['type'], payload: unknown) => {
-    if (!effectiveOnline) {
-      const newAction: OfflineAction = {
-        id: 'act-' + Date.now() + '-' + Math.random().toString(36).substring(2, 7),
-        type,
-        payload,
-        timestamp: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
-      };
-      setOfflineQueue(prev => [newAction, ...prev]);
-    }
-  };
-
-  // Sync Queue Action
   const syncOfflineQueue = async () => {
     if (offlineQueue.length === 0) return;
-    const count = offlineQueue.length;
-    const currentQueue = [...offlineQueue];
-
-    // Se Supabase estiver conectado, sincroniza no banco
-    if (isSupabaseConfigured()) {
-      try {
-        const res = await syncOfflineQueueToSupabase(currentQueue, operator.loja_id || 'loja_padrao_001');
-        if (!res.success) {
-          console.warn('Aviso sincronização Supabase:', res.error);
-        }
-      } catch (err) {
-        console.warn('Erro ao sincronizar offline queue com Supabase:', err);
-      }
+    const res = await syncOfflineQueueToSupabase(offlineQueue, operator.loja_id);
+    if (res.success) {
+      setOfflineQueue([]);
+      refreshProductsFromDatabase();
     }
-
-    triggerScanBeep(true);
-    setOfflineQueue([]);
-    // Add success notification
-    const syncNotif: NotificationItem = {
-      id: 'n-sync-' + Date.now(),
-      title: 'Sincronização Concluída',
-      message: `${count} alterações locais foram consolidadas ${isSupabaseConfigured() ? 'no Supabase' : 'no armazenamento central'}.`,
-      type: 'info',
-      timestamp: 'Agora',
-      read: false,
-    };
-    setNotifications(prev => [syncNotif, ...prev]);
   };
-
-  // Integração com o Service Worker Background Sync (evento 'sync' e reconexão à internet)
-  useBackgroundSync({
-    onSyncTriggered: () => {
-      console.log('[AppContext] Sincronização disparada pelo Service Worker background sync');
-      syncOfflineQueue();
-    },
-    hasPendingItems: offlineQueue.length > 0,
-  });
 
   const clearOfflineQueue = () => {
     setOfflineQueue([]);
   };
 
   // Actions
-  const addProduct = (p: Omit<Product, 'id'>): Product => {
+  const addProduct = (newProductData: Omit<Product, 'id'>): Product => {
     const newProduct: Product = {
-      ...p,
-      id: String(Date.now()),
+      ...newProductData,
+      id: `prod-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
       lastUpdated: new Date().toISOString(),
     };
-    setProducts(prev => [newProduct, ...prev]);
-    trackOfflineAction('ADD_PRODUCT', newProduct);
-    triggerScanBeep(true);
+
+    setProducts(prev => {
+      // Se já existir pelo código EAN, atualiza os campos e a quantidade
+      const existingIdx = prev.findIndex(p => p.ean === newProduct.ean);
+      if (existingIdx >= 0) {
+        const copy = [...prev];
+        copy[existingIdx] = {
+          ...copy[existingIdx],
+          ...newProduct,
+          stock: newProduct.stock,
+          category: newProduct.category || copy[existingIdx].category,
+        };
+        return copy;
+      }
+      return [newProduct, ...prev];
+    });
+
+    if (!effectiveOnline) {
+      setOfflineQueue(prev => [
+        ...prev,
+        {
+          id: `queue-${Date.now()}`,
+          type: 'ADD_PRODUCT',
+          payload: newProduct,
+          timestamp: new Date().toISOString(),
+        },
+      ]);
+    }
+
     return newProduct;
   };
 
@@ -357,80 +474,86 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         } else if (typeof options.delta === 'number') {
           newStock = Math.max(0, p.stock + options.delta);
         }
-        return { ...p, stock: newStock, lastUpdated: new Date().toISOString() };
+        return {
+          ...p,
+          stock: newStock,
+          lastUpdated: new Date().toISOString(),
+        };
       })
     );
-    trackOfflineAction('UPDATE_STOCK', { id, ...options });
-    triggerScanBeep(true);
+
+    if (!effectiveOnline) {
+      setOfflineQueue(prev => [
+        ...prev,
+        {
+          id: `queue-${Date.now()}`,
+          type: 'UPDATE_STOCK',
+          payload: { id, ...options },
+          timestamp: new Date().toISOString(),
+        },
+      ]);
+    }
   };
 
   const removeProduct = (id: string) => {
     setProducts(prev => prev.filter(p => p.id !== id));
-    setValidities(prev => prev.filter(v => v.productId !== id));
-    if (isSupabaseConfigured() && supabase) {
-      supabase.from('produtos').delete().eq('id', id).then((res: { error: unknown }) => {
-        if (res.error) console.warn('Erro ao deletar produto no Supabase:', res.error);
-      });
-    }
-    trackOfflineAction('UPDATE_STOCK', { id, deleted: true });
-    triggerScanBeep(true);
   };
 
-  const addValidity = (v: Omit<ValidityItem, 'id'>): ValidityItem => {
+  const addValidity = (newValidityData: Omit<ValidityItem, 'id'>): ValidityItem => {
     const newValidity: ValidityItem = {
-      ...v,
-      id: 'v-' + Date.now(),
+      ...newValidityData,
+      id: `val-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
     };
     setValidities(prev => [newValidity, ...prev]);
-    trackOfflineAction('ADD_VALIDITY', newValidity);
-    triggerScanBeep(true);
     return newValidity;
   };
 
   const applyDiscount = (validityId: string, percentage: number) => {
     setValidities(prev =>
-      prev.map(v => {
-        if (v.id !== validityId) return v;
-        return {
-          ...v,
-          status: 'warning',
-          discountApplied: true,
-        };
-      })
+      prev.map(v => (v.id === validityId ? { ...v, discountApplied: true } : v))
     );
-    // Also find product and adjust or record promo
-    trackOfflineAction('APPLY_DISCOUNT', { validityId, percentage });
-    triggerScanBeep(true);
+    const item = validities.find(v => v.id === validityId);
+    if (item) {
+      setNotifications(prev => [
+        {
+          id: `notif-${Date.now()}`,
+          title: 'Desconto Aplicado',
+          message: `${percentage}% de desconto aplicado em "${item.name}" para acelerar saída antes do vencimento.`,
+          type: 'info',
+          timestamp: new Date().toISOString(),
+          read: false,
+        },
+        ...prev,
+      ]);
+    }
   };
 
-  const addAudit = (a: Omit<AuditItem, 'id' | 'date'>): AuditItem => {
+  const addAudit = (auditData: Omit<AuditItem, 'id' | 'date'>): AuditItem => {
     const newAudit: AuditItem = {
-      ...a,
-      id: 'a-' + Date.now(),
-      date: new Date().toISOString().split('T')[0],
+      ...auditData,
+      id: `audit-${Date.now()}`,
+      date: new Date().toISOString(),
     };
     setAudits(prev => [newAudit, ...prev]);
-    trackOfflineAction('ADD_AUDIT', newAudit);
-    triggerScanBeep(true);
     return newAudit;
   };
 
   const resetAllData = () => {
-    setProducts(INITIAL_PRODUCTS);
-    setValidities(INITIAL_VALIDITIES);
-    setAudits(INITIAL_AUDITS);
-    setOperator(INITIAL_OPERATOR);
-    setNotifications(INITIAL_NOTIFICATIONS);
+    setProducts([]);
+    setValidities([]);
+    setAudits([]);
+    setNotifications([]);
     setOfflineQueue([]);
-    localStorage.clear();
+    localStorage.removeItem(STORAGE_KEYS.PRODUCTS);
+    localStorage.removeItem(STORAGE_KEYS.VALIDITIES);
+    localStorage.removeItem(STORAGE_KEYS.AUDITS);
+    localStorage.removeItem(STORAGE_KEYS.NOTIFICATIONS);
+    localStorage.removeItem(STORAGE_KEYS.OFFLINE_QUEUE);
   };
 
-  const updateOperator = (updated: Partial<Operator>) => {
-    setOperator(prev => ({ ...prev, ...updated }));
+  const updateOperator = (newOperatorData: Partial<Operator>) => {
+    setOperator(prev => ({ ...prev, ...newOperatorData }));
   };
-
-  // Notifications
-  const unreadCount = notifications.filter(n => !n.read).length;
 
   const markNotificationAsRead = (id: string) => {
     setNotifications(prev => prev.map(n => (n.id === id ? { ...n, read: true } : n)));
@@ -440,30 +563,64 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setNotifications(prev => prev.map(n => ({ ...n, read: true })));
   };
 
+  const unreadCount = notifications.filter(n => !n.read).length;
+
+  // Scanner modal global state
+  const [isScannerOpen, setIsScannerOpen] = useState(false);
+  const [scannerCallback, setScannerCallback] = useState<((barcode: string) => void) | null>(null);
+
+  const openScanner = (cb?: (barcode: string) => void) => {
+    if (cb) {
+      setScannerCallback(() => cb);
+    } else {
+      setScannerCallback(null);
+    }
+    setIsScannerOpen(true);
+  };
+
+  const closeScanner = () => {
+    setIsScannerOpen(false);
+    setScannerCallback(null);
+  };
+
   return (
     <AppContext.Provider
       value={{
         activeTab,
         setActiveTab,
         darkMode,
-        setDarkMode,
-        toggleDarkMode,
+        isDesktop,
+
         isOnline: browserOnline,
-        isSimulatedOffline,
         effectiveOnline,
-        toggleSimulatedOffline: () => setIsSimulatedOffline(prev => !prev),
         offlineQueue,
         syncOfflineQueue,
         clearOfflineQueue,
+
         products,
         validities,
         audits,
         operator,
         updateOperator,
+
         isAuthenticated,
         currentUser,
+        isSaasAdmin,
+        isGerente,
         login,
         logout,
+
+        stores,
+        refreshStores,
+        addStore,
+        employees,
+        refreshEmployees,
+        addOrUpdateEmployee,
+        toggleEmployeeStatus,
+        roles,
+        refreshRoles,
+        addOrUpdateRole,
+
         addProduct,
         updateProductStock,
         removeProduct,
@@ -471,14 +628,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         applyDiscount,
         addAudit,
         resetAllData,
+
         notifications,
         unreadCount,
         markNotificationAsRead,
         markAllNotificationsAsRead,
+
         isScannerOpen,
         openScanner,
         closeScanner,
         scannerCallback,
+
         isSyncingWithDatabase,
         lastDatabaseSyncTime,
         refreshProductsFromDatabase,
@@ -489,10 +649,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   );
 };
 
-export function useApp() {
+export const useApp = () => {
   const context = useContext(AppContext);
   if (!context) {
     throw new Error('useApp must be used within an AppProvider');
   }
   return context;
-}
+};

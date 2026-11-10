@@ -18,7 +18,6 @@ import { useApp } from '../../context/AppContext';
 import { Product } from '../../types';
 import { NewProductModal } from '../modals/NewProductModal';
 import { ImportSpreadsheetModal } from '../modals/ImportSpreadsheetModal';
-import { ImportadorPlanilhaZeroKnowledge } from '../inventory/ImportadorPlanilhaZeroKnowledge';
 
 interface ProductCardProps {
   product: Product;
@@ -294,7 +293,6 @@ export const EstoqueTab: React.FC = () => {
     isSyncingWithDatabase,
     lastDatabaseSyncTime 
   } = useApp();
-  const [subTab, setSubTab] = useState<'estoque' | 'zero_knowledge'>('estoque');
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('all');
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -309,7 +307,7 @@ export const EstoqueTab: React.FC = () => {
     const matchesSearch =
       p.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
       p.ean.includes(searchTerm) ||
-      p.location.toLowerCase().includes(searchTerm.toLowerCase());
+      (p.location ? p.location.toLowerCase().includes(searchTerm.toLowerCase()) : false);
     const matchesCategory = selectedCategory === 'all' || p.category === selectedCategory;
     return matchesSearch && matchesCategory;
   });
@@ -343,10 +341,10 @@ export const EstoqueTab: React.FC = () => {
             )}
           </div>
           <p className="text-xs text-slate-500 dark:text-slate-400">
-            Localização em gôndola, saldos e consulta de código EAN-13 (Multissessão Realtime).
+            Localização em gôndola, saldos e consulta de código EAN-13 ({products.length} itens cadastrados).
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <button
             onClick={() => refreshProductsFromDatabase()}
             disabled={isSyncingWithDatabase}
@@ -358,7 +356,7 @@ export const EstoqueTab: React.FC = () => {
           </button>
           <button
             onClick={() => setIsSpreadsheetModalOpen(true)}
-            className="border border-emerald-500/40 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-700 dark:text-emerald-400 px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition cursor-pointer"
+            className="border border-emerald-500/40 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-700 dark:text-emerald-400 px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition cursor-pointer shadow-xs"
             title="Importar planilha Excel ou CSV"
           >
             <FileSpreadsheet className="w-4 h-4" />
@@ -379,50 +377,14 @@ export const EstoqueTab: React.FC = () => {
         <span>💡 Dica: <strong>Pressione um produto</strong> para mudar para vermelho com lixeira, ou <strong>arraste para o lado</strong> para remover.</span>
       </div>
 
-      {/* Sub-Abas: Estoque Físico vs Importador Zero-Knowledge */}
-      <div className="flex border-b border-slate-200 dark:border-slate-800 text-xs gap-1">
-        <button
-          onClick={() => setSubTab('estoque')}
-          className={`py-2 px-3.5 font-bold border-b-2 flex items-center gap-1.5 transition cursor-pointer ${
-            subTab === 'estoque'
-              ? 'border-emerald-600 text-emerald-600 dark:text-emerald-400'
-              : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
-          }`}
-        >
-          <Package className="w-4 h-4" />
-          <span>Gôndola & Saldos ({products.length})</span>
-        </button>
-        <button
-          onClick={() => setSubTab('zero_knowledge')}
-          className={`py-2 px-3.5 font-bold border-b-2 flex items-center gap-1.5 transition cursor-pointer ${
-            subTab === 'zero_knowledge'
-              ? 'border-emerald-600 text-emerald-600 dark:text-emerald-400'
-              : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
-          }`}
-        >
-          <ShieldCheck className="w-4 h-4 text-emerald-500" />
-          <span>Importação Zero-Knowledge</span>
-          <span className="text-[9px] px-1.5 py-0.2 rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 font-extrabold border border-emerald-500/30">
-            AES-256
-          </span>
-        </button>
-      </div>
-
-      {subTab === 'zero_knowledge' ? (
-        <ImportadorPlanilhaZeroKnowledge 
-          lojaId={operator.loja_id || 'loja_padrao_001'}
-          usuarioId={operator.code || '4092'}
-        />
-      ) : (
-        <>
-          {/* Busca & Scanner Trigger */}
-          <div className="flex gap-2">
-            <div className="relative flex-1">
-              <Search className="w-4 h-4 absolute left-3 top-3 text-slate-400" />
-              <input
-                type="text"
-                placeholder="Nome, EAN ou localização..."
-                value={searchTerm}
+      {/* Busca & Scanner Trigger */}
+      <div className="flex gap-2">
+        <div className="relative flex-1">
+          <Search className="w-4 h-4 absolute left-3 top-3 text-slate-400" />
+          <input
+            type="text"
+            placeholder="Nome, EAN ou localização..."
+            value={searchTerm}
                 onChange={e => setSearchTerm(e.target.value)}
                 className={`w-full pl-9 pr-4 py-2.5 rounded-2xl text-xs border focus:outline-none focus:ring-2 focus:ring-emerald-500 transition ${
                   darkMode
@@ -484,8 +446,6 @@ export const EstoqueTab: React.FC = () => {
               ))
             )}
           </div>
-        </>
-      )}
 
       {/* Modal de Confirmação de Exclusão de Produto */}
       {productToDelete && (

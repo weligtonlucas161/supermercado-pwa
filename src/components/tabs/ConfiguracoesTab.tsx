@@ -34,10 +34,7 @@ import { TermsModal } from '../modals/TermsModal';
 export const ConfiguracoesTab: React.FC = () => {
   const { 
     darkMode, 
-    toggleDarkMode, 
     effectiveOnline, 
-    isSimulatedOffline, 
-    toggleSimulatedOffline, 
     offlineQueue, 
     syncOfflineQueue, 
     operator, 
@@ -280,26 +277,25 @@ export const ConfiguracoesTab: React.FC = () => {
             : 'bg-white border-slate-200 divide-slate-100'
         } shadow-sm overflow-hidden`}
       >
-        {/* Dark Mode */}
+        {/* Tema do Dispositivo (Detecção Automática) */}
         <div className="p-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className={`p-2.5 rounded-xl ${darkMode ? 'bg-indigo-500/15 text-indigo-400' : 'bg-amber-500/15 text-amber-500'}`}>
               {darkMode ? <Moon className="w-5 h-5" /> : <Sun className="w-5 h-5" />}
             </div>
             <div>
-              <p className="text-xs font-bold text-slate-900 dark:text-white">Modo Escuro (Dark Theme)</p>
-              <p className="text-[11px] text-slate-400">Economiza bateria em coletores e displays OLED</p>
+              <p className="text-xs font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                <span>Tema do Dispositivo (Detecção Automática)</span>
+                <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400">
+                  {darkMode ? 'Modo Escuro' : 'Modo Claro'} Detectado
+                </span>
+              </p>
+              <p className="text-[11px] text-slate-400">
+                O aplicativo detecta automaticamente a preferência visual do sistema operacional do seu aparelho.
+              </p>
             </div>
           </div>
-          <button
-            onClick={toggleDarkMode}
-            className={`w-12 h-6 flex items-center rounded-full p-1 transition-colors ${
-              darkMode ? 'bg-emerald-600 justify-end' : 'bg-slate-300 justify-start'
-            }`}
-            aria-label="Alternar tema"
-          >
-            <div className="bg-white w-4 h-4 rounded-full shadow-md transform transition-transform" />
-          </button>
+          <span className="text-xs font-semibold text-slate-400 font-mono">Auto</span>
         </div>
 
         {/* Status de Sincronização */}

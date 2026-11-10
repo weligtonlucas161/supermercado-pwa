@@ -2,46 +2,8 @@ export type UrgencyStatus = 'urgent' | 'warning' | 'ok';
 
 export type AuditStatus = 'Concluída' | 'Em Andamento' | 'Pendente';
 
-export type TabId = 'inicio' | 'validade' | 'estoque' | 'auditoria' | 'configuracoes';
+export type TabId = 'inicio' | 'validade' | 'estoque' | 'auditoria' | 'loja' | 'configuracoes';
 
-/**
- * Interface Produto sincronizada com a tabela 'produtos' e 'produtos_catalogo_universal'
- * do banco Synk (2026.1):
- * - id: TEXT
- * - nome: TEXT (Descrição do produto)
- * - codigo_barras: TEXT (Código EAN)
- * - plu: TEXT (Código reduzido)
- * - codigo_fornecedor: TEXT (Código de fornecedor)
- * - setor: TEXT
- * - quantidade: INTEGER (Quantidade em estoque)
- * - data_vencimento: TEXT (YYYY-MM-DD)
- * - loja_id: TEXT
- */
-export interface Product {
-  id: string;
-  ean: string;                      // Código EAN (codigo_barras)
-  name: string;                     // Descrição do produto (nome)
-  supplierCode?: string;            // Código de fornecedor (codigo_fornecedor)
-  reducedCode?: string;             // Código reduzido (plu)
-  category: string;                 // Setor da loja (setor)
-  stock: number;                    // Quantidade em estoque (quantidade)
-  minStock: number;
-  price: number;
-  location: string;
-  loja_id?: string;                 // Isolamento por loja
-  data_vencimento?: string;         // YYYY-MM-DD
-  isEncryptedInStorage?: boolean;   // Indicador de criptografia
-  encryptedPayload?: {
-    ciphertext: string;
-    iv: string;
-    encryptedAt?: string;
-  };
-  lastUpdated?: string;
-}
-
-/**
- * 6 Setores Oficiais de Supermercado
- */
 export type SetorLoja = 'FRIOS' | 'AÇOUGUE' | 'PEIXARIA' | 'MERCEARIA' | 'PADARIA' | 'BAZAR';
 
 export const SETORES_DISPONIVEIS: SetorLoja[] = [
@@ -53,32 +15,95 @@ export const SETORES_DISPONIVEIS: SetorLoja[] = [
   'BAZAR',
 ];
 
-/**
- * Modelo estrito das 5 colunas da planilha + Setor Selecionado
- */
-export interface SpreadsheetProductItem {
-  name: string;             // 1. Descrição do produto
-  supplierCode: string;     // 2. Código de fornecedor
-  reducedCode: string;      // 3. Código reduzido
-  ean: string;              // 4. Código EAN
-  quantity: number;         // 5. Quantidade
-  setor?: SetorLoja;        // Setor atribuído na Etapa 2
-  isValid: boolean;
-  errors: string[];
+export interface Product {
+  id: string;
+  name: string;
+  ean: string;
+  category: string;
+  stock: number;
+  minStock: number;
+  price: number;
+  costPrice?: number;
+  expirationDate?: string;
+  batch?: string;
+  location?: string;
+  lastUpdated?: string;
+  reducedCode?: string;
+  supplierCode?: string;
+  sector?: string;
+  loja_id?: string;
+  isEncrypted?: boolean;
+  isEncryptedInStorage?: boolean;
+  encryptedPayload?: { iv?: string; ciphertext?: string; [key: string]: unknown };
+  data_vencimento?: string;
 }
 
-export interface EncryptedProductUpload {
+export interface SpreadsheetProductItem {
+  id?: string;
+  name: string;
+  supplierCode?: string;
+  reducedCode?: string;
   ean: string;
-  ciphertext: string;
-  iv: string;
-  createdAt: string;
+  quantity: number;
+  sector?: SetorLoja;
+  setor?: SetorLoja;
+  isValid?: boolean;
+  errors?: string[];
+}
+
+/**
+ * Interface de Lojas (Multi-tenant)
+ */
+export interface Store {
+  id: string;
+  nome_loja: string;
+  cnpj?: string;
+  endereco?: string;
+  telefone?: string;
+  limite_usuarios: number;
+  ativa: boolean;
+  cor_primaria?: string;
+  created_at?: string;
+}
+
+/**
+ * Cargos personalizados de Loja
+ */
+export interface StoreRole {
+  id: string;
+  loja_id: string;
+  nome: string;
+  descricao?: string;
+  permissoes: {
+    setores_permitidos?: string[]; // vazia = todos ou ['FRIOS', 'AÇOUGUE', etc.]
+    pode_auditar?: boolean;
+    pode_ajustar_estoque?: boolean;
+    pode_importar_planilha?: boolean;
+    pode_gerenciar_validade?: boolean;
+  };
+}
+
+/**
+ * Funcionários cadastrados pelo Gerente da Loja
+ */
+export interface StoreEmployee {
+  id: string;
+  matricula: string;
+  nome: string;
+  senha?: string;
+  cargo: string;
+  cargo_id?: string;
+  setor_restrito?: string; // 'TODOS' ou setor específico e.g. 'MERCEARIA', 'FRIOS'
+  loja_id: string;
+  ativo: boolean;
+  created_at?: string;
 }
 
 export interface AuthUser {
   id: string;
   matricula: string;
   nome: string;
-  cargo: 'adm' | 'master' | 'operador';
+  cargo: 'saas_admin' | 'gerente' | 'adm' | 'master' | 'operador';
   setor?: string;
   loja_id: string;
   loja_nome?: string;
@@ -125,10 +150,11 @@ export interface Operator {
   name: string;
   code: string;         // Matrícula
   matricula?: string;
-  role: string;         // Cargo ('adm' | 'master' | 'operador')
+  role: 'saas_admin' | 'gerente' | 'adm' | 'master' | 'operador';
   store: string;
   loja_id: string;      // ID da loja vinculada
   shift: string;
+  setor_restrito?: string;
 }
 
 export interface OfflineAction {

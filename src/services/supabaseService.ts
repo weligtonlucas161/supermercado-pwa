@@ -1,5 +1,16 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
-import { Product, ValidityItem, AuditItem, SpreadsheetProductItem, LoginResult, AuthUser, OfflineAction } from '../types';
+import { 
+  Product, 
+  ValidityItem, 
+  AuditItem, 
+  SpreadsheetProductItem, 
+  LoginResult, 
+  AuthUser, 
+  OfflineAction,
+  Store,
+  StoreEmployee,
+  StoreRole
+} from '../types';
 import { decryptSingleField, isEncrypted } from '../utils/encryptionUtils';
 
 export const SUPABASE_STORAGE_KEYS = {
@@ -121,14 +132,209 @@ export function clearCustomSupabaseConfig() {
   }
 }
 
+const LOCAL_STORAGE_STORES_KEY = 'superpwa_stores_data';
+const LOCAL_STORAGE_EMPLOYEES_KEY = 'superpwa_employees_data';
+const LOCAL_STORAGE_ROLES_KEY = 'superpwa_roles_data';
+
+// Obter lojas locais com valores padrão
+export function getStoredStores(): Store[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const raw = localStorage.getItem(LOCAL_STORAGE_STORES_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch (e) {
+    console.warn('Erro ao ler lojas locais:', e);
+  }
+  const defaultStores: Store[] = [
+    {
+      id: 'loja_padrao_001',
+      nome_loja: 'Supermercado Silva - Loja 01 (Matriz)',
+      cnpj: '12.345.678/0001-90',
+      endereco: 'Av. Principal, 1000 - Centro',
+      telefone: '(11) 3456-7890',
+      limite_usuarios: 15,
+      ativa: true,
+      cor_primaria: '#059669',
+      created_at: new Date().toISOString(),
+    },
+  ];
+  try {
+    localStorage.setItem(LOCAL_STORAGE_STORES_KEY, JSON.stringify(defaultStores));
+  } catch {
+    // ignore
+  }
+  return defaultStores;
+}
+
+// Obter funcionários locais com valores padrão
+export function getStoredEmployees(): StoreEmployee[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const raw = localStorage.getItem(LOCAL_STORAGE_EMPLOYEES_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch (e) {
+    console.warn('Erro ao ler funcionários locais:', e);
+  }
+  const defaultEmps: StoreEmployee[] = [
+    {
+      id: 'usr_ger_001',
+      matricula: 'GER-001',
+      nome: 'Roberto Gerente',
+      senha: 'gerente123',
+      cargo: 'Gerente Geral',
+      setor_restrito: 'TODOS',
+      loja_id: 'loja_padrao_001',
+      ativo: true,
+      created_at: new Date().toISOString(),
+    },
+    {
+      id: 'usr_op_carlos_4092',
+      matricula: '4092',
+      nome: 'Carlos Silva',
+      senha: '123456',
+      cargo: 'Operador de Estoque',
+      setor_restrito: 'MERCEARIA',
+      loja_id: 'loja_padrao_001',
+      ativo: true,
+      created_at: new Date().toISOString(),
+    },
+  ];
+  try {
+    localStorage.setItem(LOCAL_STORAGE_EMPLOYEES_KEY, JSON.stringify(defaultEmps));
+  } catch {
+    // ignore
+  }
+  return defaultEmps;
+}
+
+// Obter cargos da loja
+export function getStoredRoles(): StoreRole[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const raw = localStorage.getItem(LOCAL_STORAGE_ROLES_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch {
+    // ignore
+  }
+  const defaultRoles: StoreRole[] = [
+    {
+      id: 'role_gerente',
+      loja_id: 'loja_padrao_001',
+      nome: 'Gerente Geral',
+      descricao: 'Acesso pleno ao gerenciamento da loja, criação de funcionários e auditorias',
+      permissoes: {
+        setores_permitidos: [],
+        pode_auditar: true,
+        pode_ajustar_estoque: true,
+        pode_importar_planilha: true,
+        pode_gerenciar_validade: true,
+      },
+    },
+    {
+      id: 'role_conferente',
+      loja_id: 'loja_padrao_001',
+      nome: 'Conferente de Auditoria',
+      descricao: 'Responsável pela bipagem contínua de presença e conferência de inventário',
+      permissoes: {
+        setores_permitidos: [],
+        pode_auditar: true,
+        pode_ajustar_estoque: false,
+        pode_importar_planilha: false,
+        pode_gerenciar_validade: false,
+      },
+    },
+    {
+      id: 'role_operador',
+      loja_id: 'loja_padrao_001',
+      nome: 'Operador de Gôndola',
+      descricao: 'Controle de reposição e registro de vencimento de produtos',
+      permissoes: {
+        setores_permitidos: ['MERCEARIA', 'FRIOS'],
+        pode_auditar: true,
+        pode_ajustar_estoque: true,
+        pode_importar_planilha: true,
+        pode_gerenciar_validade: true,
+      },
+    },
+  ];
+  try {
+    localStorage.setItem(LOCAL_STORAGE_ROLES_KEY, JSON.stringify(defaultRoles));
+  } catch {
+    // ignore
+  }
+  return defaultRoles;
+}
+
 /**
- * Autenticação Segura por Matrícula e Senha (Script 03)
+ * Autenticação Segura por Matrícula e Senha (Script 03 & SaaS Admin)
  */
 export async function loginUser(matricula: string, senha: string): Promise<LoginResult> {
   const cleanMatricula = matricula.trim();
   const cleanSenha = senha.trim();
 
-  // Se o Supabase estiver configurado, tenta autenticar via RPC no banco
+  // 1. CREDENCIAIS EXCLUSIVAS DO ADMINISTRADOR DE SAAS (MASTER DO SERVIDOR)
+  if (cleanMatricula === '@200309' && cleanSenha === '2003@09') {
+    return {
+      success: true,
+      token: 'tok_saas_adm_master_200309',
+      user: {
+        id: 'usr_saas_adm_master',
+        matricula: '@200309',
+        nome: 'Administrador SaaS Master',
+        cargo: 'saas_admin',
+        setor: 'Infraestrutura do Servidor',
+        loja_id: '',
+        loja_nome: 'Painel Central SaaS (Multi-Lojas)',
+      },
+    };
+  }
+
+  // 2. CREDENCIAL DO GERENTE DE LOJA DEMO
+  if (cleanMatricula === 'GER-001' && cleanSenha === 'gerente123') {
+    return {
+      success: true,
+      token: 'tok_gerente_loja_001',
+      user: {
+        id: 'usr_ger_001',
+        matricula: 'GER-001',
+        nome: 'Roberto Gerente',
+        cargo: 'gerente',
+        setor: 'Gerência Geral da Loja',
+        loja_id: 'loja_padrao_001',
+        loja_nome: 'Supermercado Silva - Loja 01 (Matriz)',
+      },
+    };
+  }
+
+  // 3. Checagem em funcionários/gerentes cadastrados localmente
+  const localEmployees = getStoredEmployees();
+  const matchedEmp = localEmployees.find(
+    e => e.matricula.toLowerCase() === cleanMatricula.toLowerCase() && (e.senha === cleanSenha || !e.senha)
+  );
+  if (matchedEmp) {
+    if (!matchedEmp.ativo) {
+      return { success: false, message: 'Usuário inativo. Contate o gerente da sua loja.' };
+    }
+    const isGerente = matchedEmp.cargo.toLowerCase().includes('gerente') || matchedEmp.cargo.toLowerCase().includes('admin');
+    const stores = getStoredStores();
+    const matchedStore = stores.find(s => s.id === matchedEmp.loja_id);
+
+    return {
+      success: true,
+      token: 'tok_emp_' + matchedEmp.id,
+      user: {
+        id: matchedEmp.id,
+        matricula: matchedEmp.matricula,
+        nome: matchedEmp.nome,
+        cargo: isGerente ? 'gerente' : 'operador',
+        setor: matchedEmp.setor_restrito === 'TODOS' ? 'Geral' : (matchedEmp.setor_restrito || 'Geral'),
+        loja_id: matchedEmp.loja_id,
+        loja_nome: matchedStore ? matchedStore.nome_loja : 'Supermercado Silva',
+      },
+    };
+  }
+
+  // 4. Se o Supabase estiver configurado, tenta autenticar via RPC no banco
   if (client) {
     try {
       const { data, error } = await client.rpc('rpc_login_usuario', {
@@ -136,30 +342,26 @@ export async function loginUser(matricula: string, senha: string): Promise<Login
         p_senha: cleanSenha,
       });
 
-      if (!error && data) {
-        if (data.success && data.user) {
-          return {
-            success: true,
-            token: data.token,
-            user: {
-              id: data.user.id,
-              matricula: data.user.matricula,
-              nome: data.user.nome,
-              cargo: data.user.cargo,
-              setor: data.user.setor,
-              loja_id: data.user.loja_id || 'loja_padrao_001',
-              loja_nome: data.user.loja_nome || 'Supermercado Silva - Loja 01',
-            },
-          };
-        } else {
-          return {
-            success: false,
-            message: data.message || 'Credenciais inválidas.',
-          };
-        }
+      if (!error && data && data.success && data.user) {
+        const dbCargo = String(data.user.cargo || 'operador').toLowerCase();
+        const mappedCargo = dbCargo.includes('saas') ? 'saas_admin' : dbCargo.includes('gerente') ? 'gerente' : 'operador';
+
+        return {
+          success: true,
+          token: data.token,
+          user: {
+            id: data.user.id,
+            matricula: data.user.matricula,
+            nome: data.user.nome,
+            cargo: mappedCargo,
+            setor: data.user.setor,
+            loja_id: data.user.loja_id || 'loja_padrao_001',
+            loja_nome: data.user.loja_nome || 'Supermercado Silva - Loja 01',
+          },
+        };
       }
 
-      // Se a RPC não estiver disponível, consulta diretamente a tabela 'usuarios'
+      // Consulta direta na tabela 'usuarios'
       const { data: userData, error: userError } = await client
         .from('usuarios')
         .select('*')
@@ -169,6 +371,9 @@ export async function loginUser(matricula: string, senha: string): Promise<Login
 
       if (!userError && userData) {
         if (userData.senha === cleanSenha) {
+          const dbCargo = String(userData.cargo || 'operador').toLowerCase();
+          const mappedCargo = dbCargo.includes('saas') ? 'saas_admin' : dbCargo.includes('gerente') ? 'gerente' : 'operador';
+
           return {
             success: true,
             token: 'tok_' + Math.random().toString(36).substring(2),
@@ -176,7 +381,7 @@ export async function loginUser(matricula: string, senha: string): Promise<Login
               id: userData.id,
               matricula: userData.matricula,
               nome: userData.nome,
-              cargo: userData.cargo || 'operador',
+              cargo: mappedCargo,
               setor: userData.setor || 'Prevenção e Estoque',
               loja_id: userData.loja_id || 'loja_padrao_001',
               loja_nome: 'Supermercado Silva - Loja 01',
@@ -194,7 +399,7 @@ export async function loginUser(matricula: string, senha: string): Promise<Login
     }
   }
 
-  // Contingência Local / Offline (Script 03)
+  // 5. Contingência Padrão
   if (cleanMatricula === '4092' && cleanSenha === '123456') {
     return {
       success: true,
@@ -219,7 +424,7 @@ export async function loginUser(matricula: string, senha: string): Promise<Login
         id: 'usr_adm_global_001',
         matricula: '111111',
         nome: 'Administrador do Sistema (SaaS)',
-        cargo: 'adm',
+        cargo: 'saas_admin',
         setor: 'Todos os Setores',
         loja_id: 'loja_padrao_001',
         loja_nome: 'Supermercado Silva - Loja 01 (Matriz)',
@@ -231,6 +436,163 @@ export async function loginUser(matricula: string, senha: string): Promise<Login
     success: false,
     message: 'Matrícula ou senha incorreta. Verifique os dados digitados.',
   };
+}
+
+/**
+ * Operações do Administrador de SaaS: Gestão de Lojas & Limites
+ */
+export async function fetchStoresFromDatabase(): Promise<Store[]> {
+  const localStores = getStoredStores();
+  if (!client) return localStores;
+
+  try {
+    const { data, error } = await client
+      .from('lojas')
+      .select('*')
+      .order('nome_loja', { ascending: true });
+
+    if (!error && data && data.length > 0) {
+      const mapped: Store[] = data.map((d: Record<string, unknown>) => ({
+        id: String(d.id),
+        nome_loja: String(d.nome_loja || 'Loja'),
+        cnpj: d.cnpj ? String(d.cnpj) : undefined,
+        endereco: d.endereco ? String(d.endereco) : undefined,
+        telefone: d.telefone ? String(d.telefone) : undefined,
+        limite_usuarios: Number(d.limite_usuarios || 15),
+        ativa: Boolean(d.ativa ?? true),
+        cor_primaria: String(d.cor_borda || d.cor_primaria || '#059669'),
+        created_at: String(d.created_at || new Date().toISOString()),
+      }));
+      if (typeof window !== 'undefined') {
+        localStorage.setItem(LOCAL_STORAGE_STORES_KEY, JSON.stringify(mapped));
+      }
+      return mapped;
+    }
+  } catch (err) {
+    console.debug('Aviso ao consultar lojas no banco:', err);
+  }
+
+  return localStores;
+}
+
+export async function createStoreInDatabase(store: Store): Promise<{ success: boolean; error?: string }> {
+  const localStores = getStoredStores();
+  const updated = [store, ...localStores.filter(s => s.id !== store.id)];
+  if (typeof window !== 'undefined') {
+    localStorage.setItem(LOCAL_STORAGE_STORES_KEY, JSON.stringify(updated));
+  }
+
+  if (client) {
+    try {
+      const { error } = await client.from('lojas').upsert({
+        id: store.id,
+        nome_loja: store.nome_loja,
+        cnpj: store.cnpj || null,
+        endereco: store.endereco || null,
+        telefone: store.telefone || null,
+        limite_usuarios: store.limite_usuarios,
+        ativa: store.ativa,
+        cor_borda: store.cor_primaria || '#059669',
+      });
+      if (error) {
+        console.warn('Aviso upsert loja:', error.message);
+      }
+    } catch (err) {
+      console.warn('Erro ao salvar loja no banco:', err);
+    }
+  }
+
+  return { success: true };
+}
+
+/**
+ * Operações do Gerente de Loja: Gestão de Funcionários & Permissões de Setor
+ */
+export async function fetchStoreEmployees(lojaId: string): Promise<StoreEmployee[]> {
+  const allEmps = getStoredEmployees();
+  const filtered = allEmps.filter(e => !lojaId || e.loja_id === lojaId || lojaId === 'todas');
+
+  if (!client) return filtered;
+
+  try {
+    const { data, error } = await client
+      .from('usuarios')
+      .select('*')
+      .eq('loja_id', lojaId)
+      .order('nome', { ascending: true });
+
+    if (!error && data && data.length > 0) {
+      const mapped: StoreEmployee[] = data.map((u: Record<string, unknown>) => ({
+        id: String(u.id),
+        matricula: String(u.matricula),
+        nome: String(u.nome),
+        cargo: String(u.cargo || 'Operador'),
+        setor_restrito: u.setor ? String(u.setor) : 'TODOS',
+        loja_id: String(u.loja_id || lojaId),
+        ativo: Boolean(u.ativo ?? true),
+        created_at: String(u.created_at || new Date().toISOString()),
+      }));
+      return mapped;
+    }
+  } catch (err) {
+    console.debug('Aviso ao consultar funcionários da loja:', err);
+  }
+
+  return filtered;
+}
+
+export async function saveStoreEmployee(emp: StoreEmployee): Promise<{ success: boolean; error?: string }> {
+  const allEmps = getStoredEmployees();
+  const updated = [emp, ...allEmps.filter(e => e.id !== emp.id && e.matricula !== emp.matricula)];
+  if (typeof window !== 'undefined') {
+    localStorage.setItem(LOCAL_STORAGE_EMPLOYEES_KEY, JSON.stringify(updated));
+  }
+
+  if (client) {
+    try {
+      await client.from('usuarios').upsert({
+        id: emp.id,
+        matricula: emp.matricula,
+        nome: emp.nome,
+        senha: emp.senha || '123456',
+        cargo: emp.cargo,
+        setor: emp.setor_restrito,
+        loja_id: emp.loja_id,
+        ativo: emp.ativo,
+      });
+    } catch (err) {
+      console.warn('Erro ao salvar funcionário no banco:', err);
+    }
+  }
+
+  return { success: true };
+}
+
+export async function toggleStoreEmployeeActive(empId: string, active: boolean): Promise<boolean> {
+  const allEmps = getStoredEmployees();
+  const updated = allEmps.map(e => e.id === empId ? { ...e, ativo: active } : e);
+  if (typeof window !== 'undefined') {
+    localStorage.setItem(LOCAL_STORAGE_EMPLOYEES_KEY, JSON.stringify(updated));
+  }
+
+  if (client) {
+    try {
+      await client.from('usuarios').update({ ativo: active }).eq('id', empId);
+    } catch (err) {
+      console.warn('Erro ao alterar status de funcionário:', err);
+    }
+  }
+
+  return true;
+}
+
+export async function saveStoreRole(role: StoreRole): Promise<boolean> {
+  const allRoles = getStoredRoles();
+  const updated = [role, ...allRoles.filter(r => r.id !== role.id)];
+  if (typeof window !== 'undefined') {
+    localStorage.setItem(LOCAL_STORAGE_ROLES_KEY, JSON.stringify(updated));
+  }
+  return true;
 }
 
 /**

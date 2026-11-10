@@ -1,5 +1,5 @@
 import React from 'react';
-import { Home, Calendar, Package, ClipboardCheck, Settings } from 'lucide-react';
+import { Home, Calendar, Package, ClipboardCheck, Settings, Building2 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { TabId } from '../../types';
 
@@ -15,7 +15,7 @@ const NavItem: React.FC<NavItemProps> = ({ icon, label, active, onClick, badge }
   return (
     <button
       onClick={onClick}
-      className={`flex flex-col items-center justify-center w-16 py-1.5 rounded-2xl transition-all relative ${
+      className={`flex flex-col items-center justify-center w-14 sm:w-16 py-1.5 rounded-2xl transition-all relative ${
         active
           ? 'text-emerald-600 dark:text-emerald-400 font-bold scale-105'
           : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200'
@@ -29,20 +29,21 @@ const NavItem: React.FC<NavItemProps> = ({ icon, label, active, onClick, badge }
           </span>
         )}
       </div>
-      <span className="text-[11px] mt-1 tracking-tight">{label}</span>
+      <span className="text-[10px] sm:text-[11px] mt-1 tracking-tight">{label}</span>
     </button>
   );
 };
 
 export const BottomNav: React.FC = () => {
-  const { activeTab, setActiveTab, validities, products } = useApp();
+  const { activeTab, setActiveTab, validities, products, isGerente, currentUser } = useApp();
 
   const urgentValiditiesCount = validities.filter(v => v.status === 'urgent').length;
   const lowStockCount = products.filter(p => p.stock <= p.minStock).length;
+  const hasStoreAccess = isGerente || currentUser?.cargo === 'gerente' || currentUser?.cargo === 'adm';
 
   return (
-    <div className="fixed bottom-3 sm:bottom-4 left-3 right-3 sm:left-4 sm:right-4 z-40 max-w-lg mx-auto pointer-events-none">
-      <nav className="pointer-events-auto rounded-3xl border border-slate-200/90 dark:border-slate-800/90 bg-white/90 dark:bg-slate-900/90 backdrop-blur-xl px-2 py-2 shadow-2xl shadow-slate-900/15 dark:shadow-black/50 transition-all flex justify-around items-center ring-1 ring-black/5 dark:ring-white/10">
+    <div className="fixed bottom-3 sm:bottom-4 left-3 right-3 sm:left-4 sm:right-4 z-40 max-w-xl mx-auto pointer-events-none">
+      <nav className="pointer-events-auto rounded-3xl border border-slate-200/90 dark:border-slate-800/90 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl px-2 py-1.5 shadow-2xl shadow-slate-900/15 dark:shadow-black/50 transition-all flex justify-around items-center ring-1 ring-black/5 dark:ring-white/10">
         <NavItem
           icon={<Home className="w-5 h-5" />}
           label="Início"
@@ -69,6 +70,14 @@ export const BottomNav: React.FC = () => {
           active={activeTab === 'auditoria'}
           onClick={() => setActiveTab('auditoria')}
         />
+        {hasStoreAccess && (
+          <NavItem
+            icon={<Building2 className="w-5 h-5" />}
+            label="Loja"
+            active={activeTab === 'loja'}
+            onClick={() => setActiveTab('loja')}
+          />
+        )}
         <NavItem
           icon={<Settings className="w-5 h-5" />}
           label="Ajustes"
@@ -79,3 +88,4 @@ export const BottomNav: React.FC = () => {
     </div>
   );
 };
+

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { 
   CheckSquare, 
   Boxes, 
@@ -20,12 +20,18 @@ import {
   Layers, 
   Zap,
   Check,
-  Tag
+  Tag,
+  Camera,
+  CameraOff,
+  Flashlight,
+  Volume2,
+  Sparkles
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { useApp } from '../../context/AppContext';
 import { SETORES_DISPONIVEIS, SetorLoja, Product, AuditItem } from '../../types';
 import { triggerScanBeep } from '../../utils/haptics';
+import { useBarcodeDetector } from '../../hooks/useBarcodeDetector';
 
 type AuditoriaInterface = 'presenca' | 'inventario' | 'validade' | 'relatorio';
 
@@ -56,6 +62,7 @@ export const AuditoriaTab: React.FC = () => {
   const [pendentes, setPendentes] = useState<Product[]>([]);
   const [confirmados, setConfirmados] = useState<ConfirmedProductItem[]>([]);
   const [manualBarcodeInput, setManualBarcodeInput] = useState('');
+  const [isContinuousCameraActive, setIsContinuousCameraActive] = useState<boolean>(true);
   const [lastBipFeedback, setLastBipFeedback] = useState<{
     type: 'success' | 'warning' | 'error';
     message: string;
@@ -68,21 +75,146 @@ export const AuditoriaTab: React.FC = () => {
   // Modal de Detalhes de Auditoria do Relatório
   const [selectedAuditForModal, setSelectedAuditForModal] = useState<AuditItem | null>(null);
 
+  // Referências para evitar stale state durante o streaming contínuo a 30fps
+  const pendentesRef = useRef<Product[]>([]);
+  const confirmadosRef = useRef<ConfirmedProductItem[]>([]);
+  const continuousVideoRef = useRef<HTMLVideoElement | null>(null);
+
+  useEffect(() => {
+    pendentesRef.current = pendentes;
+  }, [pendentes]);
+
+  useEffect(() => {
+    confirmadosRef.current = confirmados;
+  }, [confirmados]);
+
   // Produtos cadastrados no setor selecionado antes de iniciar
   const productsInSelectedSetor = products.filter(
     p => p.category?.toUpperCase() === selectedSetor.toUpperCase()
   );
 
   // =========================================================================
+  // PROCESSAMENTO CONTÍNUO DE CÓDIGO DE BARRAS (SEM FECHAR CÂMERA)
+  // Identificou o produto da lista -> marca como confirmado -> pronto para o próximo!
+  // =========================================================================
+  const processContinuousBarcode = useCallback((scannedCode: string) => {
+    const cleanEan = scannedCode.replace(/[^0-9A-Za-z]/g, '').trim();
+    if (!cleanEan) return;
+
+    const currentPendentes = pendentesRef.current;
+    const currentConfirmados = confirmadosRef.current;
+
+    // 1. Verifica se o produto está na lista de PENDENTES
+    const pendingIndex = currentPendentes.findIndex(p => {
+      const pEan = (p.ean || '').replace(/[^0-9A-Za-z]/g, '').trim();
+      const pRed = (p.reducedCode || '').replace(/[^0-9A-Za-z]/g, '').trim();
+      const pSup = (p.supplierCode || '').replace(/[^0-9A-Za-z]/g, '').trim();
+      return (
+        pEan === cleanEan ||
+        pEan.endsWith(cleanEan) ||
+        cleanEan.endsWith(pEan) ||
+        pRed === cleanEan ||
+        pSup === cleanEan
+      );
+    });
+
+    if (pendingIndex >= 0) {
+      const foundProduct = currentPendentes[pendingIndex];
+      const nowTime = new Date().toLocaleTimeString('pt-BR');
+
+      // Remove de pendentes e atualiza ref imediatamente
+      const newPendentes = [...currentPendentes];
+      newPendentes.splice(pendingIndex, 1);
+      pendentesRef.current = newPendentes;
+      setPendentes(newPendentes);
+
+      // Adiciona em confirmados e atualiza ref imediatamente
+      const confirmedItem: ConfirmedProductItem = {
+        id: foundProduct.id,
+        name: foundProduct.name,
+        ean: foundProduct.ean,
+        reducedCode: foundProduct.reducedCode,
+        supplierCode: foundProduct.supplierCode,
+        scannedAt: nowTime,
+      };
+      const newConfirmados = [confirmedItem, ...currentConfirmados];
+      confirmadosRef.current = newConfirmados;
+      setConfirmados(newConfirmados);
+
+      // Bip sonoro e feedback visual
+      triggerScanBeep(true);
+      setLastBipFeedback({
+        type: 'success',
+        message: `✓ Confirmado: "${foundProduct.name}"`,
+        ean: foundProduct.ean,
+      });
+      setManualBarcodeInput('');
+      // CÂMERA PERMANECE ABERTA E PRONTA PARA O PRÓXIMO PRODUTO!
+      return;
+    }
+
+    // 2. Verifica se já foi confirmado anteriormente
+    const alreadyConfirmed = currentConfirmados.find(c => {
+      const cEan = (c.ean || '').replace(/[^0-9A-Za-z]/g, '').trim();
+      const cRed = (c.reducedCode || '').replace(/[^0-9A-Za-z]/g, '').trim();
+      return cEan === cleanEan || cEan.endsWith(cleanEan) || cleanEan.endsWith(cEan) || cRed === cleanEan;
+    });
+
+    if (alreadyConfirmed) {
+      setLastBipFeedback({
+        type: 'warning',
+        message: `Item já conferido: "${alreadyConfirmed.name}" às ${alreadyConfirmed.scannedAt}`,
+        ean: cleanEan,
+      });
+      setManualBarcodeInput('');
+      return;
+    }
+
+    // 3. Código não encontrado entre os itens pendentes do setor
+    triggerScanBeep(false);
+    setLastBipFeedback({
+      type: 'error',
+      message: `Código ${cleanEan} não consta nos pendentes deste setor (${sessionSetor}).`,
+      ean: cleanEan,
+    });
+    setManualBarcodeInput('');
+  }, [sessionSetor]);
+
+  // Hook do Leitor com Google Barcode Service + ZXing tryHarder
+  const {
+    isScanning,
+    hasCameraPermission,
+    cameraError,
+    torchAvailable,
+    torchOn,
+    toggleTorch,
+    startScanning,
+    stopScanning,
+  } = useBarcodeDetector(processContinuousBarcode);
+
+  // Iniciar/Parar câmera contínua automaticamente durante a auditoria ativa
+  useEffect(() => {
+    let mounted = true;
+    if (isAuditing && isContinuousCameraActive && continuousVideoRef.current) {
+      startScanning(continuousVideoRef.current);
+    } else {
+      stopScanning();
+    }
+
+    return () => {
+      mounted = false;
+      stopScanning();
+    };
+  }, [isAuditing, isContinuousCameraActive, startScanning, stopScanning]);
+
+  // =========================================================================
   // AÇÕES DA AUDITORIA DE PRESENÇA
   // =========================================================================
   const handleStartPresenceAudit = () => {
-    // Puxa todos os produtos relacionados ao setor
     const sectorProducts = products.filter(
       p => p.category?.toUpperCase() === selectedSetor.toUpperCase()
     );
 
-    // Se o setor não tiver produtos cadastrados ainda, alerta de forma clara
     if (sectorProducts.length === 0) {
       setLastBipFeedback({
         type: 'warning',
@@ -92,90 +224,28 @@ export const AuditoriaTab: React.FC = () => {
     }
 
     setSessionSetor(selectedSetor);
+    pendentesRef.current = [...sectorProducts];
+    confirmadosRef.current = [];
     setPendentes([...sectorProducts]);
     setConfirmados([]);
     setSessionStartTime(new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }));
     setIsAuditing(true);
+    setIsContinuousCameraActive(true);
     setViewListTab('pendentes');
     setLastBipFeedback(null);
     triggerScanBeep(true);
   };
 
-  // Processa a bipagem de código de barras (via Barcode Detector API / Google Service ou manual)
-  const processBarcodeScan = (scannedCode: string) => {
-    const cleanEan = scannedCode.trim();
-    if (!cleanEan) return;
-
-    // 1. Verifica se o produto está na lista de PENDENTES
-    const pendingIndex = pendentes.findIndex(
-      p => p.ean === cleanEan || p.ean.includes(cleanEan) || cleanEan.includes(p.ean)
-    );
-
-    if (pendingIndex >= 0) {
-      const foundProduct = pendentes[pendingIndex];
-      const nowTime = new Date().toLocaleTimeString('pt-BR');
-
-      // Remove de pendentes
-      const newPendentes = [...pendentes];
-      newPendentes.splice(pendingIndex, 1);
-      setPendentes(newPendentes);
-
-      // Adiciona em confirmados
-      const confirmedItem: ConfirmedProductItem = {
-        id: foundProduct.id,
-        name: foundProduct.name,
-        ean: foundProduct.ean,
-        reducedCode: foundProduct.reducedCode,
-        supplierCode: foundProduct.supplierCode,
-        scannedAt: nowTime,
-      };
-      setConfirmados(prev => [confirmedItem, ...prev]);
-
-      // Feedback auditivo e visual
-      triggerScanBeep(true);
-      setLastBipFeedback({
-        type: 'success',
-        message: `Produto confirmado: "${foundProduct.name}"`,
-        ean: foundProduct.ean,
-      });
-      setManualBarcodeInput('');
-      return;
-    }
-
-    // 2. Verifica se já foi confirmado anteriormente
-    const alreadyConfirmed = confirmados.find(
-      c => c.ean === cleanEan || c.ean.includes(cleanEan) || cleanEan.includes(c.ean)
-    );
-
-    if (alreadyConfirmed) {
-      setLastBipFeedback({
-        type: 'warning',
-        message: `Item já conferido anteriormente: "${alreadyConfirmed.name}" às ${alreadyConfirmed.scannedAt}`,
-        ean: cleanEan,
-      });
-      setManualBarcodeInput('');
-      return;
-    }
-
-    // 3. Código não encontrado entre os itens do setor
-    triggerScanBeep(false);
-    setLastBipFeedback({
-      type: 'error',
-      message: `Código ${cleanEan} não encontrado na lista de pendentes do setor ${sessionSetor}.`,
-      ean: cleanEan,
-    });
-    setManualBarcodeInput('');
-  };
-
-  // Dispara a câmera com a Barcode Detector API (Google Service)
+  // Dispara a câmera externa/modal com Google Service como alternativa se preferir
   const handleTriggerGoogleBarcodeScanner = () => {
     openScanner((scannedEan) => {
-      processBarcodeScan(scannedEan);
+      processContinuousBarcode(scannedEan);
     });
   };
 
   // Finalizar e salvar a auditoria de presença
   const handleFinishAndSaveAudit = () => {
+    stopScanning();
     const totalItems = confirmados.length + pendentes.length;
     const rate = totalItems > 0 ? ((confirmados.length / totalItems) * 100).toFixed(0) : '0';
 
@@ -474,37 +544,157 @@ export const AuditoriaTab: React.FC = () => {
                   </div>
                 </div>
 
-                {/* PAINEL DE LEITURA COM GOOGLE SERVICE (BARCODE DETECTOR API) */}
-                <div className="p-4 rounded-2xl bg-gradient-to-br from-emerald-500/10 via-teal-500/5 to-slate-900/10 border border-emerald-500/30 space-y-3">
+                {/* PAINEL DE LEITURA CONTÍNUA COM GOOGLE SERVICE (BARCODE DETECTOR API) */}
+                <div className="p-4 sm:p-5 rounded-2xl bg-gradient-to-br from-emerald-500/10 via-teal-500/5 to-slate-900/10 border border-emerald-500/30 space-y-3.5">
                   <div className="flex items-center justify-between flex-wrap gap-2">
-                    <div className="flex items-center gap-2">
-                      <div className="p-2 rounded-xl bg-emerald-600 text-white">
+                    <div className="flex items-center gap-2.5">
+                      <div className="p-2 rounded-xl bg-emerald-600 text-white shadow-md shadow-emerald-600/30">
                         <Zap className="w-4 h-4" />
                       </div>
                       <div>
-                        <h4 className="text-xs font-black text-slate-900 dark:text-white flex items-center gap-1.5">
-                          Sistema de Leitura Google Service
-                          <span className="text-[9px] px-1.5 py-0.2 rounded bg-emerald-500 text-white font-extrabold">
-                            Barcode Detector API
+                        <h4 className="text-xs font-black text-slate-900 dark:text-white flex items-center gap-1.5 flex-wrap">
+                          <span>Leitor Contínuo Hands-Free</span>
+                          <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-500 text-white font-extrabold tracking-wide uppercase">
+                            Google Service + tryHarder
+                          </span>
+                          <span className="text-[9px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-600 dark:text-amber-400 font-bold border border-amber-500/30">
+                            Sem cliques entre itens
                           </span>
                         </h4>
                         <p className="text-[10px] text-slate-500 dark:text-slate-400">
-                          Decodificação rápida de alta precisão via hardware/câmera do celular.
+                          Identificou o código da prateleira, confirma na hora e continua aberto pronto para o próximo.
                         </p>
                       </div>
                     </div>
 
-                    <button
-                      type="button"
-                      onClick={handleTriggerGoogleBarcodeScanner}
-                      className="px-4 py-2 rounded-xl bg-slate-900 dark:bg-emerald-600 hover:bg-slate-800 dark:hover:bg-emerald-700 text-white text-xs font-black shadow-md flex items-center gap-1.5 transition cursor-pointer"
-                    >
-                      <Barcode className="w-4 h-4 text-emerald-400 dark:text-white" />
-                      <span>Bipar com Câmera (Google Service)</span>
-                    </button>
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      {/* Botão de Lanterna (se disponível) */}
+                      {torchAvailable && (
+                        <button
+                          type="button"
+                          onClick={toggleTorch}
+                          className={`p-2 rounded-xl border text-xs font-bold transition flex items-center gap-1 cursor-pointer ${
+                            torchOn
+                              ? 'bg-amber-400 text-slate-950 border-amber-500 shadow-md ring-2 ring-amber-300'
+                              : 'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-100'
+                          }`}
+                          title="Alternar Lanterna Física"
+                        >
+                          <Flashlight className="w-4 h-4" />
+                          <span className="hidden sm:inline">{torchOn ? 'Lanterna Ligada' : 'Lanterna'}</span>
+                        </button>
+                      )}
+
+                      {/* Alternar Câmera Contínua (Ligar/Desligar) */}
+                      <button
+                        type="button"
+                        onClick={() => setIsContinuousCameraActive(prev => !prev)}
+                        className={`px-3 py-1.5 rounded-xl border text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
+                          isContinuousCameraActive
+                            ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm'
+                            : 'bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200 border-slate-300 dark:border-slate-600'
+                        }`}
+                      >
+                        {isContinuousCameraActive ? (
+                          <>
+                            <Camera className="w-4 h-4" />
+                            <span>Câmera Contínua Ativa</span>
+                          </>
+                        ) : (
+                          <>
+                            <CameraOff className="w-4 h-4" />
+                            <span>Ativar Câmera</span>
+                          </>
+                        )}
+                      </button>
+
+                      {/* Opção de Modal Completo de Scanner */}
+                      <button
+                        type="button"
+                        onClick={handleTriggerGoogleBarcodeScanner}
+                        className="px-2.5 py-1.5 rounded-xl bg-slate-900 dark:bg-slate-800 hover:bg-slate-800 text-white text-xs font-bold shadow-xs flex items-center gap-1 transition cursor-pointer"
+                        title="Abrir em Tela Cheia"
+                      >
+                        <Barcode className="w-3.5 h-3.5 text-emerald-400" />
+                        <span className="hidden sm:inline">Tela Cheia</span>
+                      </button>
+                    </div>
                   </div>
 
-                  {/* Input Rápido Manual / Leitor USB */}
+                  {/* VIEWPORT DA CÂMERA CONTÍNUA */}
+                  {isContinuousCameraActive ? (
+                    <div className="relative w-full h-56 sm:h-72 bg-black rounded-2xl overflow-hidden border-2 border-emerald-500/40 shadow-inner flex items-center justify-center">
+                      <video
+                        ref={continuousVideoRef}
+                        autoPlay
+                        playsInline
+                        muted
+                        className="w-full h-full object-cover"
+                      />
+
+                      {/* HUD DE MIRA E LASER ANIMADO */}
+                      <div className="absolute inset-0 pointer-events-none flex flex-col items-center justify-center p-4">
+                        {/* Caixa de Enquadramento */}
+                        <div className="w-64 sm:w-80 h-32 sm:h-40 border-2 border-emerald-400/90 rounded-2xl relative shadow-[0_0_15px_rgba(16,185,129,0.3)] bg-emerald-500/5">
+                          {/* Cantoneiras Brilhantes */}
+                          <div className="absolute -top-1 -left-1 w-4 h-4 border-t-2 border-l-2 border-emerald-300" />
+                          <div className="absolute -top-1 -right-1 w-4 h-4 border-t-2 border-r-2 border-emerald-300" />
+                          <div className="absolute -bottom-1 -left-1 w-4 h-4 border-b-2 border-l-2 border-emerald-300" />
+                          <div className="absolute -bottom-1 -right-1 w-4 h-4 border-b-2 border-r-2 border-emerald-300" />
+                          
+                          {/* Linha Laser de Varredura */}
+                          <div className="absolute inset-x-2 h-0.5 bg-gradient-to-r from-transparent via-red-500 to-transparent shadow-[0_0_10px_#ef4444] animate-pulse top-1/2 -translate-y-1/2" />
+                        </div>
+
+                        {/* Legenda Superior no Viewport */}
+                        <div className="absolute top-3 inset-x-4 flex items-center justify-between text-[11px] font-bold text-white pointer-events-none">
+                          <span className="px-2.5 py-1 rounded-full bg-black/60 backdrop-blur-md border border-white/10 flex items-center gap-1.5">
+                            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+                            Amostragem Contínua Ativa
+                          </span>
+                          <span className="px-2.5 py-1 rounded-full bg-emerald-600/80 backdrop-blur-md border border-emerald-400/30">
+                            {confirmados.length} auditados / {pendentes.length} pendentes
+                          </span>
+                        </div>
+
+                        {/* Legenda Inferior no Viewport */}
+                        <div className="absolute bottom-3 inset-x-4 flex items-center justify-center pointer-events-none">
+                          <span className="px-3 py-1 rounded-full bg-black/70 backdrop-blur-md border border-white/10 text-[10px] text-emerald-300 font-mono tracking-wide">
+                            Aponte sucessivamente para as embalagens da prateleira
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Erro de Câmera / Permissão */}
+                      {cameraError && (
+                        <div className="absolute inset-0 bg-slate-900/90 backdrop-blur-xs flex flex-col items-center justify-center p-4 text-center space-y-3">
+                          <AlertTriangle className="w-8 h-8 text-amber-400" />
+                          <p className="text-xs text-white max-w-sm">{cameraError}</p>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (continuousVideoRef.current) startScanning(continuousVideoRef.current);
+                            }}
+                            className="px-4 py-2 rounded-xl bg-emerald-600 text-white text-xs font-bold hover:bg-emerald-700"
+                          >
+                            Tentar Acessar Câmera Novamente
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="p-6 rounded-2xl bg-slate-100 dark:bg-slate-800 border border-dashed border-slate-300 dark:border-slate-700 text-center space-y-2">
+                      <CameraOff className="w-8 h-8 text-slate-400 mx-auto" />
+                      <p className="text-xs font-bold text-slate-700 dark:text-slate-300">
+                        Câmera Contínua Pausada
+                      </p>
+                      <p className="text-[11px] text-slate-400 max-w-sm mx-auto">
+                        Clique no botão acima "Ativar Câmera" para retomar a conferência contínua com bipagem instantânea.
+                      </p>
+                    </div>
+                  )}
+
+                  {/* Input Rápido Manual / Leitor USB / Bluetooth */}
                   <div className="flex gap-2">
                     <input
                       type="text"
@@ -513,14 +703,14 @@ export const AuditoriaTab: React.FC = () => {
                       onChange={e => setManualBarcodeInput(e.target.value)}
                       onKeyDown={e => {
                         if (e.key === 'Enter') {
-                          processBarcodeScan(manualBarcodeInput);
+                          processContinuousBarcode(manualBarcodeInput);
                         }
                       }}
                       className="flex-1 px-3.5 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs text-slate-800 dark:text-slate-100 font-mono focus:outline-none focus:ring-2 focus:ring-emerald-500"
                     />
                     <button
                       type="button"
-                      onClick={() => processBarcodeScan(manualBarcodeInput)}
+                      onClick={() => processContinuousBarcode(manualBarcodeInput)}
                       className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition shadow-xs cursor-pointer"
                     >
                       Confirmar
@@ -529,23 +719,23 @@ export const AuditoriaTab: React.FC = () => {
 
                   {/* Feedback do Último Bip */}
                   {lastBipFeedback && (
-                    <div className={`p-3 rounded-xl border text-xs flex items-center justify-between ${
+                    <div className={`p-3 rounded-xl border text-xs flex items-center justify-between transition-all duration-200 animate-in fade-in ${
                       lastBipFeedback.type === 'success'
-                        ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-800 dark:text-emerald-300 font-semibold'
+                        ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-800 dark:text-emerald-300 font-semibold'
                         : lastBipFeedback.type === 'warning'
-                        ? 'bg-amber-500/15 border-amber-500/30 text-amber-800 dark:text-amber-300 font-medium'
-                        : 'bg-rose-500/15 border-rose-500/30 text-rose-800 dark:text-rose-300 font-medium'
+                        ? 'bg-amber-500/15 border-amber-500/40 text-amber-800 dark:text-amber-300 font-medium'
+                        : 'bg-rose-500/15 border-rose-500/40 text-rose-800 dark:text-rose-300 font-medium'
                     }`}>
                       <div className="flex items-center gap-2">
                         {lastBipFeedback.type === 'success' ? (
-                          <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                          <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
                         ) : (
                           <AlertTriangle className="w-4 h-4 shrink-0" />
                         )}
                         <span>{lastBipFeedback.message}</span>
                       </div>
                       {lastBipFeedback.ean && (
-                        <span className="font-mono text-[10px] px-2 py-0.5 rounded bg-black/10 dark:bg-white/10 shrink-0">
+                        <span className="font-mono text-[10px] px-2 py-0.5 rounded bg-black/10 dark:bg-white/10 shrink-0 font-bold">
                           EAN: {lastBipFeedback.ean}
                         </span>
                       )}
@@ -615,8 +805,8 @@ export const AuditoriaTab: React.FC = () => {
                             </span>
                             <button
                               type="button"
-                              onClick={() => processBarcodeScan(item.ean)}
-                              className="px-2.5 py-1 rounded-xl bg-slate-200 dark:bg-slate-700 hover:bg-emerald-600 hover:text-white text-slate-700 dark:text-slate-200 text-[11px] font-bold transition"
+                              onClick={() => processContinuousBarcode(item.ean)}
+                              className="px-2.5 py-1 rounded-xl bg-slate-200 dark:bg-slate-700 hover:bg-emerald-600 hover:text-white text-slate-700 dark:text-slate-200 text-[11px] font-bold transition cursor-pointer"
                               title="Confirmar manualmente este item"
                             >
                               Conferir
