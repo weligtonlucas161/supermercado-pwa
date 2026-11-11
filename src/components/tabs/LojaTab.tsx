@@ -20,6 +20,7 @@ import {
 import { useApp } from '../../context/AppContext';
 import { StoreEmployee, StoreRole, SETORES_DISPONIVEIS, SetorLoja } from '../../types';
 import { triggerScanBeep } from '../../utils/haptics';
+import { EmployeeDetailModal } from '../modals/EmployeeDetailModal';
 
 export const LojaTab: React.FC = () => {
   const { 
@@ -38,6 +39,7 @@ export const LojaTab: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState('');
 
   // Modais
+  const [selectedEmployeeForDetail, setSelectedEmployeeForDetail] = useState<StoreEmployee | null>(null);
   const [isEmployeeModalOpen, setIsEmployeeModalOpen] = useState(false);
   const [isRoleModalOpen, setIsRoleModalOpen] = useState(false);
   const [editingRole, setEditingRole] = useState<StoreRole | null>(null);
@@ -329,15 +331,17 @@ export const LojaTab: React.FC = () => {
               {filteredEmployees.map(emp => (
                 <div 
                   key={emp.id}
-                  className={`p-4 rounded-3xl border transition-all ${
+                  onClick={() => setSelectedEmployeeForDetail(emp)}
+                  className={`p-4 rounded-3xl border transition-all cursor-pointer hover:border-emerald-500/50 hover:shadow-md active:scale-[0.99] ${
                     emp.ativo
                       ? 'bg-white dark:bg-slate-850 border-slate-200/80 dark:border-slate-750 shadow-sm'
                       : 'bg-slate-50 dark:bg-slate-900/60 border-slate-200 dark:border-slate-800 opacity-60'
                   }`}
+                  title="Clique para ver senha, detalhes e editar permissões"
                 >
                   <div className="flex items-start justify-between">
                     <div>
-                      <h4 className="font-extrabold text-xs sm:text-sm text-slate-900 dark:text-white">
+                      <h4 className="font-extrabold text-xs sm:text-sm text-slate-900 dark:text-white flex items-center gap-1.5">
                         {emp.nome}
                       </h4>
                       <p className="text-[11px] text-emerald-600 dark:text-emerald-400 font-bold font-mono">
@@ -346,7 +350,10 @@ export const LojaTab: React.FC = () => {
                     </div>
 
                     <button
-                      onClick={() => toggleEmployeeStatus(emp.id, !emp.ativo)}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        toggleEmployeeStatus(emp.id, !emp.ativo);
+                      }}
                       className={`text-[10px] font-black px-2.5 py-1 rounded-full cursor-pointer transition ${
                         emp.ativo
                           ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/25'
@@ -729,6 +736,13 @@ export const LojaTab: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Modal de Detalhes, Visualização de Senha e Edição do Funcionário */}
+      <EmployeeDetailModal
+        isOpen={Boolean(selectedEmployeeForDetail)}
+        employee={selectedEmployeeForDetail}
+        onClose={() => setSelectedEmployeeForDetail(null)}
+      />
     </div>
   );
 };

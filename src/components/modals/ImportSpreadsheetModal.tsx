@@ -47,7 +47,7 @@ interface ColumnOption {
 }
 
 export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ isOpen, onClose }) => {
-  const { addProduct, operator, refreshProductsFromDatabase } = useApp();
+  const { addProduct, importProductsBatch, operator, refreshProductsFromDatabase } = useApp();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   // Estados de Conexão com Supabase
@@ -404,27 +404,18 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
         }
       );
 
-      // 2. Gravação no estoque do App (informações descriptografadas com o setor escolhido)
-      encryptedList.forEach(item => {
-        addProduct({
-          name: item.original.name,
-          supplierCode: item.original.supplierCode,
-          reducedCode: item.original.reducedCode,
-          ean: item.original.ean,
-          stock: item.original.quantity,
-          minStock: 10,
-          price: 9.90,
-          category: item.original.setor || selectedSetor,
-          location: `Gôndola - ${item.original.setor || selectedSetor}`,
-          loja_id: operator.loja_id || 'loja_padrao_001',
-          isEncryptedInStorage: true,
-          encryptedPayload: {
-            ciphertext: item.encrypted.ciphertext,
-            iv: item.encrypted.iv,
-            encryptedAt: new Date().toISOString(),
-          },
-        });
-      });
+      // 2. Gravação Segura no estoque do App isolada por setor:
+      // O setor selecionado é estritamente aplicado a estes produtos, e produtos de OUTROS setores são 100% PRESERVADOS!
+      const itemsToBatch: SpreadsheetProductItem[] = encryptedList.map(item => ({
+        name: item.original.name,
+        supplierCode: item.original.supplierCode,
+        reducedCode: item.original.reducedCode,
+        ean: item.original.ean,
+        quantity: item.original.quantity,
+        setor: selectedSetor,
+        sector: selectedSetor,
+      }));
+      importProductsBatch(itemsToBatch, selectedSetor, operator.loja_id || 'loja_padrao_001');
 
       setIsUploading(false);
 

@@ -16,12 +16,14 @@ import {
   ChevronRight,
   TrendingDown,
   ShieldAlert,
-  ArrowRight
+  ArrowRight,
+  MessageSquare
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { NewValidityModal } from '../modals/NewValidityModal';
 import { NewProductModal } from '../modals/NewProductModal';
 import { ImportSpreadsheetModal } from '../modals/ImportSpreadsheetModal';
+import { RuptureHistoryChart } from '../dashboard/RuptureHistoryChart';
 
 /**
  * Componente Dashboard com cards de resumo focados na operação de piso de loja:
@@ -270,7 +272,9 @@ export const InicioTab: React.FC = () => {
     darkMode, 
     applyDiscount, 
     openScanner,
-    operator 
+    operator,
+    openChat,
+    unreadChatCount 
   } = useApp();
 
   const [isValidityModalOpen, setIsValidityModalOpen] = useState(false);
@@ -337,17 +341,20 @@ export const InicioTab: React.FC = () => {
       {/* DASHBOARD PRINCIPAL COM CARDS DEDICADOS */}
       <Dashboard />
 
+      {/* GRÁFICO RECHARTS: HISTÓRICO DE RUPTURAS NOS ÚLTIMOS 7 DIAS */}
+      <RuptureHistoryChart />
+
       {/* Ações Rápidas de Terminal */}
       <div>
         <div className="flex items-center justify-between mb-3">
           <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400">
-            Ações Rápidas de Campo
+            Ações Rápidas de Campo & Comunicação
           </h3>
         </div>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-2.5">
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2.5">
           <button
             onClick={() => openScanner()}
-            className={`p-3.5 rounded-2xl border flex items-center gap-3 transition-all text-left ${
+            className={`p-3.5 rounded-2xl border flex items-center gap-3 transition-all text-left cursor-pointer ${
               darkMode
                 ? 'bg-slate-800/90 border-slate-700 hover:bg-slate-750'
                 : 'bg-white border-slate-200 hover:bg-slate-50'
@@ -358,13 +365,40 @@ export const InicioTab: React.FC = () => {
             </div>
             <div>
               <div className="text-xs font-bold text-slate-800 dark:text-white">Bipar Produto</div>
-              <div className="text-[10px] text-slate-400">Google Barcode Detector</div>
+              <div className="text-[10px] text-slate-400">Google Barcode</div>
+            </div>
+          </button>
+
+          <button
+            onClick={() => openChat()}
+            className={`p-3.5 rounded-2xl border flex items-center gap-3 transition-all text-left relative cursor-pointer ${
+              darkMode
+                ? 'bg-slate-800/90 border-slate-700 hover:bg-slate-750'
+                : 'bg-white border-slate-200 hover:bg-slate-50'
+            } shadow-xs`}
+          >
+            <div className="p-2.5 rounded-xl bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 relative">
+              <MessageSquare className="w-5 h-5" />
+              {unreadChatCount > 0 && (
+                <span className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-rose-500 ring-2 ring-white dark:ring-slate-900 animate-pulse" />
+              )}
+            </div>
+            <div>
+              <div className="text-xs font-bold text-slate-800 dark:text-white flex items-center gap-1.5">
+                <span>Chat Loja</span>
+                {unreadChatCount > 0 && (
+                  <span className="text-[9px] font-black px-1.5 py-0.2 rounded-full bg-rose-500 text-white">
+                    {unreadChatCount}
+                  </span>
+                )}
+              </div>
+              <div className="text-[10px] text-slate-400">Grupo & Líderes</div>
             </div>
           </button>
 
           <button
             onClick={() => setIsSpreadsheetModalOpen(true)}
-            className={`p-3.5 rounded-2xl border flex items-center gap-3 transition-all text-left ${
+            className={`p-3.5 rounded-2xl border flex items-center gap-3 transition-all text-left cursor-pointer ${
               darkMode
                 ? 'bg-slate-800/90 border-slate-700 hover:bg-slate-750'
                 : 'bg-white border-slate-200 hover:bg-slate-50'
@@ -375,13 +409,13 @@ export const InicioTab: React.FC = () => {
             </div>
             <div>
               <div className="text-xs font-bold text-slate-800 dark:text-white">Subir Planilha</div>
-              <div className="text-[10px] text-slate-400">Importação XLSX/CSV</div>
+              <div className="text-[10px] text-slate-400">Importação XLSX</div>
             </div>
           </button>
 
           <button
             onClick={() => setIsValidityModalOpen(true)}
-            className={`p-3.5 rounded-2xl border flex items-center gap-3 transition-all text-left ${
+            className={`p-3.5 rounded-2xl border flex items-center gap-3 transition-all text-left cursor-pointer ${
               darkMode
                 ? 'bg-slate-800/90 border-slate-700 hover:bg-slate-750'
                 : 'bg-white border-slate-200 hover:bg-slate-50'
@@ -392,13 +426,13 @@ export const InicioTab: React.FC = () => {
             </div>
             <div>
               <div className="text-xs font-bold text-slate-800 dark:text-white">Lançar Validade</div>
-              <div className="text-[10px] text-slate-400">Novo lote recebido</div>
+              <div className="text-[10px] text-slate-400">Novo lote</div>
             </div>
           </button>
 
           <button
             onClick={() => setIsProductModalOpen(true)}
-            className={`p-3.5 rounded-2xl border flex items-center gap-3 transition-all text-left ${
+            className={`p-3.5 rounded-2xl border flex items-center gap-3 transition-all text-left cursor-pointer ${
               darkMode
                 ? 'bg-slate-800/90 border-slate-700 hover:bg-slate-750'
                 : 'bg-white border-slate-200 hover:bg-slate-50'
@@ -409,7 +443,7 @@ export const InicioTab: React.FC = () => {
             </div>
             <div>
               <div className="text-xs font-bold text-slate-800 dark:text-white">Novo Produto</div>
-              <div className="text-[10px] text-slate-400">Cadastrar no catálogo</div>
+              <div className="text-[10px] text-slate-400">Catálogo manual</div>
             </div>
           </button>
         </div>

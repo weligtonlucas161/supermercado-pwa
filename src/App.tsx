@@ -19,6 +19,7 @@ import { LojaTab } from './components/tabs/LojaTab';
 import { ConfiguracoesTab } from './components/tabs/ConfiguracoesTab';
 
 import { FirstLoginPasswordModal } from './components/auth/FirstLoginPasswordModal';
+import { StoreChatModal } from './components/chat/StoreChatModal';
 
 function AppContent() {
   const { 
@@ -93,6 +94,9 @@ function AppContent() {
 
       {/* Modal Global do Leitor de Código de Barras */}
       <BarcodeModal />
+
+      {/* Modal Global de Chat Operacional da Loja e Canal de Líderes */}
+      <StoreChatModal />
 
       {/* Modal Obrigatório de Alteração de Senha no Primeiro Login */}
       {isFirstLogin && (

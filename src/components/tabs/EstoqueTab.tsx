@@ -18,12 +18,14 @@ import { useApp } from '../../context/AppContext';
 import { Product } from '../../types';
 import { NewProductModal } from '../modals/NewProductModal';
 import { ImportSpreadsheetModal } from '../modals/ImportSpreadsheetModal';
+import { ProductDetailModal } from '../modals/ProductDetailModal';
 
 interface ProductCardProps {
   product: Product;
   darkMode: boolean;
   onUpdateStock: (id: string, update: { delta?: number }) => void;
   onRequestDelete: (product: Product) => void;
+  onSelectProduct: (product: Product) => void;
 }
 
 const ProductCard: React.FC<ProductCardProps> = ({
@@ -31,6 +33,7 @@ const ProductCard: React.FC<ProductCardProps> = ({
   darkMode,
   onUpdateStock,
   onRequestDelete,
+  onSelectProduct,
 }) => {
   const [isRedDeleteMode, setIsRedDeleteMode] = useState(false);
   const [dragOffset, setDragOffset] = useState(0);
@@ -199,13 +202,23 @@ const ProductCard: React.FC<ProductCardProps> = ({
             transform: `translateX(${dragOffset}px)`,
             transition: isDragging ? 'none' : 'transform 0.25s ease-out',
           }}
-          className={`relative p-4 rounded-2xl border flex flex-col sm:flex-row sm:items-center justify-between gap-3 transition-colors ${
+          onClick={() => {
+            if (!movedRef.current && Math.abs(dragOffset) < 5) {
+              onSelectProduct(product);
+            }
+          }}
+          className={`relative p-4 rounded-2xl border flex flex-col sm:flex-row sm:items-center justify-between gap-3 transition-colors cursor-pointer ${
             darkMode ? 'bg-slate-800/90 border-slate-700' : 'bg-white border-slate-200'
-          } shadow-xs hover:border-emerald-500/40 cursor-grab active:cursor-grabbing`}
+          } shadow-xs hover:border-emerald-500/50 hover:shadow-md transition-all active:scale-[0.99]`}
         >
           <div className="space-y-1">
             <div className="flex items-center gap-2 flex-wrap">
               <h4 className="text-xs font-bold text-slate-900 dark:text-white">{product.name}</h4>
+              {product.isLockedForEdit && (
+                <span className="bg-amber-500/15 text-amber-700 dark:text-amber-400 text-[10px] px-2 py-0.5 rounded-md font-bold border border-amber-500/30 flex items-center gap-1">
+                  <Lock className="w-3 h-3 text-amber-500" /> Em edição ({product.lockedBy || 'outro operador'})
+                </span>
+              )}
               {isLow && (
                 <span className="bg-amber-500/15 text-amber-700 dark:text-amber-400 text-[10px] px-2 py-0.5 rounded-md font-bold border border-amber-500/20 flex items-center gap-1">
                   <AlertTriangle className="w-3 h-3 text-amber-500" /> Ruptura Iminente
@@ -214,6 +227,11 @@ const ProductCard: React.FC<ProductCardProps> = ({
             </div>
             <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-400 font-mono">
               <span>EAN: {product.ean}</span>
+              {product.secondaryEan && (
+                <span className="text-emerald-600 dark:text-emerald-400 font-bold bg-emerald-500/10 px-1.5 py-0.5 rounded">
+                  2º EAN: {product.secondaryEan}
+                </span>
+              )}
               {product.reducedCode && <span>• Reduzido: {product.reducedCode}</span>}
               {product.supplierCode && <span>• Forn: {product.supplierCode}</span>}
               <span>• <span className="font-sans text-slate-500 dark:text-slate-400 font-medium">{product.location}</span></span>
@@ -293,6 +311,9 @@ export const EstoqueTab: React.FC = () => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isSpreadsheetModalOpen, setIsSpreadsheetModalOpen] = useState(false);
 
+  // Modal de Detalhes e Edição Concorrente de Produto
+  const [selectedProductForDetail, setSelectedProductForDetail] = useState<Product | null>(null);
+
   // Modal de Confirmação de Remoção de Produto
   const [productToDelete, setProductToDelete] = useState<Product | null>(null);
 
@@ -306,7 +327,7 @@ export const EstoqueTab: React.FC = () => {
   // Base filtrada pela sub-aba ativa se houver rupturas
   const baseProducts = (stockSubTab === 'rupturas' && hasRuptures) ? ruptureProducts : products;
 
-  // Busca Multicampos: Nome, EAN, Código Reduzido, Código de Fornecedor
+  // Busca Multicampos: Nome, EAN, 2º EAN, Código Reduzido, Código de Fornecedor
   const filtered = baseProducts
     .filter(p => {
       const term = searchTerm.toLowerCase().trim();
@@ -316,6 +337,7 @@ export const EstoqueTab: React.FC = () => {
       const matchesSearch =
         p.name.toLowerCase().includes(term) ||
         p.ean.includes(term) ||
+        (p.secondaryEan ? p.secondaryEan.includes(term) : false) ||
         (p.reducedCode ? p.reducedCode.toLowerCase().includes(term) : false) ||
         (p.supplierCode ? p.supplierCode.toLowerCase().includes(term) : false) ||
         (p.location ? p.location.toLowerCase().includes(term) : false);
@@ -600,6 +622,7 @@ export const EstoqueTab: React.FC = () => {
                   darkMode={darkMode}
                   onUpdateStock={updateProductStock}
                   onRequestDelete={(p) => setProductToDelete(p)}
+                  onSelectProduct={(p) => setSelectedProductForDetail(p)}
                 />
               ))
             )}
@@ -655,6 +678,11 @@ export const EstoqueTab: React.FC = () => {
 
       <NewProductModal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} />
       <ImportSpreadsheetModal isOpen={isSpreadsheetModalOpen} onClose={() => setIsSpreadsheetModalOpen(false)} />
+      <ProductDetailModal
+        isOpen={Boolean(selectedProductForDetail)}
+        product={selectedProductForDetail}
+        onClose={() => setSelectedProductForDetail(null)}
+      />
     </div>
   );
 };

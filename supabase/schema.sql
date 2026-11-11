@@ -217,6 +217,7 @@ CREATE TABLE IF NOT EXISTS public.produtos (
     id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
     nome TEXT NOT NULL,
     codigo_barras TEXT NOT NULL,
+    codigo_barras_secundario TEXT,           -- 2º Código de Barras (ex: código do sistema vs código da embalagem)
     plu TEXT,                                -- Código Reduzido
     codigo_fornecedor TEXT,                  -- Código de Fornecedor
     setor TEXT NOT NULL DEFAULT 'Mercearia',
@@ -226,6 +227,9 @@ CREATE TABLE IF NOT EXISTS public.produtos (
     is_encrypted BOOLEAN NOT NULL DEFAULT FALSE,
     ciphertext TEXT,
     iv TEXT,
+    is_locked_for_edit BOOLEAN NOT NULL DEFAULT FALSE, -- Bloqueio de edição concorrente
+    locked_by TEXT,                                    -- Operador que está editando
+    locked_at TIMESTAMPTZ,                             -- Horário do bloqueio
     criado_em BIGINT NOT NULL DEFAULT (extract(epoch from now()) * 1000),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -233,6 +237,7 @@ CREATE TABLE IF NOT EXISTS public.produtos (
 
 CREATE INDEX IF NOT EXISTS idx_produtos_loja_id ON public.produtos(loja_id);
 CREATE INDEX IF NOT EXISTS idx_produtos_codigo_barras ON public.produtos(codigo_barras);
+CREATE INDEX IF NOT EXISTS idx_produtos_ean_sec ON public.produtos(codigo_barras_secundario);
 CREATE INDEX IF NOT EXISTS idx_produtos_ean_loja ON public.produtos(loja_id, codigo_barras);
 CREATE INDEX IF NOT EXISTS idx_produtos_plu_loja ON public.produtos(loja_id, plu);
 CREATE INDEX IF NOT EXISTS idx_produtos_forn_loja ON public.produtos(loja_id, codigo_fornecedor);
@@ -503,6 +508,29 @@ $$ LANGUAGE plpgsql SECURITY DEFINER;
 -- ----------------------------------------------------------------------------
 -- 8. SEGURANÇA AVANÇADA (RLS)
 -- ----------------------------------------------------------------------------
+-- 7.1 TABELA DE CHAT OPERACIONAL (GRUPO DA LOJA E CONVERSAS COM LÍDERES)
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS public.chat_mensagens (
+    id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+    loja_id TEXT NOT NULL REFERENCES public.lojas(id) ON DELETE CASCADE,
+    canal_tipo TEXT NOT NULL DEFAULT 'grupo', -- 'grupo' (Geral da Loja) ou 'direto_lider' (1 a 1 com Liderança)
+    destinatario_id TEXT,                     -- Matrícula do líder de destino no canal privado
+    destinatario_nome TEXT,
+    remetente_matricula TEXT NOT NULL,
+    remetente_nome TEXT NOT NULL,
+    remetente_cargo TEXT,
+    is_anonimo BOOLEAN NOT NULL DEFAULT FALSE, -- Modo Anônimo (sigilo operacional / anonimato)
+    conteudo TEXT NOT NULL,
+    timestamp BIGINT NOT NULL DEFAULT (extract(epoch from now()) * 1000),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_chat_loja_timestamp ON public.chat_mensagens(loja_id, timestamp);
+CREATE INDEX IF NOT EXISTS idx_chat_canal ON public.chat_mensagens(loja_id, canal_tipo, destinatario_id);
+
+-- ----------------------------------------------------------------------------
+-- 8. SEGURANÇA AVANÇADA (RLS)
+-- ----------------------------------------------------------------------------
 ALTER TABLE public.lojas ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.usuarios ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.sessoes_ativas ENABLE ROW LEVEL SECURITY;
@@ -514,6 +542,7 @@ ALTER TABLE public.auditorias_finalizadas ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.auditoria_produtos ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.app_logs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.feedbacks ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.chat_mensagens ENABLE ROW LEVEL SECURITY;
 
 DO $$ BEGIN
     DROP POLICY IF EXISTS "Permitir leitura de lojas ativas" ON public.lojas;
@@ -551,6 +580,9 @@ DO $$ BEGIN
 
     DROP POLICY IF EXISTS "Acesso seguro feedbacks" ON public.feedbacks;
     CREATE POLICY "Acesso seguro feedbacks" ON public.feedbacks FOR ALL USING (true) WITH CHECK (true);
+
+    DROP POLICY IF EXISTS "Acesso seguro chat_mensagens" ON public.chat_mensagens;
+    CREATE POLICY "Acesso seguro chat_mensagens" ON public.chat_mensagens FOR ALL USING (true) WITH CHECK (true);
 EXCEPTION WHEN OTHERS THEN NULL;
 END $$;
 

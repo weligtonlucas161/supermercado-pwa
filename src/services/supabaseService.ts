@@ -9,7 +9,8 @@ import {
   OfflineAction,
   Store,
   StoreEmployee,
-  StoreRole
+  StoreRole,
+  ChatMessage
 } from '../types';
 import { decryptSingleField, isEncrypted } from '../utils/encryptionUtils';
 
@@ -1063,6 +1064,7 @@ export async function fetchProductsFromSupabase(lojaId?: string): Promise<Produc
       return {
         id: String(row.id || `prod-${Math.random().toString(36).substring(2, 9)}`),
         ean: decryptSingleField(rawEan),
+        secondaryEan: row.codigo_barras_secundario ? decryptSingleField(String(row.codigo_barras_secundario)) : undefined,
         name: decryptSingleField(rawNome) || 'Produto Cadastrado',
         supplierCode: decryptSingleField(rawForn),
         reducedCode: decryptSingleField(rawPlu),
@@ -1073,6 +1075,9 @@ export async function fetchProductsFromSupabase(lojaId?: string): Promise<Produc
         location: `Gôndola - ${row.setor || 'Estoque'}`,
         loja_id: String(row.loja_id || lojaId || 'loja_padrao_001'),
         data_vencimento: String(row.data_vencimento || ''),
+        isLockedForEdit: Boolean(row.is_locked_for_edit),
+        lockedBy: row.locked_by ? String(row.locked_by) : undefined,
+        lockedAt: row.locked_at ? String(row.locked_at) : undefined,
         isEncryptedInStorage: isEnc,
         encryptedPayload: row.ciphertext
           ? {
@@ -1510,4 +1515,279 @@ export function subscribeToAuditRealtime(
     return () => {};
   }
 }
+
+// ============================================================================
+// 12. SISTEMA DE CHAT OPERACIONAL (GRUPO DA LOJA E CANAL DIRETO COM LÍDERES)
+// ============================================================================
+
+export const LOCAL_STORAGE_CHAT_KEY = 'superpwa_chat_messages_v1';
+
+export function getStoredChatMessages(lojaId?: string): ChatMessage[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const raw = localStorage.getItem(LOCAL_STORAGE_CHAT_KEY);
+    if (!raw) return [];
+    const list: ChatMessage[] = JSON.parse(raw);
+    if (lojaId) {
+      return list.filter(m => m.loja_id === lojaId);
+    }
+    return list;
+  } catch (e) {
+    console.warn('[Chat] Erro ao ler mensagens locais:', e);
+    return [];
+  }
+}
+
+export function saveStoredChatMessage(message: ChatMessage): void {
+  if (typeof window === 'undefined') return;
+  try {
+    const current = getStoredChatMessages();
+    const exists = current.some(m => m.id === message.id);
+    if (!exists) {
+      const updated = [...current, message];
+      localStorage.setItem(LOCAL_STORAGE_CHAT_KEY, JSON.stringify(updated));
+    }
+  } catch (e) {
+    console.warn('[Chat] Erro ao salvar mensagem local:', e);
+  }
+}
+
+/**
+ * Consulta mensagens de chat da loja com suporte a modo offline e fallback
+ */
+export async function fetchChatMessagesFromSupabase(lojaId: string): Promise<ChatMessage[]> {
+  const localList = getStoredChatMessages(lojaId);
+
+  if (!client || !isSupabaseConfigured()) {
+    return localList;
+  }
+
+  try {
+    const { data, error } = await client
+      .from('chat_mensagens')
+      .select('*')
+      .eq('loja_id', lojaId)
+      .order('timestamp', { ascending: true })
+      .limit(200);
+
+    if (error) {
+      console.warn('[Chat] Erro na consulta do Supabase, usando local:', error.message);
+      return localList;
+    }
+
+    if (data && data.length > 0) {
+      const mapped: ChatMessage[] = data.map(row => ({
+        id: String(row.id),
+        loja_id: String(row.loja_id),
+        canal_tipo: (row.canal_tipo as 'grupo' | 'direto_lider') || 'grupo',
+        destinatario_id: row.destinatario_id ? String(row.destinatario_id) : undefined,
+        destinatario_nome: row.destinatario_nome ? String(row.destinatario_nome) : undefined,
+        remetente_matricula: String(row.remetente_matricula),
+        remetente_nome: String(row.remetente_nome),
+        remetente_cargo: row.remetente_cargo ? String(row.remetente_cargo) : undefined,
+        is_anonimo: Boolean(row.is_anonimo),
+        conteudo: String(row.conteudo || ''),
+        timestamp: Number(row.timestamp) || Date.now(),
+        created_at: row.created_at ? String(row.created_at) : undefined,
+      }));
+
+      // Sincroniza local
+      try {
+        localStorage.setItem(LOCAL_STORAGE_CHAT_KEY, JSON.stringify(mapped));
+      } catch {
+        // ignore
+      }
+
+      return mapped;
+    }
+
+    return localList;
+  } catch (err) {
+    console.warn('[Chat] Erro ao carregar mensagens:', err);
+    return localList;
+  }
+}
+
+/**
+ * Envia mensagem para o canal do chat (grupo da loja ou direto com líderes)
+ */
+export async function sendChatMessageToSupabase(
+  msg: Omit<ChatMessage, 'id' | 'timestamp' | 'created_at'>
+): Promise<{ success: boolean; data?: ChatMessage; error?: string }> {
+  const newMsg: ChatMessage = {
+    ...msg,
+    id: `msg_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+    timestamp: Date.now(),
+    created_at: new Date().toISOString(),
+  };
+
+  // Salva no armazenamento local imediatamente
+  saveStoredChatMessage(newMsg);
+
+  if (!client || !isSupabaseConfigured()) {
+    return { success: true, data: newMsg };
+  }
+
+  try {
+    const { error } = await client.from('chat_mensagens').insert({
+      id: newMsg.id,
+      loja_id: newMsg.loja_id,
+      canal_tipo: newMsg.canal_tipo,
+      destinatario_id: newMsg.destinatario_id || null,
+      destinatario_nome: newMsg.destinatario_nome || null,
+      remetente_matricula: newMsg.remetente_matricula,
+      remetente_nome: newMsg.remetente_nome,
+      remetente_cargo: newMsg.remetente_cargo || null,
+      is_anonimo: newMsg.is_anonimo,
+      conteudo: newMsg.conteudo,
+      timestamp: newMsg.timestamp,
+    });
+
+    if (error) {
+      console.warn('[Chat] Supabase insert warning:', error.message);
+      return { success: true, data: newMsg }; // fallback local
+    }
+
+    return { success: true, data: newMsg };
+  } catch (err: unknown) {
+    const msgErr = err instanceof Error ? err.message : String(err);
+    console.error('[Chat] Erro no envio:', msgErr);
+    return { success: true, data: newMsg }; // salvo localmente
+  }
+}
+
+/**
+ * Assina o canal de chat da loja em tempo real
+ */
+export function subscribeToChatRealtime(
+  lojaId: string,
+  onNewMessage: (msg: ChatMessage) => void
+): () => void {
+  if (!client || !isSupabaseConfigured()) return () => {};
+
+  try {
+    const channel = client
+      .channel(`realtime_chat_${lojaId}_${Date.now()}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'chat_mensagens',
+          filter: `loja_id=eq.${lojaId}`,
+        },
+        (payload) => {
+          if (payload.new) {
+            const raw = payload.new as Record<string, unknown>;
+            const msg: ChatMessage = {
+              id: String(raw.id),
+              loja_id: String(raw.loja_id),
+              canal_tipo: (raw.canal_tipo as 'grupo' | 'direto_lider') || 'grupo',
+              destinatario_id: raw.destinatario_id ? String(raw.destinatario_id) : undefined,
+              destinatario_nome: raw.destinatario_nome ? String(raw.destinatario_nome) : undefined,
+              remetente_matricula: String(raw.remetente_matricula),
+              remetente_nome: String(raw.remetente_nome),
+              remetente_cargo: raw.remetente_cargo ? String(raw.remetente_cargo) : undefined,
+              is_anonimo: Boolean(raw.is_anonimo),
+              conteudo: String(raw.conteudo || ''),
+              timestamp: Number(raw.timestamp) || Date.now(),
+              created_at: raw.created_at ? String(raw.created_at) : undefined,
+            };
+            saveStoredChatMessage(msg);
+            onNewMessage(msg);
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      client?.removeChannel(channel);
+    };
+  } catch (err) {
+    console.warn('[Chat] Falha ao registrar realtime:', err);
+    return () => {};
+  }
+}
+
+// ============================================================================
+// 13. BLOQUEIO E ATUALIZAÇÃO DE PRODUTOS (CONCORRÊNCIA E 2º CÓDIGO DE BARRAS)
+// ============================================================================
+
+export async function lockProductInSupabase(
+  productId: string,
+  lockedBy: string
+): Promise<{ success: boolean }> {
+  if (!client || !isSupabaseConfigured()) return { success: true };
+
+  try {
+    await client
+      .from('produtos')
+      .update({
+        is_locked_for_edit: true,
+        locked_by: lockedBy,
+        locked_at: new Date().toISOString(),
+      })
+      .eq('id', productId);
+    return { success: true };
+  } catch (err) {
+    console.warn('[ProductLock] Erro ao bloquear produto:', err);
+    return { success: true };
+  }
+}
+
+export async function unlockProductInSupabase(productId: string): Promise<{ success: boolean }> {
+  if (!client || !isSupabaseConfigured()) return { success: true };
+
+  try {
+    await client
+      .from('produtos')
+      .update({
+        is_locked_for_edit: false,
+        locked_by: null,
+        locked_at: null,
+      })
+      .eq('id', productId);
+    return { success: true };
+  } catch (err) {
+    console.warn('[ProductLock] Erro ao desbloquear produto:', err);
+    return { success: true };
+  }
+}
+
+export async function updateProductInSupabase(
+  productId: string,
+  updates: Partial<Product>
+): Promise<{ success: boolean; error?: string }> {
+  if (!client || !isSupabaseConfigured()) return { success: true };
+
+  try {
+    const payload: Record<string, unknown> = {
+      is_locked_for_edit: false,
+      locked_by: null,
+      locked_at: null,
+      updated_at: new Date().toISOString(),
+    };
+
+    if (updates.name !== undefined) payload.nome = updates.name.trim();
+    if (updates.ean !== undefined) payload.codigo_barras = updates.ean.trim();
+    if (updates.secondaryEan !== undefined) payload.codigo_barras_secundario = updates.secondaryEan.trim() || null;
+    if (updates.stock !== undefined) payload.quantidade = Math.max(0, updates.stock);
+    if (updates.category !== undefined) payload.setor = updates.category;
+    if (updates.reducedCode !== undefined) payload.plu = updates.reducedCode.trim() || null;
+    if (updates.supplierCode !== undefined) payload.codigo_fornecedor = updates.supplierCode.trim() || null;
+
+    const { error } = await client
+      .from('produtos')
+      .update(payload)
+      .eq('id', productId);
+
+    if (error) throw error;
+    return { success: true };
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn('[UpdateProduct] Erro:', msg);
+    return { success: false, error: msg };
+  }
+}
+
 

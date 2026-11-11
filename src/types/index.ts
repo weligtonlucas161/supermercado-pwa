@@ -19,6 +19,7 @@ export interface Product {
   id: string;
   name: string;
   ean: string;
+  secondaryEan?: string; // 2º Código de Barras (ex: código do sistema vs código da embalagem)
   category: string;
   stock: number;
   minStock: number;
@@ -36,6 +37,9 @@ export interface Product {
   isEncryptedInStorage?: boolean;
   encryptedPayload?: { iv?: string; ciphertext?: string; [key: string]: unknown };
   data_vencimento?: string;
+  isLockedForEdit?: boolean; // Bloqueado para edição concorrente
+  lockedBy?: string; // Nome e matrícula do operador que está editando
+  lockedAt?: string; // Timestamp do bloqueio
 }
 
 export interface SpreadsheetProductItem {
@@ -97,6 +101,32 @@ export interface StoreEmployee {
   loja_id: string;
   ativo: boolean;
   primeiro_login?: boolean;
+  permissoes?: {
+    setores_permitidos?: string[];
+    pode_auditar?: boolean;
+    pode_ajustar_estoque?: boolean;
+    pode_importar_planilha?: boolean;
+    pode_gerenciar_validade?: boolean;
+    pode_acessar_chat?: boolean;
+  };
+  created_at?: string;
+}
+
+/**
+ * Mensagem do Sistema de Conversas (Chat da Loja e Canal com Líderes)
+ */
+export interface ChatMessage {
+  id: string;
+  loja_id: string;
+  canal_tipo: 'grupo' | 'direto_lider';
+  destinatario_id?: string; // Matrícula do líder de destino no canal privado
+  destinatario_nome?: string;
+  remetente_matricula: string;
+  remetente_nome: string;
+  remetente_cargo?: string;
+  is_anonimo: boolean; // True quando o operador optou por sigilo/anonimato
+  conteudo: string;
+  timestamp: number;
   created_at?: string;
 }
 

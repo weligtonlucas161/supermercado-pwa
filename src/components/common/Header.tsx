@@ -8,7 +8,8 @@ import {
   CheckCircle2, 
   AlertTriangle,
   X,
-  LogOut
+  LogOut,
+  MessageSquare
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 
@@ -21,6 +22,8 @@ export const Header: React.FC = () => {
     unreadCount, 
     markAllNotificationsAsRead,
     openScanner,
+    openChat,
+    unreadChatCount,
     operator,
     logout
   } = useApp();
@@ -98,6 +101,21 @@ export const Header: React.FC = () => {
               <span className="text-[10px] hidden sm:inline">Sincronizar ({offlineQueue.length})</span>
             </button>
           )}
+
+          {/* Operational Chat Button */}
+          <button
+            onClick={() => openChat()}
+            className="p-2 rounded-xl relative text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-emerald-600 dark:hover:text-emerald-400 transition cursor-pointer"
+            aria-label="Chat Operacional da Loja"
+            title="Chat Operacional da Loja"
+          >
+            <MessageSquare className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
+            {unreadChatCount > 0 && (
+              <span className="absolute top-1 right-1 min-w-[16px] h-[16px] px-1 rounded-full bg-emerald-600 text-white text-[9px] font-black flex items-center justify-center ring-2 ring-white dark:ring-slate-900 animate-pulse">
+                {unreadChatCount}
+              </span>
+            )}
+          </button>
 
           {/* Notifications Button */}
           <button

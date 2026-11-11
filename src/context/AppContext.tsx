@@ -10,7 +10,10 @@ import {
   AuthUser,
   Store,
   StoreEmployee,
-  StoreRole
+  StoreRole,
+  ChatMessage,
+  SpreadsheetProductItem,
+  SetorLoja
 } from '../types';
 import { 
   INITIAL_PRODUCTS, 
@@ -43,7 +46,14 @@ import {
   changeUserPassword,
   verifyUserStillActive,
   verifyUserStillActiveRemote,
-  subscribeToUserStatusRealtime
+  subscribeToUserStatusRealtime,
+  fetchChatMessagesFromSupabase,
+  sendChatMessageToSupabase,
+  subscribeToChatRealtime,
+  getStoredChatMessages,
+  lockProductInSupabase,
+  unlockProductInSupabase,
+  updateProductInSupabase
 } from '../services/supabaseService';
 
 interface AppContextType {
@@ -92,8 +102,12 @@ interface AppContextType {
 
   // Actions
   addProduct: (product: Omit<Product, 'id'>) => Product;
+  importProductsBatch: (items: SpreadsheetProductItem[], targetSetor: SetorLoja, lojaId: string) => void;
   updateProductStock: (id: string, options: { delta?: number; exact?: number }) => void;
   removeProduct: (id: string) => void;
+  lockProductForEdit: (productId: string, lockedByName: string) => boolean;
+  unlockProductForEdit: (productId: string) => void;
+  updateProductDetails: (productId: string, updates: Partial<Product>) => Promise<{ success: boolean; error?: string }>;
   addValidity: (validity: Omit<ValidityItem, 'id'>) => ValidityItem;
   applyDiscount: (validityId: string, percentage: number) => void;
   addAudit: (audit: Omit<AuditItem, 'id' | 'date'>) => AuditItem;
@@ -111,6 +125,15 @@ interface AppContextType {
   openScanner: (callback?: (barcode: string) => void) => void;
   closeScanner: () => void;
   scannerCallback: ((barcode: string) => void) | null;
+
+  // Chat Operacional (Grupo da Loja e Canal com Líderes)
+  chatMessages: ChatMessage[];
+  isChatOpen: boolean;
+  openChat: (targetLeaderMatricula?: string) => void;
+  closeChat: () => void;
+  directLeaderMatricula?: string;
+  sendChatMessage: (msg: { canal_tipo: 'grupo' | 'direto_lider'; destinatario_id?: string; destinatario_nome?: string; conteudo: string; is_anonimo: boolean; }) => Promise<void>;
+  unreadChatCount: number;
 
   // Supabase Cloud Multi-Session Sync
   isSyncingWithDatabase: boolean;
@@ -470,8 +493,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const lojaId = operator.loja_id || currentUser?.loja_id;
       const dbProducts = await fetchProductsFromSupabase(lojaId);
       if (dbProducts && dbProducts.length > 0) {
-        setProducts(dbProducts);
-        saveStoredData(STORAGE_KEYS.PRODUCTS, dbProducts);
+        setProducts(prev => {
+          // MESCLAGEM INTELIGENTE QUE PRESERVA TODOS OS SETORES!
+          // Se importar produtos do setor X, os produtos já existentes de setor Y, Z, etc. JAMAIS são apagados ou substituídos!
+          const map = new Map<string, Product>();
+          prev.forEach(p => map.set(p.ean, p));
+          dbProducts.forEach(p => {
+            const existing = map.get(p.ean);
+            if (existing) {
+              map.set(p.ean, { ...existing, ...p });
+            } else {
+              map.set(p.ean, p);
+            }
+          });
+          const merged = Array.from(map.values());
+          saveStoredData(STORAGE_KEYS.PRODUCTS, merged);
+          return merged;
+        });
         const now = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
         setLastDatabaseSyncTime(now);
       }
@@ -557,6 +595,134 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     return newProduct;
+  };
+
+  /**
+   * Importação Segura em Lote por Setor:
+   * Quando importar uma planilha do setor X, os produtos do setor Y, Z, etc. NUNCA são substituídos!
+   * Apenas os produtos daquele setor específico são adicionados ou atualizados.
+   */
+  const importProductsBatch = (newItems: SpreadsheetProductItem[], targetSetor: SetorLoja, lojaId: string) => {
+    setProducts(prev => {
+      // 1. Isola e preserva todos os produtos dos outros setores
+      const otherSectors = prev.filter(
+        p => (p.category || '').toUpperCase() !== targetSetor.toUpperCase()
+      );
+
+      // 2. Setor atual
+      const currentSector = prev.filter(
+        p => (p.category || '').toUpperCase() === targetSetor.toUpperCase()
+      );
+      const sectorMap = new Map<string, Product>();
+      currentSector.forEach(p => sectorMap.set(p.ean, p));
+
+      newItems.forEach(item => {
+        const cleanEan = item.ean.trim();
+        const existing = sectorMap.get(cleanEan);
+        if (existing) {
+          sectorMap.set(cleanEan, {
+            ...existing,
+            name: item.name.trim() || existing.name,
+            supplierCode: item.supplierCode?.trim() || existing.supplierCode,
+            reducedCode: item.reducedCode?.trim() || existing.reducedCode,
+            stock: item.quantity,
+            category: targetSetor,
+            location: `Gôndola - ${targetSetor}`,
+            lastUpdated: new Date().toISOString(),
+          });
+        } else {
+          const newProd: Product = {
+            id: `prod-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+            name: item.name.trim(),
+            ean: cleanEan,
+            supplierCode: item.supplierCode?.trim() || undefined,
+            reducedCode: item.reducedCode?.trim() || undefined,
+            category: targetSetor,
+            stock: item.quantity,
+            minStock: 10,
+            price: 9.90,
+            location: `Gôndola - ${targetSetor}`,
+            loja_id: lojaId,
+            lastUpdated: new Date().toISOString(),
+          };
+          sectorMap.set(cleanEan, newProd);
+        }
+      });
+
+      const updated = [...otherSectors, ...Array.from(sectorMap.values())];
+      saveStoredData(STORAGE_KEYS.PRODUCTS, updated);
+      return updated;
+    });
+  };
+
+  const lockProductForEdit = (productId: string, lockedByName: string): boolean => {
+    const prod = products.find(p => p.id === productId);
+    if (!prod) return false;
+
+    // Se já estiver bloqueado por outro operador (expira após 10 minutos para não travar para sempre)
+    if (prod.isLockedForEdit && prod.lockedBy && prod.lockedBy !== lockedByName) {
+      if (prod.lockedAt) {
+        const lockAgeMs = Date.now() - new Date(prod.lockedAt).getTime();
+        if (lockAgeMs < 10 * 60 * 1000) {
+          return false;
+        }
+      } else {
+        return false;
+      }
+    }
+
+    setProducts(prev =>
+      prev.map(p =>
+        p.id === productId
+          ? {
+              ...p,
+              isLockedForEdit: true,
+              lockedBy: lockedByName,
+              lockedAt: new Date().toISOString(),
+            }
+          : p
+      )
+    );
+    lockProductInSupabase(productId, lockedByName);
+    return true;
+  };
+
+  const unlockProductForEdit = (productId: string) => {
+    setProducts(prev =>
+      prev.map(p =>
+        p.id === productId
+          ? {
+              ...p,
+              isLockedForEdit: false,
+              lockedBy: undefined,
+              lockedAt: undefined,
+            }
+          : p
+      )
+    );
+    unlockProductInSupabase(productId);
+  };
+
+  const updateProductDetails = async (
+    productId: string, 
+    updates: Partial<Product>
+  ): Promise<{ success: boolean; error?: string }> => {
+    setProducts(prev =>
+      prev.map(p => {
+        if (p.id !== productId) return p;
+        return {
+          ...p,
+          ...updates,
+          isLockedForEdit: false,
+          lockedBy: undefined,
+          lockedAt: undefined,
+          lastUpdated: new Date().toISOString(),
+        };
+      })
+    );
+
+    const res = await updateProductInSupabase(productId, updates);
+    return res;
   };
 
   const updateProductStock = (id: string, options: { delta?: number; exact?: number }) => {
@@ -678,6 +844,83 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setScannerCallback(null);
   };
 
+  // =========================================================================
+  // SISTEMA DE CHAT OPERACIONAL (GRUPO DA LOJA E CONVERSAS COM LÍDERES)
+  // =========================================================================
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>(() => {
+    return getStoredChatMessages(operator.loja_id);
+  });
+  const [isChatOpen, setIsChatOpen] = useState(false);
+  const [directLeaderMatricula, setDirectLeaderMatricula] = useState<string | undefined>(undefined);
+  const [unreadChatCount, setUnreadChatCount] = useState(0);
+
+  const openChat = (targetLeaderMatricula?: string) => {
+    setDirectLeaderMatricula(targetLeaderMatricula);
+    setIsChatOpen(true);
+    setUnreadChatCount(0);
+  };
+
+  const closeChat = () => {
+    setIsChatOpen(false);
+    setDirectLeaderMatricula(undefined);
+  };
+
+  const sendChatMessage = async (msgData: {
+    canal_tipo: 'grupo' | 'direto_lider';
+    destinatario_id?: string;
+    destinatario_nome?: string;
+    conteudo: string;
+    is_anonimo: boolean;
+  }) => {
+    const res = await sendChatMessageToSupabase({
+      loja_id: operator.loja_id || 'loja_padrao_001',
+      canal_tipo: msgData.canal_tipo,
+      destinatario_id: msgData.destinatario_id,
+      destinatario_nome: msgData.destinatario_nome,
+      remetente_matricula: operator.code || '4092',
+      remetente_nome: msgData.is_anonimo ? 'Operador Anônimo' : (operator.name || 'Operador'),
+      remetente_cargo: msgData.is_anonimo ? 'Sigilo Operacional' : operator.role,
+      is_anonimo: msgData.is_anonimo,
+      conteudo: msgData.conteudo.trim(),
+    });
+
+    if (res.data) {
+      setChatMessages(prev => {
+        const filtered = prev.filter(m => m.id !== res.data!.id);
+        return [...filtered, res.data!];
+      });
+      triggerScanBeep(true);
+    }
+  };
+
+  // Carregar mensagens do chat e registrar canal em tempo real
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    const lojaId = operator.loja_id || 'loja_padrao_001';
+
+    fetchChatMessagesFromSupabase(lojaId).then(msgs => {
+      if (msgs && msgs.length > 0) {
+        setChatMessages(msgs);
+      }
+    });
+
+    const unsubscribe = subscribeToChatRealtime(lojaId, (newMsg) => {
+      setChatMessages(prev => {
+        const exists = prev.some(m => m.id === newMsg.id);
+        if (exists) return prev;
+        return [...prev, newMsg];
+      });
+      if (!isChatOpen) {
+        setUnreadChatCount(c => c + 1);
+        triggerScanBeep(true);
+      }
+    });
+
+    return () => {
+      unsubscribe();
+    };
+  }, [isAuthenticated, operator.loja_id, isChatOpen]);
+
   return (
     <AppContext.Provider
       value={{
@@ -720,8 +963,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         addOrUpdateRole,
 
         addProduct,
+        importProductsBatch,
         updateProductStock,
         removeProduct,
+        lockProductForEdit,
+        unlockProductForEdit,
+        updateProductDetails,
         addValidity,
         applyDiscount,
         addAudit,
@@ -737,6 +984,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         openScanner,
         closeScanner,
         scannerCallback,
+
+        chatMessages,
+        isChatOpen,
+        openChat,
+        closeChat,
+        directLeaderMatricula,
+        sendChatMessage,
+        unreadChatCount,
 
         isSyncingWithDatabase,
         lastDatabaseSyncTime,
