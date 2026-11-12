@@ -49,6 +49,7 @@ export const LojaTab: React.FC = () => {
   const [empNome, setEmpNome] = useState('');
   const [empSenha, setEmpSenha] = useState('123456');
   const [empCargo, setEmpCargo] = useState('Operador de Gôndola');
+  const [empCodigoFornecedor, setEmpCodigoFornecedor] = useState('');
   const [empSetorRestrito, setEmpSetorRestrito] = useState<string>('TODOS');
 
   // Form Cargo
@@ -99,15 +100,31 @@ export const LojaTab: React.FC = () => {
       return;
     }
 
+    if (empCargo === 'Promotor' && !empCodigoFornecedor.trim()) {
+      setNotice({ type: 'error', text: 'Informe o Código de Fornecedor Atribuído para o cargo Promotor.' });
+      return;
+    }
+
+    const isPromotorRole = empCargo === 'Promotor';
+
     const newEmp: StoreEmployee = {
       id: `usr_emp_${Date.now()}`,
       matricula: empMatricula.trim(),
       nome: empNome.trim(),
       senha: empSenha.trim() || '123456',
       cargo: empCargo,
+      codigo_fornecedor: isPromotorRole ? empCodigoFornecedor.trim().toUpperCase() : undefined,
       setor_restrito: empSetorRestrito,
       loja_id: currentLojaId,
       ativo: true,
+      permissoes: isPromotorRole ? {
+        setores_permitidos: empSetorRestrito === 'TODOS' ? [] : [empSetorRestrito],
+        pode_auditar: false,
+        pode_ajustar_estoque: false,
+        pode_importar_planilha: false,
+        pode_gerenciar_validade: true,
+        pode_acessar_chat: false,
+      } : undefined,
       created_at: new Date().toISOString(),
     };
 
@@ -122,6 +139,7 @@ export const LojaTab: React.FC = () => {
       setEmpMatricula('');
       setEmpNome('');
       setEmpSenha('123456');
+      setEmpCodigoFornecedor('');
       setEmpSetorRestrito('TODOS');
     } else {
       setNotice({ type: 'error', text: res.error || 'Erro ao cadastrar funcionário.' });
@@ -370,6 +388,13 @@ export const LojaTab: React.FC = () => {
                       <span>Cargo: <strong>{emp.cargo}</strong></span>
                     </p>
 
+                    {emp.codigo_fornecedor && (
+                      <p className="text-blue-600 dark:text-blue-400 flex items-center gap-1.5 text-[11px] font-mono">
+                        <Tag className="w-3.5 h-3.5 text-blue-500 shrink-0" />
+                        <span>Fornecedor: <strong>{emp.codigo_fornecedor}</strong></span>
+                      </p>
+                    )}
+
                     {/* Permissão de Setor Específica */}
                     <div className="flex items-center gap-1.5 pt-1">
                       <Tag className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
@@ -542,8 +567,28 @@ export const LojaTab: React.FC = () => {
                   <option value="Operador Geral">Operador Geral</option>
                   <option value="Conferente de Auditoria">Conferente de Auditoria</option>
                   <option value="Fiscal de Prevenção">Fiscal de Prevenção</option>
+                  <option value="Promotor">Promotor</option>
                 </select>
               </div>
+
+              {empCargo === 'Promotor' && (
+                <div className="p-3 rounded-2xl bg-blue-500/10 border border-blue-500/25 space-y-1.5 animate-in fade-in">
+                  <label className="font-black text-blue-700 dark:text-blue-400 uppercase tracking-wider text-[10px] block">
+                    Código do Fornecedor Atribuído *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="Ex: FORN-NESTLE-01 ou 7891000"
+                    value={empCodigoFornecedor}
+                    onChange={e => setEmpCodigoFornecedor(e.target.value)}
+                    className="w-full p-2.5 rounded-xl border border-blue-500/40 bg-white dark:bg-slate-800 font-mono font-bold text-slate-900 dark:text-white uppercase text-xs"
+                  />
+                  <p className="text-[10px] text-blue-600 dark:text-blue-300">
+                    O Promotor terá acesso exclusivo à aba de Auditoria de Validade e verá apenas produtos deste código de fornecedor.
+                  </p>
+                </div>
+              )}
 
               {/* PERMISSÃO POR SETOR ESPECÍFICO (Ex: Somente demandas do setor X ou Y) */}
               <div className="p-3 rounded-2xl bg-emerald-500/5 border border-emerald-500/20 space-y-2">

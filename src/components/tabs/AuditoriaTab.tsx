@@ -286,14 +286,38 @@ export const AuditoriaTab: React.FC = () => {
       },
       (offlineUserName) => {
         triggerOfflineAlert(offlineUserName);
+      },
+      (finalizedInfo) => {
+        // Encerramento em Tempo Real para TODOS os participantes ativos
+        if (currentSessionIdRef.current && (currentSessionIdRef.current === finalizedInfo.sessaoId || !finalizedInfo.sessaoId)) {
+          stopScanning();
+          setIsAuditing(false);
+          setCurrentSessionId(null);
+          currentSessionIdRef.current = null;
+          triggerScanBeep(false);
+          triggerBorderFlash('orange');
+          setLastBipFeedback({
+            type: 'warning',
+            message: `A sessão de auditoria do setor ${finalizedInfo.setor || sessionSetor} foi finalizada por ${finalizedInfo.finalizadaPorNome}! A sessão foi encerrada para todos os participantes.`,
+          });
+          refreshRemoteSessions();
+          setActiveInterface('relatorio');
+        }
       }
     );
 
-    // Ouve desconexão de rede local durante a auditoria
+    // Ouve desconexão e reconexão de rede local durante a auditoria
     const handleNetworkOffline = () => {
       triggerOfflineAlert(operator.name || 'Você');
     };
+    const handleNetworkOnline = () => {
+      if (currentSessionIdRef.current) {
+        syncSessionBips(currentSessionIdRef.current);
+      }
+      refreshRemoteSessions();
+    };
     window.addEventListener('offline', handleNetworkOffline);
+    window.addEventListener('online', handleNetworkOnline);
 
     // Polling de contingência a cada 3.5 segundos caso realtime webhooks oscilem
     const interval = setInterval(() => {
@@ -306,6 +330,7 @@ export const AuditoriaTab: React.FC = () => {
     return () => {
       unsubscribe();
       window.removeEventListener('offline', handleNetworkOffline);
+      window.removeEventListener('online', handleNetworkOnline);
       clearInterval(interval);
     };
   }, [operator.loja_id, operator.name, operator.code, operator.matricula, refreshRemoteSessions, syncSessionBips, triggerBorderFlash, triggerOfflineAlert]);

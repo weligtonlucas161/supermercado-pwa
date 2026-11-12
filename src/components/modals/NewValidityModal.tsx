@@ -9,18 +9,30 @@ interface NewValidityModalProps {
 }
 
 export const NewValidityModal: React.FC<NewValidityModalProps> = ({ isOpen, onClose }) => {
-  const { products, addValidity, openScanner } = useApp();
+  const { products, addValidity, openScanner, isPromotor, operator } = useApp();
 
-  const [productId, setProductId] = useState(products[0]?.id || '');
+  // Se o usuário for Promotor, filtra exclusivamente os produtos vinculados ao seu código de fornecedor
+  const filteredProducts = isPromotor && operator?.codigo_fornecedor
+    ? products.filter(p => (p.supplierCode || '').trim().toUpperCase() === operator.codigo_fornecedor?.trim().toUpperCase())
+    : products;
+
+  const [productId, setProductId] = useState('');
   const [batch, setBatch] = useState('');
   const [dueDate, setDueDate] = useState('');
   const [quantity, setQuantity] = useState('10');
+
+  // Atualiza productId caso esteja vazio ou fora da lista filtrada
+  React.useEffect(() => {
+    if (filteredProducts.length > 0 && (!productId || !filteredProducts.some(p => p.id === productId))) {
+      setProductId(filteredProducts[0].id);
+    }
+  }, [filteredProducts, productId]);
 
   if (!isOpen) return null;
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    const product = products.find(p => p.id === productId);
+    const product = filteredProducts.find(p => p.id === productId);
     if (!product || !batch || !dueDate) return;
 
     // Calculate status based on days remaining
@@ -38,6 +50,10 @@ export const NewValidityModal: React.FC<NewValidityModalProps> = ({ isOpen, onCl
       dueDate,
       quantity: Number(quantity) || 1,
       status,
+      registradoPorPromotor: isPromotor,
+      promotorNome: isPromotor ? operator.name : undefined,
+      supplierCode: isPromotor ? (operator.codigo_fornecedor || product.supplierCode) : product.supplierCode,
+      sector: isPromotor ? (operator.setor_restrito || product.category) : product.category,
     });
 
     onClose();
@@ -45,7 +61,7 @@ export const NewValidityModal: React.FC<NewValidityModalProps> = ({ isOpen, onCl
 
   const handleScanForProduct = () => {
     openScanner((scannedEan) => {
-      const found = products.find(p => p.ean === scannedEan);
+      const found = filteredProducts.find(p => p.ean === scannedEan);
       if (found) {
         setProductId(found.id);
       }
@@ -90,11 +106,19 @@ export const NewValidityModal: React.FC<NewValidityModalProps> = ({ isOpen, onCl
               onChange={e => setProductId(e.target.value)}
               className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-800 dark:text-slate-100 focus:ring-2 focus:ring-emerald-500"
             >
-              {products.map(p => (
-                <option key={p.id} value={p.id}>
-                  {p.name} ({p.category})
+              {filteredProducts.length === 0 ? (
+                <option value="">
+                  {isPromotor 
+                    ? `Nenhum produto cadastrado para o fornecedor (${operator.codigo_fornecedor || 'não atribuído'})`
+                    : 'Nenhum produto cadastrado'}
                 </option>
-              ))}
+              ) : (
+                filteredProducts.map(p => (
+                  <option key={p.id} value={p.id}>
+                    {p.name} {p.supplierCode ? `[Fornec: ${p.supplierCode}]` : ''} ({p.category})
+                  </option>
+                ))
+              )}
             </select>
           </div>
 

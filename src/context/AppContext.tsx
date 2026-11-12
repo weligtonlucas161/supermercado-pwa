@@ -13,7 +13,8 @@ import {
   StoreRole,
   ChatMessage,
   SpreadsheetProductItem,
-  SetorLoja
+  SetorLoja,
+  AvariaItem
 } from '../types';
 import { 
   INITIAL_PRODUCTS, 
@@ -49,11 +50,17 @@ import {
   subscribeToUserStatusRealtime,
   fetchChatMessagesFromSupabase,
   sendChatMessageToSupabase,
+  clearAllChatMessagesInDatabase,
+  deleteChatMessageFromDatabase,
   subscribeToChatRealtime,
   getStoredChatMessages,
   lockProductInSupabase,
   unlockProductInSupabase,
-  updateProductInSupabase
+  updateProductInSupabase,
+  getStoredAvarias,
+  saveAvariaInDatabase,
+  fetchAvariasFromDatabase,
+  subscribeToAvariasRealtime
 } from '../services/supabaseService';
 
 interface AppContextType {
@@ -82,6 +89,7 @@ interface AppContextType {
   currentUser: AuthUser | null;
   isSaasAdmin: boolean;
   isGerente: boolean;
+  isPromotor: boolean;
   login: (matricula: string, senha: string) => Promise<{ success: boolean; message?: string }>;
   logout: () => void;
   disconnectedMessage: string | null;
@@ -105,6 +113,9 @@ interface AppContextType {
   importProductsBatch: (items: SpreadsheetProductItem[], targetSetor: SetorLoja, lojaId: string) => void;
   updateProductStock: (id: string, options: { delta?: number; exact?: number }) => void;
   removeProduct: (id: string) => void;
+  solicitarRebaixa: (productId: string) => void;
+  confirmarRebaixa: (productId: string) => void;
+  cancelarRebaixa: (productId: string) => void;
   lockProductForEdit: (productId: string, lockedByName: string) => boolean;
   unlockProductForEdit: (productId: string) => void;
   updateProductDetails: (productId: string, updates: Partial<Product>) => Promise<{ success: boolean; error?: string }>;
@@ -113,6 +124,11 @@ interface AppContextType {
   addAudit: (audit: Omit<AuditItem, 'id' | 'date'>) => AuditItem;
   updateAudit: (auditId: string, updated: Partial<AuditItem>) => void;
   resetAllData: () => void;
+
+  // Avarias no Estoque
+  avarias: AvariaItem[];
+  addAvaria: (avaria: Omit<AvariaItem, 'id' | 'registrado_em' | 'timestamp'>) => Promise<{ success: boolean; data?: AvariaItem }>;
+  refreshAvarias: () => Promise<void>;
 
   // Notifications
   notifications: NotificationItem[];
@@ -133,6 +149,8 @@ interface AppContextType {
   closeChat: () => void;
   directLeaderMatricula?: string;
   sendChatMessage: (msg: { canal_tipo: 'grupo' | 'direto_lider'; destinatario_id?: string; destinatario_nome?: string; conteudo: string; is_anonimo: boolean; }) => Promise<void>;
+  clearAllChatMessages: () => Promise<void>;
+  deleteChatMessage: (id: string) => Promise<void>;
   unreadChatCount: number;
 
   // Supabase Cloud Multi-Session Sync
@@ -279,6 +297,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Papéis de acesso
   const isSaasAdmin = currentUser?.cargo === 'saas_admin' || operator.role === 'saas_admin';
   const isGerente = currentUser?.cargo === 'gerente' || operator.role === 'gerente';
+  const isPromotor = currentUser?.cargo === 'promotor' || operator.role === 'promotor';
+
+  // Limitação de perfil do Promotor: acesso restrito exclusivamente à aba de Validade
+  useEffect(() => {
+    if (isPromotor && activeTab !== 'validade') {
+      setActiveTab('validade');
+    }
+  }, [isPromotor, activeTab]);
 
   // Lojas e Funcionários gerenciados
   const [stores, setStores] = useState<Store[]>(() => getStoredStores());
@@ -359,11 +385,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         store: result.user!.loja_nome || prev.store,
         loja_id: result.user!.loja_id || prev.loja_id,
         setor_restrito: result.user!.setor,
+        codigo_fornecedor: result.user!.codigo_fornecedor,
       }));
       triggerScanBeep(true);
 
-      // Redireciona para início ou loja
-      if (result.user.cargo === 'gerente') {
+      // Redireciona de acordo com o perfil
+      if (result.user.cargo === 'promotor') {
+        setActiveTab('validade');
+      } else if (result.user.cargo === 'gerente') {
         setActiveTab('loja');
       } else {
         setActiveTab('inicio');
@@ -773,6 +802,115 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setProducts(prev => prev.filter(p => p.id !== id));
   };
 
+  // Gestão de Pedido e Confirmação de Rebaixa por Gesto de Swipe
+  const solicitarRebaixa = (productId: string) => {
+    setProducts(prev =>
+      prev.map(p => {
+        if (p.id !== productId) return p;
+        return {
+          ...p,
+          rebaixaStatus: 'pendente' as const,
+          rebaixaSolicitadaEm: new Date().toISOString(),
+        };
+      })
+    );
+    triggerScanBeep(true);
+    setNotifications(prev => [
+      {
+        id: `notif-rebaixa-${Date.now()}`,
+        title: 'Pedido de Rebaixa Marcado',
+        message: 'Produto marcado para pedido de rebaixa. Repita o gesto de arrastar para confirmar.',
+        type: 'warning',
+        timestamp: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
+        read: false,
+      },
+      ...prev,
+    ]);
+  };
+
+  const confirmarRebaixa = (productId: string) => {
+    setProducts(prev =>
+      prev.map(p => {
+        if (p.id !== productId) return p;
+        return {
+          ...p,
+          rebaixaStatus: 'confirmada' as const,
+          rebaixaConfirmadaEm: new Date().toISOString(),
+        };
+      })
+    );
+    triggerScanBeep(true);
+    setNotifications(prev => [
+      {
+        id: `notif-rebaixa-conf-${Date.now()}`,
+        title: 'Rebaixa Confirmada',
+        message: 'Rebaixa de preço confirmada com sucesso para o produto.',
+        type: 'info',
+        timestamp: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
+        read: false,
+      },
+      ...prev,
+    ]);
+  };
+
+  const cancelarRebaixa = (productId: string) => {
+    setProducts(prev =>
+      prev.map(p => {
+        if (p.id !== productId) return p;
+        return {
+          ...p,
+          rebaixaStatus: 'nenhum' as const,
+          rebaixaSolicitadaEm: undefined,
+          rebaixaConfirmadaEm: undefined,
+        };
+      })
+    );
+  };
+
+  // Seção de Avarias no Estoque (Acessível a todos os cargos)
+  const [avarias, setAvarias] = useState<AvariaItem[]>(() => {
+    return getStoredAvarias(operator.loja_id);
+  });
+
+  const refreshAvarias = useCallback(async () => {
+    const lojaId = operator.loja_id || 'loja_padrao_001';
+    const list = await fetchAvariasFromDatabase(lojaId);
+    setAvarias(list);
+  }, [operator.loja_id]);
+
+  const addAvaria = async (
+    avariaData: Omit<AvariaItem, 'id' | 'registrado_em' | 'timestamp'>
+  ): Promise<{ success: boolean; data?: AvariaItem }> => {
+    const res = await saveAvariaInDatabase(avariaData);
+    if (res.data) {
+      setAvarias(prev => [res.data!, ...prev.filter(a => a.id !== res.data!.id)]);
+      triggerScanBeep(true);
+      setNotifications(prev => [
+        {
+          id: `notif-avaria-${Date.now()}`,
+          title: 'Avaria Registrada',
+          message: `${avariaData.quantidade}x "${avariaData.produto_nome}" registrada como ${avariaData.tipo_avaria} (${avariaData.para_troca ? 'Para Troca' : 'Sem Troca'}).`,
+          type: 'warning',
+          timestamp: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
+          read: false,
+        },
+        ...prev,
+      ]);
+    }
+    return res;
+  };
+
+  useEffect(() => {
+    if (isAuthenticated) {
+      refreshAvarias();
+      const lojaId = operator.loja_id || 'loja_padrao_001';
+      const unsub = subscribeToAvariasRealtime(lojaId, (newAv) => {
+        setAvarias(prev => [newAv, ...prev.filter(a => a.id !== newAv.id)]);
+      });
+      return () => unsub();
+    }
+  }, [isAuthenticated, operator.loja_id, refreshAvarias]);
+
   const addValidity = (newValidityData: Omit<ValidityItem, 'id'>): ValidityItem => {
     const newValidity: ValidityItem = {
       ...newValidityData,
@@ -906,6 +1044,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
+  const clearAllChatMessages = async () => {
+    const lojaId = operator.loja_id || 'loja_padrao_001';
+    await clearAllChatMessagesInDatabase(lojaId);
+    setChatMessages([]);
+    triggerScanBeep(true);
+  };
+
+  const deleteChatMessage = async (id: string) => {
+    const lojaId = operator.loja_id || 'loja_padrao_001';
+    await deleteChatMessageFromDatabase(id, lojaId);
+    setChatMessages(prev => prev.filter(m => m.id !== id));
+  };
+
   // Carregar mensagens do chat e registrar canal em tempo real
   useEffect(() => {
     if (!isAuthenticated) return;
@@ -917,58 +1068,69 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     });
 
-    const unsubscribe = subscribeToChatRealtime(lojaId, (newMsg) => {
-      setChatMessages(prev => {
-        const exists = prev.some(m => m.id === newMsg.id);
-        if (exists) return prev;
-        return [...prev, newMsg];
-      });
+    const unsubscribe = subscribeToChatRealtime(
+      lojaId,
+      (newMsg) => {
+        setChatMessages(prev => {
+          const exists = prev.some(m => m.id === newMsg.id);
+          if (exists) return prev;
+          return [...prev, newMsg];
+        });
 
-      const myMatricula = operator.code || operator.matricula;
-      const isFromMe = newMsg.remetente_matricula === myMatricula;
+        const myMatricula = operator.code || operator.matricula;
+        const isFromMe = newMsg.remetente_matricula === myMatricula;
 
-      if (!isFromMe) {
-        if (!isChatOpen) {
-          setUnreadChatCount(c => c + 1);
-        }
+        if (!isFromMe) {
+          if (!isChatOpen) {
+            setUnreadChatCount(c => c + 1);
+          }
 
-        // Toca o alerta sonoro de mensagem
-        const isSoundEnabled = localStorage.getItem('superpwa_sound_enabled') !== 'false';
-        if (isSoundEnabled) {
-          triggerScanBeep(true);
-        }
+          // Toca o alerta sonoro de mensagem
+          const isSoundEnabled = localStorage.getItem('superpwa_sound_enabled') !== 'false';
+          if (isSoundEnabled) {
+            triggerScanBeep(true);
+          }
 
-        // Adiciona notificação formal na central de notificações
-        setNotifications(prev => [
-          {
-            id: `notif-chat-${newMsg.id}-${Date.now()}`,
-            title: newMsg.canal_tipo === 'grupo'
-              ? `💬 Mensagem no Grupo (${newMsg.remetente_nome})`
-              : `🔒 Mensagem Direta (${newMsg.remetente_nome})`,
-            message: newMsg.conteudo,
-            type: 'info',
-            timestamp: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
-            read: false,
-          },
-          ...prev,
-        ]);
+          // Adiciona notificação formal na central de notificações
+          setNotifications(prev => [
+            {
+              id: `notif-chat-${newMsg.id}-${Date.now()}`,
+              title: newMsg.canal_tipo === 'grupo'
+                ? `💬 Mensagem no Grupo (${newMsg.remetente_nome})`
+                : `🔒 Mensagem Direta (${newMsg.remetente_nome})`,
+              message: newMsg.conteudo,
+              type: 'info',
+              timestamp: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
+              read: false,
+            },
+            ...prev,
+          ]);
 
-        // Dispara notificação nativa do sistema operacional / PWA se permitido
-        if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
-          try {
-            new Notification(
-              newMsg.canal_tipo === 'grupo' ? `Grupo: ${newMsg.remetente_nome}` : `Mensagem de ${newMsg.remetente_nome}`,
-              {
-                body: newMsg.conteudo,
-                icon: '/pwa-192x192.png',
-              }
-            );
-          } catch (e) {
-            console.warn('Falha ao disparar notification nativa:', e);
+          // Dispara notificação nativa do sistema operacional / PWA se permitido
+          if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
+            try {
+              new Notification(
+                newMsg.canal_tipo === 'grupo' ? `Grupo: ${newMsg.remetente_nome}` : `Mensagem de ${newMsg.remetente_nome}`,
+                {
+                  body: newMsg.conteudo,
+                  icon: '/pwa-192x192.png',
+                }
+              );
+            } catch (e) {
+              console.warn('Falha ao disparar notification nativa:', e);
+            }
           }
         }
+      },
+      (deletedId) => {
+        // Exclusão sincronizada de mensagens do chat
+        setChatMessages(prev => prev.filter(m => m.id !== deletedId));
+      },
+      () => {
+        // Limpeza completa sincronizada de mensagens
+        setChatMessages([]);
       }
-    });
+    );
 
     return () => {
       unsubscribe();
@@ -999,6 +1161,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         currentUser,
         isSaasAdmin,
         isGerente,
+        isPromotor,
         login,
         logout,
         disconnectedMessage,
@@ -1020,6 +1183,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         importProductsBatch,
         updateProductStock,
         removeProduct,
+        solicitarRebaixa,
+        confirmarRebaixa,
+        cancelarRebaixa,
         lockProductForEdit,
         unlockProductForEdit,
         updateProductDetails,
@@ -1028,6 +1194,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         addAudit,
         updateAudit,
         resetAllData,
+
+        avarias,
+        addAvaria,
+        refreshAvarias,
 
         notifications,
         unreadCount,
@@ -1045,6 +1215,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         closeChat,
         directLeaderMatricula,
         sendChatMessage,
+        clearAllChatMessages,
+        deleteChatMessage,
         unreadChatCount,
 
         isSyncingWithDatabase,

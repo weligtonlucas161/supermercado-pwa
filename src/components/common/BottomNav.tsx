@@ -35,11 +35,28 @@ const NavItem: React.FC<NavItemProps> = ({ icon, label, active, onClick, badge }
 };
 
 export const BottomNav: React.FC = () => {
-  const { activeTab, setActiveTab, validities, products, isGerente, currentUser } = useApp();
+  const { activeTab, setActiveTab, validities, products, isGerente, isPromotor, currentUser } = useApp();
 
   const urgentValiditiesCount = validities.filter(v => v.status === 'urgent').length;
   const lowStockCount = products.filter(p => p.stock <= p.minStock).length;
   const hasStoreAccess = isGerente || currentUser?.cargo === 'gerente' || currentUser?.cargo === 'adm';
+
+  // Perfil Promotor: Acesso restrito exclusivamente à aba de Auditoria de Validade
+  if (isPromotor) {
+    return (
+      <div className="fixed bottom-3 sm:bottom-4 left-3 right-3 sm:left-4 sm:right-4 z-40 max-w-xs mx-auto pointer-events-none">
+        <nav className="pointer-events-auto rounded-3xl border border-blue-500/40 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl px-4 py-1.5 shadow-2xl transition-all flex justify-center items-center ring-2 ring-blue-500/20">
+          <NavItem
+            icon={<Calendar className="w-5 h-5" />}
+            label="Auditoria de Validade"
+            active={true}
+            badge={urgentValiditiesCount}
+            onClick={() => setActiveTab('validade')}
+          />
+        </nav>
+      </div>
+    );
+  }
 
   return (
     <div className="fixed bottom-3 sm:bottom-4 left-3 right-3 sm:left-4 sm:right-4 z-40 max-w-xl mx-auto pointer-events-none">
