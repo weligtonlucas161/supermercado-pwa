@@ -205,8 +205,3 @@ export const ValidadeTab: React.FC = () => {
     </div>
   );
 };
-
-      <NewValidityModal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} />
-    </div>
-  );
-};
