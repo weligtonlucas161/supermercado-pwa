@@ -1468,19 +1468,25 @@ export async function finalizeAuditSessionInDatabase(data: {
 /**
  * Assina as alterações em tempo real de auditoria (sessões e bips) para sincronizar
 /**
- * Assina as alterações em tempo real de auditoria (sessões e bips) para sincronizar
- * instantaneamente todos os participantes do setor.
+ * Assina as alterações em tempo real de auditoria (sessões e bips) e presença de operadores
+ * para sincronizar instantaneamente todos os participantes do setor e alertar desconexões.
  */
 export function subscribeToAuditRealtime(
   lojaId: string,
   onEvent: () => void,
-  onNewBip?: (bip: DbAuditBip) => void
+  onNewBip?: (bip: DbAuditBip) => void,
+  operatorPresence?: { matricula: string; nome: string },
+  onUserOffline?: (userName: string) => void
 ): () => void {
   if (!client || !isSupabaseConfigured()) return () => {};
 
   try {
-    const channel = client
-      .channel(`realtime_auditoria_${lojaId}_${Date.now()}`)
+    const channelName = `realtime_auditoria_${lojaId}`;
+    const channel = client.channel(channelName, {
+      config: operatorPresence ? { presence: { key: operatorPresence.matricula } } : {},
+    });
+
+    channel
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'auditoria_presenca_sessoes' },
@@ -1504,8 +1510,35 @@ export function subscribeToAuditRealtime(
         () => {
           onEvent();
         }
-      )
-      .subscribe();
+      );
+
+    if (operatorPresence && onUserOffline) {
+      channel.on('presence', { event: 'leave' }, ({ leftPresences }) => {
+        if (Array.isArray(leftPresences)) {
+          leftPresences.forEach((p: Record<string, unknown>) => {
+            const userName = String(p.nome || p.user || p.matricula || '');
+            const userMatricula = String(p.matricula || '');
+            if (userName && userMatricula !== operatorPresence.matricula) {
+              onUserOffline(userName);
+            }
+          });
+        }
+      });
+    }
+
+    channel.subscribe(async (status) => {
+      if (status === 'SUBSCRIBED' && operatorPresence) {
+        try {
+          await channel.track({
+            matricula: operatorPresence.matricula,
+            nome: operatorPresence.nome,
+            online_at: Date.now(),
+          });
+        } catch (e) {
+          console.warn('[Presence] Erro ao registrar presença:', e);
+        }
+      }
+    });
 
     return () => {
       client?.removeChannel(channel);

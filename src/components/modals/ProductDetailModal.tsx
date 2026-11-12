@@ -353,8 +353,8 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
               {/* Informações de Auditoria e Trava */}
               <div className="p-3.5 rounded-2xl bg-indigo-500/5 border border-indigo-500/20 text-[11px] text-slate-500 dark:text-slate-400 space-y-1">
                 <div className="flex items-center justify-between">
-                  <span className="font-bold text-slate-700 dark:text-slate-300">Segurança & Concorrência:</span>
-                  <span className="font-mono text-[10px]">Zero-Knowledge AES-256</span>
+                  <span className="font-bold text-slate-700 dark:text-slate-300">Concorrência Operacional:</span>
+                  <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400">Proteção Ativa</span>
                 </div>
                 <p>
                   Quando em edição, o sistema bloqueia o item concorrentemente para garantir consistência cadastral entre os operadores de piso de loja.

@@ -242,9 +242,9 @@ export const LoginScreen: React.FC = () => {
           </button>
         </div>
 
-        {/* Aviso de No-Copyright explícito conforme solicitado */}
+        {/* Aviso de Copyright */}
         <div className="text-[11px] text-slate-400 dark:text-slate-500 leading-tight">
-          <span className="font-bold">No-Copyright (Domínio Público)</span> — Software livre e desimpedido para operações comerciais de varejo e auditoria de supermercados.
+          <span className="font-bold">Copyright © 2026 SuperPWA OpSys</span> — Todos os direitos reservados.
         </div>
       </footer>
 

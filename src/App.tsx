@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React from 'react';
+import React, { useState } from 'react';
 import { AppProvider, useApp } from './context/AppContext';
 import { Header } from './components/common/Header';
 import { BottomNav } from './components/common/BottomNav';
@@ -32,26 +32,28 @@ function AppContent() {
     updateUserPassword 
   } = useApp();
 
+  // Modal de Alteração de Senha no Primeiro Login com opção de fechar
+  const [isFirstLoginDismissed, setIsFirstLoginDismissed] = useState(false);
+  const showFirstLoginModal = Boolean(currentUser && currentUser.primeiro_login) && !isFirstLoginDismissed;
+
   // 1. Se não estiver autenticado, exibe a tela de login
   if (!isAuthenticated) {
     return <LoginScreen />;
   }
-
-  // 2. Modal Obrigatório de Alteração de Senha no Primeiro Login (para todos os usuários inclusive SaaS Admin)
-  const isFirstLogin = Boolean(currentUser && currentUser.primeiro_login);
 
   // 3. Se for o Administrador de SaaS (@200309 / 2003@09), renderiza a página exclusiva de gestão de servidor
   if (isSaasAdmin) {
     return (
       <>
         <AdminSaasScreen />
-        {isFirstLogin && (
+        {showFirstLoginModal && (
           <FirstLoginPasswordModal
             isOpen={true}
             matricula={currentUser?.matricula || '@200309'}
             userName={currentUser?.nome || 'Administrador SaaS'}
             isSaasAdmin={true}
             onPasswordChanged={updateUserPassword}
+            onClose={() => setIsFirstLoginDismissed(true)}
           />
         )}
       </>
@@ -98,14 +100,15 @@ function AppContent() {
       {/* Modal Global de Chat Operacional da Loja e Canal de Líderes */}
       <StoreChatModal />
 
-      {/* Modal Obrigatório de Alteração de Senha no Primeiro Login */}
-      {isFirstLogin && (
+      {/* Modal de Alteração de Senha no Primeiro Login */}
+      {showFirstLoginModal && (
         <FirstLoginPasswordModal
           isOpen={true}
           matricula={currentUser?.matricula || ''}
           userName={currentUser?.nome || 'Usuário'}
           isSaasAdmin={false}
           onPasswordChanged={updateUserPassword}
+          onClose={() => setIsFirstLoginDismissed(true)}
         />
       )}
     </div>

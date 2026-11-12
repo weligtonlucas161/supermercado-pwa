@@ -18,32 +18,8 @@ export const INITIAL_OPERATOR: Operator = {
   shift: 'Manhã (07:00 - 15:20)',
 };
 
-export const INITIAL_NOTIFICATIONS: NotificationItem[] = [
-  {
-    id: 'n1',
-    title: 'Risco de Ruptura - Feijão Preto 1kg',
-    message: 'Estoque atual (12 un) está abaixo do mínimo configurado (25 un).',
-    type: 'warning',
-    timestamp: 'Há 15 min',
-    read: false,
-  },
-  {
-    id: 'n2',
-    title: 'Lote Crítico - Iogurte Natural 170g',
-    message: 'Lote L-9942 vence em menos de 72 horas. Recomenda-se aplicar desconto.',
-    type: 'urgent',
-    timestamp: 'Há 32 min',
-    read: false,
-  },
-  {
-    id: 'n3',
-    title: 'Auditoria Agendada',
-    message: 'Conferência cega de carnes e perecíveis programada para as 14:00.',
-    type: 'info',
-    timestamp: 'Há 1 hora',
-    read: true,
-  },
-];
+// Sem notificações simuladas - apenas eventos reais do sistema
+export const INITIAL_NOTIFICATIONS: NotificationItem[] = [];
 
 const STORAGE_KEYS = {
   PRODUCTS: 'superpwa_products_v1',
@@ -55,6 +31,7 @@ const STORAGE_KEYS = {
   DARK_MODE: 'superpwa_darkmode_v1',
   AUTH_USER: 'superpwa_auth_user_v1',
   AUTH_TOKEN: 'superpwa_auth_token_v1',
+  ACTIVE_TAB: 'superpwa_active_tab_v1',
 };
 
 export function loadStoredData<T>(key: string, fallback: T): T {

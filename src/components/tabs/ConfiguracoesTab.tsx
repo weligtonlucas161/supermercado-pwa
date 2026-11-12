@@ -1,346 +1,418 @@
 import React, { useState } from 'react';
 import { 
-  Moon, 
-  Sun, 
+  KeyRound, 
+  Lock, 
+  Eye, 
+  EyeOff, 
   ShieldCheck, 
-  RefreshCw, 
-  User, 
-  ChevronRight, 
-  Download, 
-  Trash2, 
-  HardDrive, 
-  Radio, 
   Check, 
-  Layers,
-  Database,
-  CheckCircle2,
-  AlertCircle,
-  LogOut,
-  Sparkles,
-  FileText
+  AlertCircle, 
+  CheckCircle2, 
+  Volume2, 
+  VolumeX, 
+  Vibrate, 
+  Bell, 
+  Tag, 
+  User, 
+  Building2, 
+  LogOut, 
+  Trash2, 
+  Sparkles, 
+  FileText,
+  RotateCcw
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { PWAInstallBanner } from '../../pwa/PWAInstallBanner';
-import { 
-  isSupabaseConfigured, 
-  testSupabaseConnection, 
-  setCustomSupabaseConfig, 
-  clearCustomSupabaseConfig, 
-  getSupabaseConfigInfo 
-} from '../../services/supabaseService';
+import { SETORES_DISPONIVEIS, SetorLoja } from '../../types';
 import { PatchNotesModal } from '../modals/PatchNotesModal';
 import { TermsModal } from '../modals/TermsModal';
+import { triggerScanBeep } from '../../utils/haptics';
 
 export const ConfiguracoesTab: React.FC = () => {
   const { 
-    darkMode, 
-    effectiveOnline, 
-    offlineQueue, 
-    syncOfflineQueue, 
     operator, 
-    resetAllData,
-    logout 
+    currentUser, 
+    updateUserPassword, 
+    resetAllData, 
+    logout, 
+    darkMode 
   } = useApp();
 
-  const [resetConfirm, setResetConfirm] = useState(false);
-  const [cacheCleared, setCacheCleared] = useState(false);
-  const [testingSupabase, setTestingSupabase] = useState(false);
-  const [supabaseTestResult, setSupabaseTestResult] = useState<{ success: boolean; message: string } | null>(null);
+  // Estados de Alteração de Senha
+  const [currentPasswordInput, setCurrentPasswordInput] = useState('');
+  const [newPasswordInput, setNewPasswordInput] = useState('');
+  const [confirmPasswordInput, setConfirmPasswordInput] = useState('');
+  const [showNewPassword, setShowNewPassword] = useState(false);
+  const [isChangingPassword, setIsChangingPassword] = useState(false);
+  const [passwordNotice, setPasswordNotice] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+
+  // Preferências Operacionais Locais
+  const [soundEnabled, setSoundEnabled] = useState<boolean>(() => {
+    return localStorage.getItem('superpwa_sound_enabled') !== 'false';
+  });
+  const [vibrationEnabled, setVibrationEnabled] = useState<boolean>(() => {
+    return localStorage.getItem('superpwa_vibration_enabled') !== 'false';
+  });
+  const [chatNotifsEnabled, setChatNotifsEnabled] = useState<boolean>(() => {
+    return localStorage.getItem('superpwa_chat_notifs_enabled') !== 'false';
+  });
+  const [preferredSector, setPreferredSector] = useState<string>(() => {
+    return localStorage.getItem('superpwa_preferred_sector') || 'TODOS';
+  });
+
+  // Modais Informativos
   const [showPatchNotes, setShowPatchNotes] = useState(false);
   const [showTerms, setShowTerms] = useState(false);
+  const [resetConfirm, setResetConfirm] = useState(false);
+  const [preferencesSaved, setPreferencesSaved] = useState(false);
 
-  // Estados de Configuração do Supabase
-  const configInfo = getSupabaseConfigInfo();
-  const [supabaseUrlInput, setSupabaseUrlInput] = useState(configInfo.url || '');
-  const [supabaseKeyInput, setSupabaseKeyInput] = useState('');
-  const [isEditingConfig, setIsEditingConfig] = useState(!configInfo.isConfigured);
-  const [configFeedback, setConfigFeedback] = useState<{ success: boolean; message: string } | null>(null);
-
-  const handleClearCache = async () => {
-    if ('caches' in window) {
-      const keys = await caches.keys();
-      await Promise.all(keys.map(k => caches.delete(k)));
-    }
-    setCacheCleared(true);
-    setTimeout(() => setCacheCleared(false), 2000);
+  const handleToggleSound = (enabled: boolean) => {
+    setSoundEnabled(enabled);
+    localStorage.setItem('superpwa_sound_enabled', String(enabled));
+    if (enabled) triggerScanBeep(true);
+    showTempPreferencesSaved();
   };
 
-  const handleSaveSupabaseConfig = async () => {
-    setConfigFeedback(null);
-    setSupabaseTestResult(null);
+  const handleToggleVibration = (enabled: boolean) => {
+    setVibrationEnabled(enabled);
+    localStorage.setItem('superpwa_vibration_enabled', String(enabled));
+    if (enabled && 'vibrate' in navigator) navigator.vibrate(50);
+    showTempPreferencesSaved();
+  };
 
-    const result = setCustomSupabaseConfig(supabaseUrlInput, supabaseKeyInput);
-    if (!result.success) {
-      setConfigFeedback(result);
+  const handleToggleChatNotifs = async (enabled: boolean) => {
+    setChatNotifsEnabled(enabled);
+    localStorage.setItem('superpwa_chat_notifs_enabled', String(enabled));
+    if (enabled && typeof window !== 'undefined' && 'Notification' in window) {
+      if (Notification.permission === 'default') {
+        await Notification.requestPermission();
+      }
+    }
+    showTempPreferencesSaved();
+  };
+
+  const handleSectorChange = (sector: string) => {
+    setPreferredSector(sector);
+    localStorage.setItem('superpwa_preferred_sector', sector);
+    showTempPreferencesSaved();
+  };
+
+  const showTempPreferencesSaved = () => {
+    setPreferencesSaved(true);
+    setTimeout(() => setPreferencesSaved(false), 2000);
+  };
+
+  const handleChangePasswordSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setPasswordNotice(null);
+
+    if (newPasswordInput.length < 7) {
+      setPasswordNotice({
+        type: 'error',
+        message: 'A nova senha deve ter no mínimo 7 caracteres.',
+      });
       return;
     }
 
-    // Testa a conexão imediatamente após salvar
-    setTestingSupabase(true);
-    const testResult = await testSupabaseConnection();
-    setTestingSupabase(false);
-    setSupabaseTestResult(testResult);
-    if (testResult.success) {
-      setConfigFeedback({ success: true, message: 'Supabase conectado com sucesso!' });
-      setIsEditingConfig(false);
-    } else {
-      setConfigFeedback({ success: false, message: testResult.message });
+    if (newPasswordInput !== confirmPasswordInput) {
+      setPasswordNotice({
+        type: 'error',
+        message: 'A confirmação de senha não coincide com a nova senha digitada.',
+      });
+      return;
+    }
+
+    setIsChangingPassword(true);
+    try {
+      const res = await updateUserPassword(newPasswordInput);
+      if (res.success) {
+        triggerScanBeep(true);
+        setPasswordNotice({
+          type: 'success',
+          message: 'Sua senha foi alterada com sucesso! Use a nova senha nos próximos logins.',
+        });
+        setCurrentPasswordInput('');
+        setNewPasswordInput('');
+        setConfirmPasswordInput('');
+      } else {
+        setPasswordNotice({
+          type: 'error',
+          message: res.message || 'Erro ao alterar a senha. Tente novamente.',
+        });
+      }
+    } catch {
+      setPasswordNotice({
+        type: 'error',
+        message: 'Falha de comunicação ao atualizar senha. Verifique sua conexão.',
+      });
+    } finally {
+      setIsChangingPassword(false);
     }
   };
 
-  const handleDisconnectSupabase = () => {
-    clearCustomSupabaseConfig();
-    setSupabaseUrlInput('');
-    setSupabaseKeyInput('');
-    setSupabaseTestResult(null);
-    setConfigFeedback({ success: true, message: 'Configuração do Supabase removida. O app está operando em Modo Local.' });
-    setIsEditingConfig(true);
-  };
-
-  const handleTestSupabase = async () => {
-    setTestingSupabase(true);
-    setSupabaseTestResult(null);
-    const result = await testSupabaseConnection();
-    setSupabaseTestResult(result);
-    setTestingSupabase(false);
-  };
-
-  const hasSupabase = isSupabaseConfigured();
-
   return (
     <div className="space-y-5 animate-in fade-in duration-300">
+      {/* Cabeçalho */}
       <div>
         <h2 className="text-xl font-black text-slate-900 dark:text-white tracking-tight">
-          Configurações & PWA
+          Ajustes & Preferências
         </h2>
         <p className="text-xs text-slate-500 dark:text-slate-400">
-          Ajustes do dispositivo, diagnóstico do Service Worker, banco Supabase e preferências operacionais.
+          Personalização operacional, segurança de acesso da conta e configurações da unidade.
         </p>
       </div>
 
       {/* PWA Install Banner */}
       <PWAInstallBanner />
 
-      {/* Card de Conexão com o Banco de Dados Supabase */}
-      <div
-        className={`p-4 sm:p-5 rounded-3xl border ${
-          darkMode ? 'bg-slate-800/80 border-slate-700' : 'bg-white border-slate-200'
-        } shadow-sm space-y-4`}
-      >
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2.5">
-            <div className={`p-2.5 rounded-2xl ${hasSupabase ? 'bg-emerald-500/15 text-emerald-500' : 'bg-amber-500/15 text-amber-500'}`}>
-              <Database className="w-5 h-5" />
-            </div>
-            <div>
-              <h4 className="text-xs font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
-                Banco de Dados Supabase (PostgreSQL)
-                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
-                  hasSupabase 
-                    ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20' 
-                    : 'bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/20'
-                }`}>
-                  {hasSupabase ? 'Conectado na Nuvem' : 'Modo Local / Desconectado'}
-                </span>
-              </h4>
-              <p className="text-[11px] text-slate-400">
-                {hasSupabase 
-                  ? 'Sincronização em nuvem ativa com as tabelas produtos, catálogo universal e logs.' 
-                  : 'Insira a URL e Chave Anon do seu projeto Supabase para gravar e importar dados na nuvem.'}
-              </p>
-            </div>
+      {/* 1. SEÇÃO DE SEGURANÇA: ALTERAÇÃO DE SENHA */}
+      <div className={`p-4 sm:p-5 rounded-3xl border ${
+        darkMode ? 'bg-slate-800/80 border-slate-700' : 'bg-white border-slate-200'
+      } shadow-sm space-y-4`}>
+        <div className="flex items-center gap-2.5">
+          <div className="p-2.5 rounded-2xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
+            <KeyRound className="w-5 h-5" />
           </div>
-
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => setIsEditingConfig(!isEditingConfig)}
-              className="px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-bold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-750 transition"
-            >
-              {isEditingConfig ? 'Fechar Edição' : 'Configurar Conexão'}
-            </button>
-            {hasSupabase && (
-              <button
-                onClick={handleTestSupabase}
-                disabled={testingSupabase}
-                className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition flex items-center gap-1.5 shrink-0"
-              >
-                <RefreshCw className={`w-3.5 h-3.5 ${testingSupabase ? 'animate-spin' : ''}`} />
-                <span>Testar Conexão</span>
-              </button>
-            )}
+          <div>
+            <h3 className="text-sm font-black text-slate-900 dark:text-white">
+              Segurança da Conta & Alteração de Senha
+            </h3>
+            <p className="text-[11px] text-slate-400">
+              Altere a sua senha de login no sistema SuperPWA OpSys (mínimo de 7 caracteres).
+            </p>
           </div>
         </div>
 
-        {/* Formulário de Configuração do Supabase */}
-        {isEditingConfig && (
-          <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-850 border border-slate-200 dark:border-slate-750 space-y-3 animate-in fade-in">
-            <div className="flex items-center justify-between">
-              <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
-                Credenciais do Projeto Supabase
-              </span>
-              <span className="text-[10px] text-slate-400">
-                Obtido em Supabase Dashboard → Settings → API
-              </span>
-            </div>
+        {passwordNotice && (
+          <div className={`p-3.5 rounded-2xl text-xs flex items-center gap-2 animate-in fade-in ${
+            passwordNotice.type === 'success'
+              ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border border-emerald-500/20'
+              : 'bg-rose-500/10 text-rose-700 dark:text-rose-300 border border-rose-500/20'
+          }`}>
+            {passwordNotice.type === 'success' ? (
+              <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
+            ) : (
+              <AlertCircle className="w-4 h-4 text-rose-500 shrink-0" />
+            )}
+            <span>{passwordNotice.message}</span>
+          </div>
+        )}
 
-            <div className="space-y-2 text-xs">
-              <div>
-                <label className="text-[11px] font-bold text-slate-600 dark:text-slate-300 block mb-1">
-                  URL do Projeto (Project URL)
-                </label>
-                <input
-                  type="text"
-                  value={supabaseUrlInput}
-                  onChange={e => setSupabaseUrlInput(e.target.value)}
-                  placeholder="https://seu-projeto-id.supabase.co"
-                  className="w-full p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200 font-mono text-[11px] focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                />
-              </div>
-
-              <div>
-                <label className="text-[11px] font-bold text-slate-600 dark:text-slate-300 block mb-1">
-                  Chave Pública Anônima (Anon Key / Public API Key)
-                </label>
-                <input
-                  type="password"
-                  value={supabaseKeyInput}
-                  onChange={e => setSupabaseKeyInput(e.target.value)}
-                  placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
-                  className="w-full p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200 font-mono text-[11px] focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                />
-              </div>
-
-              <div className="flex items-center justify-between pt-1">
-                {hasSupabase && (
-                  <button
-                    type="button"
-                    onClick={handleDisconnectSupabase}
-                    className="text-xs text-rose-500 hover:underline font-semibold"
-                  >
-                    Desconectar Supabase
-                  </button>
-                )}
-                <button
-                  type="button"
-                  onClick={handleSaveSupabaseConfig}
-                  disabled={!supabaseUrlInput || !supabaseKeyInput || testingSupabase}
-                  className="ml-auto px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-bold text-xs shadow-md shadow-emerald-600/20 transition flex items-center gap-1.5"
-                >
-                  <Check className="w-4 h-4" />
-                  <span>Salvar & Conectar ao Banco</span>
-                </button>
-              </div>
+        <form onSubmit={handleChangePasswordSubmit} className="space-y-3 max-w-md text-xs">
+          <div>
+            <label className="font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider text-[10px] block mb-1">
+              Nova Senha (Mínimo 7 caracteres) *
+            </label>
+            <div className="relative">
+              <input
+                type={showNewPassword ? 'text' : 'password'}
+                required
+                value={newPasswordInput}
+                onChange={e => setNewPasswordInput(e.target.value)}
+                placeholder="Digite a nova senha segura"
+                className="w-full p-2.5 pr-10 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white font-mono text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500"
+              />
+              <button
+                type="button"
+                onClick={() => setShowNewPassword(!showNewPassword)}
+                className="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
+              >
+                {showNewPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+              </button>
             </div>
           </div>
-        )}
 
-        {configFeedback && (
-          <div
-            className={`p-3 rounded-2xl text-xs flex items-center gap-2 animate-in fade-in ${
-              configFeedback.success
-                ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30'
-                : 'bg-rose-500/15 text-rose-700 dark:text-rose-300 border border-rose-500/30'
-            }`}
-          >
-            {configFeedback.success ? (
-              <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-500" />
-            ) : (
-              <AlertCircle className="w-4 h-4 shrink-0 text-rose-500" />
+          <div>
+            <label className="font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider text-[10px] block mb-1">
+              Confirmar Nova Senha *
+            </label>
+            <input
+              type={showNewPassword ? 'text' : 'password'}
+              required
+              value={confirmPasswordInput}
+              onChange={e => setConfirmPasswordInput(e.target.value)}
+              placeholder="Digite novamente a nova senha"
+              className="w-full p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white font-mono text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500"
+            />
+            {confirmPasswordInput && newPasswordInput !== confirmPasswordInput && (
+              <p className="text-[10px] text-rose-500 font-bold mt-1">As senhas não coincidem.</p>
             )}
-            <span>{configFeedback.message}</span>
           </div>
-        )}
 
-        {supabaseTestResult && (
-          <div
-            className={`p-3 rounded-2xl text-xs flex items-center gap-2 animate-in fade-in ${
-              supabaseTestResult.success
-                ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30'
-                : 'bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/30'
-            }`}
-          >
-            {supabaseTestResult.success ? (
-              <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-500" />
-            ) : (
-              <AlertCircle className="w-4 h-4 shrink-0 text-amber-500" />
-            )}
-            <span>{supabaseTestResult.message}</span>
+          <div className="pt-1">
+            <button
+              type="submit"
+              disabled={isChangingPassword || newPasswordInput.length < 7 || newPasswordInput !== confirmPasswordInput}
+              className="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 text-white font-black text-xs shadow-md shadow-emerald-600/20 transition flex items-center gap-1.5 cursor-pointer"
+            >
+              <ShieldCheck className="w-4 h-4" />
+              <span>{isChangingPassword ? 'Atualizando Senha...' : 'Salvar Nova Senha'}</span>
+            </button>
           </div>
-        )}
+        </form>
       </div>
 
-      {/* Painel de Preferências */}
-      <div
-        className={`rounded-3xl border divide-y ${
-          darkMode
-            ? 'bg-slate-800/80 border-slate-700 divide-slate-700'
-            : 'bg-white border-slate-200 divide-slate-100'
-        } shadow-sm overflow-hidden`}
-      >
-        {/* Tema do Dispositivo (Detecção Automática) */}
-        <div className="p-4 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className={`p-2.5 rounded-xl ${darkMode ? 'bg-indigo-500/15 text-indigo-400' : 'bg-amber-500/15 text-amber-500'}`}>
-              {darkMode ? <Moon className="w-5 h-5" /> : <Sun className="w-5 h-5" />}
+      {/* 2. SEÇÃO: PREFERÊNCIAS OPERACIONAIS */}
+      <div className={`p-4 sm:p-5 rounded-3xl border ${
+        darkMode ? 'bg-slate-800/80 border-slate-700' : 'bg-white border-slate-200'
+      } shadow-sm space-y-4`}>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2.5">
+            <div className="p-2.5 rounded-2xl bg-indigo-500/10 text-indigo-600 dark:text-indigo-400">
+              <Volume2 className="w-5 h-5" />
             </div>
             <div>
-              <p className="text-xs font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                <span>Tema do Dispositivo (Detecção Automática)</span>
-                <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400">
-                  {darkMode ? 'Modo Escuro' : 'Modo Claro'} Detectado
-                </span>
-              </p>
+              <h3 className="text-sm font-black text-slate-900 dark:text-white">
+                Alertas Sonoros & Resposta Tátil
+              </h3>
               <p className="text-[11px] text-slate-400">
-                O aplicativo detecta automaticamente a preferência visual do sistema operacional do seu aparelho.
+                Ajuste os feedbacks de áudio e vibração para leituras com coletores e celulares.
               </p>
             </div>
           </div>
-          <span className="text-xs font-semibold text-slate-400 font-mono">Auto</span>
-        </div>
-
-        {/* Status de Sincronização */}
-        <div className="p-4 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="p-2.5 rounded-xl bg-emerald-500/15 text-emerald-500">
-              <ShieldCheck className="w-5 h-5" />
-            </div>
-            <div>
-              <p className="text-xs font-bold text-slate-900 dark:text-white">Fila de Sincronização Local</p>
-              <p className="text-[11px] text-slate-400">
-                {offlineQueue.length > 0
-                  ? `${offlineQueue.length} alterações gravadas localmente aguardando envio`
-                  : 'Nenhuma alteração pendente (tudo sincronizado)'}
-              </p>
-            </div>
-          </div>
-          {offlineQueue.length > 0 && (
-            <button
-              onClick={syncOfflineQueue}
-              className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center gap-1 shadow-xs"
-            >
-              <RefreshCw className="w-3.5 h-3.5" /> Sincronizar
-            </button>
+          {preferencesSaved && (
+            <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 animate-in fade-in">
+              ✓ Preferência salva
+            </span>
           )}
         </div>
 
-        {/* Perfil Operador & Logout */}
+        <div className="space-y-2.5 text-xs">
+          <label className="flex items-center justify-between p-3 rounded-2xl bg-slate-50 dark:bg-slate-850 border border-slate-100 dark:border-slate-800 cursor-pointer">
+            <div className="flex items-center gap-3">
+              {soundEnabled ? <Volume2 className="w-4 h-4 text-emerald-500" /> : <VolumeX className="w-4 h-4 text-slate-400" />}
+              <div>
+                <span className="font-bold text-slate-800 dark:text-slate-200 block text-xs">
+                  Bip Sonoro na Leitura de Código de Barras
+                </span>
+                <span className="text-[10px] text-slate-400">
+                  Emite um som agudo característico de coletor a cada bipagem confirmada.
+                </span>
+              </div>
+            </div>
+            <input
+              type="checkbox"
+              checked={soundEnabled}
+              onChange={e => handleToggleSound(e.target.checked)}
+              className="w-4 h-4 rounded text-emerald-600 cursor-pointer"
+            />
+          </label>
+
+          <label className="flex items-center justify-between p-3 rounded-2xl bg-slate-50 dark:bg-slate-850 border border-slate-100 dark:border-slate-800 cursor-pointer">
+            <div className="flex items-center gap-3">
+              <Vibrate className="w-4 h-4 text-emerald-500" />
+              <div>
+                <span className="font-bold text-slate-800 dark:text-slate-200 block text-xs">
+                  Vibração ao Identificar Produto
+                </span>
+                <span className="text-[10px] text-slate-400">
+                  Gera feedback háptico em smartphones e coletores móveis compatíveis.
+                </span>
+              </div>
+            </div>
+            <input
+              type="checkbox"
+              checked={vibrationEnabled}
+              onChange={e => handleToggleVibration(e.target.checked)}
+              className="w-4 h-4 rounded text-emerald-600 cursor-pointer"
+            />
+          </label>
+
+          <label className="flex items-center justify-between p-3 rounded-2xl bg-slate-50 dark:bg-slate-850 border border-slate-100 dark:border-slate-800 cursor-pointer">
+            <div className="flex items-center gap-3">
+              <Bell className="w-4 h-4 text-emerald-500" />
+              <div>
+                <span className="font-bold text-slate-800 dark:text-slate-200 block text-xs">
+                  Notificações de Mensagens do Chat da Loja
+                </span>
+                <span className="text-[10px] text-slate-400">
+                  Alerta sonoro e visual instantâneo quando colaboradores enviarem comunicados no grupo.
+                </span>
+              </div>
+            </div>
+            <input
+              type="checkbox"
+              checked={chatNotifsEnabled}
+              onChange={e => handleToggleChatNotifs(e.target.checked)}
+              className="w-4 h-4 rounded text-emerald-600 cursor-pointer"
+            />
+          </label>
+        </div>
+      </div>
+
+      {/* 3. SEÇÃO: PREFERÊNCIA DE SETOR OPERACIONAL */}
+      <div className={`p-4 sm:p-5 rounded-3xl border ${
+        darkMode ? 'bg-slate-800/80 border-slate-700' : 'bg-white border-slate-200'
+      } shadow-sm space-y-3`}>
+        <div className="flex items-center gap-2.5">
+          <div className="p-2.5 rounded-2xl bg-amber-500/10 text-amber-600 dark:text-amber-400">
+            <Tag className="w-5 h-5" />
+          </div>
+          <div>
+            <h3 className="text-sm font-black text-slate-900 dark:text-white">
+              Setor Operacional de Preferência
+            </h3>
+            <p className="text-[11px] text-slate-400">
+              Selecione o setor padrão que será pré-selecionado automaticamente na consulta e auditoria.
+            </p>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1 text-xs">
+          <button
+            type="button"
+            onClick={() => handleSectorChange('TODOS')}
+            className={`p-2.5 rounded-2xl font-bold border transition text-center cursor-pointer ${
+              preferredSector === 'TODOS'
+                ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm'
+                : 'bg-slate-50 dark:bg-slate-850 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-750'
+            }`}
+          >
+            Todos os Setores
+          </button>
+          {SETORES_DISPONIVEIS.map(setor => (
+            <button
+              key={setor}
+              type="button"
+              onClick={() => handleSectorChange(setor)}
+              className={`p-2.5 rounded-2xl font-bold border transition text-center cursor-pointer ${
+                preferredSector === setor
+                  ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm'
+                  : 'bg-slate-50 dark:bg-slate-850 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-750'
+              }`}
+            >
+              {setor}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* 4. SEÇÃO: DADOS DO PERFIL & SESSÃO */}
+      <div className={`rounded-3xl border divide-y ${
+        darkMode ? 'bg-slate-800/80 border-slate-700 divide-slate-700' : 'bg-white border-slate-200 divide-slate-100'
+      } shadow-sm overflow-hidden text-xs`}>
         <div className="p-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="p-2.5 rounded-xl bg-purple-500/15 text-purple-500">
-              <User className="w-5 h-5" />
+            <div className="w-10 h-10 rounded-2xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 flex items-center justify-center font-black">
+              {operator.name.charAt(0).toUpperCase()}
             </div>
             <div>
-              <p className="text-xs font-bold text-slate-900 dark:text-white">{operator.name}</p>
+              <p className="font-extrabold text-sm text-slate-900 dark:text-white">
+                {operator.name}
+              </p>
               <p className="text-[11px] text-slate-400">
-                Matrícula {operator.code} • Cargo: {operator.role}
+                Matrícula: {operator.code} • Cargo: <span className="font-bold text-emerald-600 dark:text-emerald-400">{operator.role}</span>
               </p>
             </div>
           </div>
+
           <div className="flex items-center gap-2">
-            <span className="text-[11px] font-bold text-slate-400 hidden sm:inline">{operator.store}</span>
+            <span className="text-[11px] font-bold text-slate-500 dark:text-slate-400 hidden sm:inline">
+              {operator.store}
+            </span>
             <button
               onClick={logout}
-              className="px-2.5 py-1.5 rounded-xl border border-rose-200 dark:border-rose-900/50 text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/20 text-xs font-bold flex items-center gap-1.5 transition"
+              className="px-3 py-1.5 rounded-xl border border-rose-200 dark:border-rose-900/50 text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/20 font-bold flex items-center gap-1.5 transition cursor-pointer"
               title="Encerrar Sessão"
             >
               <LogOut className="w-3.5 h-3.5" />
@@ -348,45 +420,23 @@ export const ConfiguracoesTab: React.FC = () => {
             </button>
           </div>
         </div>
-      </div>
 
-      {/* Diagnóstico PWA & Armazenamento */}
-      <div
-        className={`rounded-3xl border p-4 sm:p-5 ${
-          darkMode ? 'bg-slate-800/80 border-slate-700' : 'bg-white border-slate-200'
-        } shadow-sm space-y-3`}
-      >
-        <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-slate-400">
-          <Layers className="w-4 h-4 text-emerald-500" />
-          <span>Diagnóstico de Service Worker & Cache</span>
-        </div>
-
-        <div className="grid grid-cols-2 gap-2 text-xs">
-          <div className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-850 border border-slate-100 dark:border-slate-800">
-            <span className="text-[10px] text-slate-400 block uppercase font-bold">Service Worker</span>
-            <span className="font-bold text-emerald-600 dark:text-emerald-400">Ativo & Registrado</span>
+        {/* Limpeza de Armazenamento Local Temporário */}
+        <div className="p-4 flex items-center justify-between">
+          <div>
+            <p className="font-bold text-slate-800 dark:text-slate-200">Limpar Dados Temporários Locais</p>
+            <p className="text-[11px] text-slate-400">
+              Redefine caches locais e dados temporários do dispositivo em caso de manutenção.
+            </p>
           </div>
-          <div className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-850 border border-slate-100 dark:border-slate-800">
-            <span className="text-[10px] text-slate-400 block uppercase font-bold">Estratégia Workbox</span>
-            <span className="font-bold text-slate-700 dark:text-slate-300">Stale-While-Revalidate</span>
-          </div>
-        </div>
-
-        <div className="flex flex-wrap gap-2 pt-1">
-          <button
-            onClick={handleClearCache}
-            className="px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-semibold text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-750 flex items-center gap-1.5 transition"
-          >
-            <HardDrive className="w-3.5 h-3.5" />
-            {cacheCleared ? 'Cache Limpo!' : 'Limpar Caches do Navegador'}
-          </button>
 
           {!resetConfirm ? (
             <button
               onClick={() => setResetConfirm(true)}
-              className="px-3 py-2 rounded-xl border border-rose-200 dark:border-rose-900/50 text-rose-600 dark:text-rose-400 text-xs font-semibold hover:bg-rose-50 dark:hover:bg-rose-950/20 flex items-center gap-1.5 transition"
+              className="px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-400 hover:text-rose-600 text-xs font-semibold hover:bg-rose-50 dark:hover:bg-rose-950/20 transition cursor-pointer flex items-center gap-1"
             >
-              <Trash2 className="w-3.5 h-3.5" /> Resetar Dados Locais
+              <Trash2 className="w-3.5 h-3.5" />
+              <span>Limpar Local</span>
             </button>
           ) : (
             <div className="flex items-center gap-2">
@@ -395,13 +445,13 @@ export const ConfiguracoesTab: React.FC = () => {
                   resetAllData();
                   setResetConfirm(false);
                 }}
-                className="px-3 py-2 rounded-xl bg-rose-600 text-white text-xs font-bold"
+                className="px-3 py-1.5 rounded-xl bg-rose-600 text-white text-xs font-bold cursor-pointer"
               >
-                Confirmar Reset Geral
+                Confirmar
               </button>
               <button
                 onClick={() => setResetConfirm(false)}
-                className="text-xs text-slate-400 hover:underline"
+                className="text-xs text-slate-400 hover:underline cursor-pointer"
               >
                 Cancelar
               </button>
@@ -410,7 +460,7 @@ export const ConfiguracoesTab: React.FC = () => {
         </div>
       </div>
 
-      {/* Rodapé Informativo */}
+      {/* 5. RODAPÉ INSTITUCIONAL */}
       <div className="text-center pt-2 pb-6 space-y-2">
         <div className="flex items-center justify-center gap-3 text-xs text-slate-500 dark:text-slate-400">
           <button
@@ -431,10 +481,10 @@ export const ConfiguracoesTab: React.FC = () => {
         </div>
 
         <p className="text-[11px] font-bold text-slate-500 dark:text-slate-400">
-          SuperPWA OpSys • No-Copyright (Domínio Público) • Synk 2026.1
+          Copyright © 2026 SuperPWA OpSys. Todos os direitos reservados.
         </p>
         <p className="text-[10px] text-slate-400">
-          Suporte completo a Chrome, Edge, Safari iOS, coletores Zebra / Honeywell e Android PWA
+          Compatível com Chrome, Safari iOS, Edge e coletores Android Zebra / Honeywell.
         </p>
       </div>
 

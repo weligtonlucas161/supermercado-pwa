@@ -31,7 +31,8 @@ import {
   ZoomIn,
   ZoomOut,
   Target,
-  Sliders
+  Sliders,
+  WifiOff
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { useApp } from '../../context/AppContext';
@@ -108,6 +109,18 @@ export const AuditoriaTab: React.FC = () => {
     flashTimerRef.current = setTimeout(() => {
       setScanFlashBorder(null);
     }, 1000);
+  }, []);
+
+  // Alerta em Pop-up no Canto Superior Direito para Operador Offline
+  const [offlineAlert, setOfflineAlert] = useState<{ name: string; timestamp: number } | null>(null);
+  const offlineAlertTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  const triggerOfflineAlert = useCallback((name: string) => {
+    if (offlineAlertTimerRef.current) clearTimeout(offlineAlertTimerRef.current);
+    setOfflineAlert({ name, timestamp: Date.now() });
+    offlineAlertTimerRef.current = setTimeout(() => {
+      setOfflineAlert(null);
+    }, 6000);
   }, []);
 
   // Sub-Aba dentro da auditoria ativa (Pendentes vs Confirmados)
@@ -266,8 +279,21 @@ export const AuditoriaTab: React.FC = () => {
             ean: newBip.codigo_barras,
           });
         }
+      },
+      {
+        matricula: operator.code || operator.matricula || '4092',
+        nome: operator.name || 'Operador',
+      },
+      (offlineUserName) => {
+        triggerOfflineAlert(offlineUserName);
       }
     );
+
+    // Ouve desconexão de rede local durante a auditoria
+    const handleNetworkOffline = () => {
+      triggerOfflineAlert(operator.name || 'Você');
+    };
+    window.addEventListener('offline', handleNetworkOffline);
 
     // Polling de contingência a cada 3.5 segundos caso realtime webhooks oscilem
     const interval = setInterval(() => {
@@ -279,9 +305,10 @@ export const AuditoriaTab: React.FC = () => {
 
     return () => {
       unsubscribe();
+      window.removeEventListener('offline', handleNetworkOffline);
       clearInterval(interval);
     };
-  }, [operator.loja_id, operator.name, refreshRemoteSessions, syncSessionBips, triggerBorderFlash]);
+  }, [operator.loja_id, operator.name, operator.code, operator.matricula, refreshRemoteSessions, syncSessionBips, triggerBorderFlash, triggerOfflineAlert]);
 
   // =========================================================================
   // PROCESSAMENTO CONTÍNUO DE CÓDIGO DE BARRAS (SEM FECHAR CÂMERA)
@@ -822,6 +849,32 @@ export const AuditoriaTab: React.FC = () => {
           }`}
         />
       )}
+
+      {/* =================================================================== */}
+      {/* POP-UP NO CANTO SUPERIOR DIREITO: ALERTA DE OPERADOR OFFLINE        */}
+      {/* =================================================================== */}
+      {offlineAlert && (
+        <div className="fixed top-16 right-4 z-50 p-4 bg-rose-600 text-white rounded-3xl shadow-2xl flex items-center gap-3 border border-rose-400 animate-in slide-in-from-right-4 duration-300 max-w-sm">
+          <div className="p-2 rounded-2xl bg-white/20 text-white shrink-0">
+            <WifiOff className="w-5 h-5 animate-pulse" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="font-black text-xs">Atenção: Operador Offline</p>
+            <p className="text-[11px] text-rose-100 mt-0.5 leading-snug">
+              O colaborador <strong>{offlineAlert.name}</strong> está offline (perda de conexão).
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setOfflineAlert(null)}
+            className="p-1.5 rounded-xl hover:bg-white/20 text-white transition cursor-pointer"
+            title="Fechar alerta"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
       <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-3">
         <div>
           <h2 className="text-xl font-black text-slate-900 dark:text-white tracking-tight">

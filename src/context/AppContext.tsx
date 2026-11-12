@@ -144,8 +144,23 @@ interface AppContextType {
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  // Navigation
-  const [activeTab, setActiveTab] = useState<TabId>('inicio');
+  // Navigation - Mantém a tela atual salva no localStorage ao recarregar a página
+  const [activeTab, setActiveTabState] = useState<TabId>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem(STORAGE_KEYS.ACTIVE_TAB) as TabId;
+      if (saved && ['inicio', 'validade', 'estoque', 'auditoria', 'loja', 'configuracoes'].includes(saved)) {
+        return saved;
+      }
+    }
+    return 'inicio';
+  });
+
+  const setActiveTab = (tab: TabId) => {
+    setActiveTabState(tab);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem(STORAGE_KEYS.ACTIVE_TAB, tab);
+    }
+  };
 
   // =========================================================================
   // 1. DETECÇÃO AUTOMÁTICA DO TEMA DO DISPOSITIVO (SEM ESCOLHA MANUAL)
@@ -492,24 +507,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     try {
       const lojaId = operator.loja_id || currentUser?.loja_id;
       const dbProducts = await fetchProductsFromSupabase(lojaId);
-      if (dbProducts && dbProducts.length > 0) {
-        setProducts(prev => {
-          // MESCLAGEM INTELIGENTE QUE PRESERVA TODOS OS SETORES!
-          // Se importar produtos do setor X, os produtos já existentes de setor Y, Z, etc. JAMAIS são apagados ou substituídos!
-          const map = new Map<string, Product>();
-          prev.forEach(p => map.set(p.ean, p));
-          dbProducts.forEach(p => {
-            const existing = map.get(p.ean);
-            if (existing) {
-              map.set(p.ean, { ...existing, ...p });
-            } else {
-              map.set(p.ean, p);
-            }
-          });
-          const merged = Array.from(map.values());
-          saveStoredData(STORAGE_KEYS.PRODUCTS, merged);
-          return merged;
-        });
+      if (dbProducts !== null) {
+        if (dbProducts.length === 0) {
+          // Se no banco de dados não possuir estoque (0 produtos), limpa o local storage e o state!
+          setProducts([]);
+          saveStoredData(STORAGE_KEYS.PRODUCTS, []);
+        } else {
+          setProducts(dbProducts);
+          saveStoredData(STORAGE_KEYS.PRODUCTS, dbProducts);
+        }
         const now = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
         setLastDatabaseSyncTime(now);
       }
@@ -519,6 +525,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setIsSyncingWithDatabase(false);
     }
   }, [currentUser?.loja_id, operator.loja_id]);
+
+  // Consulta automática do estoque remoto no carregamento
+  useEffect(() => {
+    if (isAuthenticated) {
+      refreshProductsFromDatabase();
+    }
+  }, [isAuthenticated, refreshProductsFromDatabase]);
 
   // Assinatura em Tempo Real (Realtime Channel) para multi-sessões
   useEffect(() => {
@@ -910,9 +923,50 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (exists) return prev;
         return [...prev, newMsg];
       });
-      if (!isChatOpen) {
-        setUnreadChatCount(c => c + 1);
-        triggerScanBeep(true);
+
+      const myMatricula = operator.code || operator.matricula;
+      const isFromMe = newMsg.remetente_matricula === myMatricula;
+
+      if (!isFromMe) {
+        if (!isChatOpen) {
+          setUnreadChatCount(c => c + 1);
+        }
+
+        // Toca o alerta sonoro de mensagem
+        const isSoundEnabled = localStorage.getItem('superpwa_sound_enabled') !== 'false';
+        if (isSoundEnabled) {
+          triggerScanBeep(true);
+        }
+
+        // Adiciona notificação formal na central de notificações
+        setNotifications(prev => [
+          {
+            id: `notif-chat-${newMsg.id}-${Date.now()}`,
+            title: newMsg.canal_tipo === 'grupo'
+              ? `💬 Mensagem no Grupo (${newMsg.remetente_nome})`
+              : `🔒 Mensagem Direta (${newMsg.remetente_nome})`,
+            message: newMsg.conteudo,
+            type: 'info',
+            timestamp: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
+            read: false,
+          },
+          ...prev,
+        ]);
+
+        // Dispara notificação nativa do sistema operacional / PWA se permitido
+        if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
+          try {
+            new Notification(
+              newMsg.canal_tipo === 'grupo' ? `Grupo: ${newMsg.remetente_nome}` : `Mensagem de ${newMsg.remetente_nome}`,
+              {
+                body: newMsg.conteudo,
+                icon: '/pwa-192x192.png',
+              }
+            );
+          } catch (e) {
+            console.warn('Falha ao disparar notification nativa:', e);
+          }
+        }
       }
     });
 
