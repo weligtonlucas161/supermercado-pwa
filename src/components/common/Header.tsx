@@ -25,7 +25,8 @@ export const Header: React.FC = () => {
     operator,
     storeName,
     storeColor,
-    logout
+    logout,
+    isInventoryLocked
   } = useApp();
 
   const [showNotifications, setShowNotifications] = useState(false);
@@ -103,41 +104,51 @@ export const Header: React.FC = () => {
           )}
 
           {/* Operational Chat Button */}
-          <button
-            onClick={() => openChat()}
-            className="p-2 rounded-xl relative text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-emerald-600 dark:hover:text-emerald-400 transition cursor-pointer"
-            aria-label="Chat Operacional da Loja"
-            title="Chat Operacional da Loja"
-          >
-            <MessageSquare className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
-            {unreadChatCount > 0 && (
-              <span className="absolute top-1 right-1 min-w-[16px] h-[16px] px-1 rounded-full bg-emerald-600 text-white text-[9px] font-black flex items-center justify-center ring-2 ring-white dark:ring-slate-900 animate-pulse">
-                {unreadChatCount}
-              </span>
-            )}
-          </button>
+          {!isInventoryLocked && (
+            <button
+              onClick={() => openChat()}
+              className="p-2 rounded-xl relative text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-emerald-600 dark:hover:text-emerald-400 transition cursor-pointer"
+              aria-label="Chat Operacional da Loja"
+              title="Chat Operacional da Loja"
+            >
+              <MessageSquare className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
+              {unreadChatCount > 0 && (
+                <span className="absolute top-1 right-1 min-w-[16px] h-[16px] px-1 rounded-full bg-emerald-600 text-white text-[9px] font-black flex items-center justify-center ring-2 ring-white dark:ring-slate-900 animate-pulse">
+                  {unreadChatCount}
+                </span>
+              )}
+            </button>
+          )}
 
           {/* Notifications Button */}
-          <button
-            onClick={() => setShowNotifications(true)}
-            className="p-2 rounded-xl relative text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition cursor-pointer"
-            aria-label="Notificações"
-          >
-            <Bell className="w-5 h-5" />
-            {unreadCount > 0 && (
-              <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-rose-500 ring-2 ring-white dark:ring-slate-900 animate-pulse"></span>
-            )}
-          </button>
+          {!isInventoryLocked && (
+            <button
+              onClick={() => setShowNotifications(true)}
+              className="p-2 rounded-xl relative text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition cursor-pointer"
+              aria-label="Notificações"
+            >
+              <Bell className="w-5 h-5" />
+              {unreadCount > 0 && (
+                <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-rose-500 ring-2 ring-white dark:ring-slate-900 animate-pulse"></span>
+              )}
+            </button>
+          )}
 
           {/* Logout / Trocar Usuário */}
-          <button
-            onClick={logout}
-            className="p-2 rounded-xl text-slate-500 hover:text-rose-600 dark:text-slate-400 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/30 transition cursor-pointer"
-            title="Sair / Trocar Usuário"
-            aria-label="Sair da Conta"
-          >
-            <LogOut className="w-4 h-4" />
-          </button>
+          {isInventoryLocked ? (
+            <span className="px-2.5 py-1 rounded-xl bg-amber-500/15 text-amber-700 border border-amber-500/30 text-[10px] font-black uppercase">
+              Inventário Bloqueado
+            </span>
+          ) : (
+            <button
+              onClick={logout}
+              className="p-2 rounded-xl text-slate-500 hover:text-rose-600 dark:text-slate-400 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/30 transition cursor-pointer"
+              title="Sair / Trocar Usuário"
+              aria-label="Sair da Conta"
+            >
+              <LogOut className="w-4 h-4" />
+            </button>
+          )}
         </div>
       </header>
 

@@ -34,12 +34,15 @@ import {
   Sliders,
   WifiOff,
   UserPlus,
-  Info
+  Info,
+  Lock,
+  FileDown
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { useApp } from '../../context/AppContext';
 import { SETORES_DISPONIVEIS, SetorLoja, Product, AuditItem } from '../../types';
 import { triggerScanBeep } from '../../utils/haptics';
+import { exportAuditReportToPDF } from '../../utils/pdfExport';
 import { useBarcodeDetector } from '../../hooks/useBarcodeDetector';
 import {
   fetchActiveAuditSessions,
@@ -47,9 +50,13 @@ import {
   fetchSessionBipsFromDatabase,
   insertAuditBipInDatabase,
   finalizeAuditSessionInDatabase,
+  checkAuditSessionStatus,
+  confirmMissingAuditProductInDatabase,
+  buildAuditCompositeParts,
   subscribeToAuditRealtime,
   notifySessionJoinRealtime,
   AUDIT_SESSION_MAX_INACTIVITY_MS,
+  AuditSessionTipo,
   DbActiveAuditSession,
   DbAuditBip,
 } from '../../services/supabaseService';
@@ -65,6 +72,7 @@ interface ConfirmedProductItem {
   scannedAt: string;
   scannedBy?: string;
   scanMethod?: 'camera' | 'manual';
+  physicalQuantity?: number;
 }
 
 function formatAuditDuration(ms: number): string {
@@ -78,22 +86,87 @@ function formatAuditDuration(ms: number): string {
 }
 
 export const AuditoriaTab: React.FC = () => {
-  const { products, audits, addAudit, updateAudit, operator, darkMode, openScanner } = useApp();
+  const {
+    products,
+    audits,
+    addAudit,
+    updateAudit,
+    refreshAuditsFromDatabase,
+    operator,
+    darkMode,
+    openScanner,
+    storeName,
+    isInventoryLocked,
+    setIsInventoryLocked,
+  } = useApp();
 
   // Interface Ativa das 4 requeridas
   const [activeInterface, setActiveInterface] = useState<AuditoriaInterface>('presenca');
 
+  // Permissões para relatórios e visualização de estoque teórico
+  const isManagerUser =
+    operator.role === 'gerente' ||
+    operator.role === 'adm' ||
+    operator.role === 'saas_admin' ||
+    operator.role === 'master';
+
+  const visibleAudits = audits.filter((a) => {
+    if (operator.loja_id && a.lojaId && a.lojaId !== operator.loja_id) return false;
+    if (isManagerUser) return true;
+    const userSector = (operator.setor_restrito || '').trim().toUpperCase();
+    if (!userSector || userSector === 'TODOS' || userSector === 'GERAL') return true;
+    return (a.department || '').trim().toUpperCase() === userSector;
+  });
+
   // =========================================================================
-  // ESTADOS DA INTERFACE 1: AUDITORIA DE PRESENÇA
+  // ESTADOS DA SESSÃO ATIVA (PRESENÇA E INVENTÁRIO CEGO)
   // =========================================================================
   const [selectedSetor, setSelectedSetor] = useState<SetorLoja>('MERCEARIA');
   const [isAuditing, setIsAuditing] = useState(false);
+  const [sessionTipo, setSessionTipo] = useState<'PRESENCA' | 'INVENTARIO'>('PRESENCA');
+  const sessionTipoRef = useRef<'PRESENCA' | 'INVENTARIO'>('PRESENCA');
+  useEffect(() => {
+    sessionTipoRef.current = sessionTipo;
+  }, [sessionTipo]);
   const [sessionSetor, setSessionSetor] = useState<SetorLoja>('MERCEARIA');
   const [sessionStartTime, setSessionStartTime] = useState<string>('');
   const [sessionStartTimeMs, setSessionStartTimeMs] = useState<number>(Date.now());
   const [sessionIniciadaPor, setSessionIniciadaPor] = useState<{ nome: string; matricula: string } | null>(null);
   const [sessionParticipants, setSessionParticipants] = useState<string[]>([]);
   const [showStartSessionPopup, setShowStartSessionPopup] = useState<boolean>(false);
+
+  // Estado de digitação de quantidade física ao bipar item no Inventário Cego
+  const [pendingInventoryCountItem, setPendingInventoryCountItem] = useState<{
+    product: Product;
+    scannedAt: string;
+  } | null>(null);
+  const pendingInventoryCountRef = useRef<{ product: Product; scannedAt: string } | null>(null);
+  useEffect(() => {
+    pendingInventoryCountRef.current = pendingInventoryCountItem;
+  }, [pendingInventoryCountItem]);
+  const [physicalCountInput, setPhysicalCountInput] = useState<string>('');
+  const physicalCountInputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    if (pendingInventoryCountItem) {
+      setTimeout(() => physicalCountInputRef.current?.focus(), 80);
+    }
+  }, [pendingInventoryCountItem]);
+
+  // Sincroniza bloqueio restrito global sempre que sessão de Inventário Cego estiver ativa
+  useEffect(() => {
+    setIsInventoryLocked(isAuditing && sessionTipo === 'INVENTARIO');
+    return () => {
+      setIsInventoryLocked(false);
+    };
+  }, [isAuditing, sessionTipo, setIsInventoryLocked]);
+
+  // Atualiza relatórios do servidor ao abrir a aba Relatórios
+  useEffect(() => {
+    if (activeInterface === 'relatorio') {
+      refreshAuditsFromDatabase();
+    }
+  }, [activeInterface, refreshAuditsFromDatabase]);
 
   // Sessões em tempo real no banco de dados (tabela auditoria_presenca_sessoes)
   const [activeRemoteSessions, setActiveRemoteSessions] = useState<DbActiveAuditSession[]>([]);
@@ -104,10 +177,9 @@ export const AuditoriaTab: React.FC = () => {
     currentSessionIdRef.current = currentSessionId;
   }, [currentSessionId]);
   
-  // Listas de Controle da Auditoria de Presença
+  // Listas de Controle da Auditoria Ativa
   const [pendentes, setPendentes] = useState<Product[]>([]);
   const [confirmados, setConfirmados] = useState<ConfirmedProductItem[]>([]);
-  const [manualBarcodeInput, setManualBarcodeInput] = useState('');
   const [isContinuousCameraActive, setIsContinuousCameraActive] = useState<boolean>(true);
   const [lastBipFeedback, setLastBipFeedback] = useState<{
     type: 'success' | 'warning' | 'error';
@@ -241,6 +313,7 @@ export const AuditoriaTab: React.FC = () => {
             scannedAt: new Date(b.timestamp).toLocaleTimeString('pt-BR'),
             scannedBy: b.operador_nome,
             scanMethod: 'camera',
+            physicalQuantity: b.quantidade_fisica !== null && b.quantidade_fisica !== undefined ? Number(b.quantidade_fisica) : undefined,
           });
 
           if (b.operador_nome) {
@@ -276,6 +349,38 @@ export const AuditoriaTab: React.FC = () => {
     }
   }, [operator.loja_id, operator.name, triggerBorderFlash]);
 
+  // Referência para stopScanning (usado no encerramento automático remoto)
+  const stopScanningRef = useRef<() => void>(() => {});
+
+  // Encerramento automático quando o anfitrião finaliza a sessão
+  const handleRemoteSessionClosed = useCallback(
+    (closedSessionId: string, closedByName?: string) => {
+      if (!currentSessionIdRef.current || closedSessionId !== currentSessionIdRef.current) return;
+      stopScanningRef.current();
+      setPendingInventoryCountItem(null);
+      setPhysicalCountInput('');
+      setCurrentSessionId(null);
+      currentSessionIdRef.current = null;
+      setIsAuditing(false);
+      setIsInventoryLocked(false);
+      setShowStartSessionPopup(false);
+      pendentesRef.current = [];
+      confirmadosRef.current = [];
+      setPendentes([]);
+      setConfirmados([]);
+      setSessionParticipants([]);
+      refreshRemoteSessions();
+      refreshAuditsFromDatabase();
+      triggerScanBeep(true);
+      setLastBipFeedback({
+        type: 'warning',
+        message: `Sessão encerrada automaticamente pelo anfitrião (${closedByName || 'Criador'}). O relatório foi consolidado.`,
+      });
+      setActiveInterface('relatorio');
+    },
+    [refreshRemoteSessions, refreshAuditsFromDatabase, setIsInventoryLocked]
+  );
+
   // Assinatura em Tempo Real (Supabase Realtime Channel com push instantâneo)
   useEffect(() => {
     const lojaId = operator.loja_id || '';
@@ -306,6 +411,7 @@ export const AuditoriaTab: React.FC = () => {
           scannedAt: new Date(newBip.timestamp).toLocaleTimeString('pt-BR'),
           scannedBy: newBip.operador_nome,
           scanMethod: 'camera',
+          physicalQuantity: newBip.quantidade_fisica !== null && newBip.quantidade_fisica !== undefined ? Number(newBip.quantidade_fisica) : undefined,
         };
 
         if (newBip.operador_nome) {
@@ -349,6 +455,9 @@ export const AuditoriaTab: React.FC = () => {
         setSessionParticipants(prev => prev.includes(joinedUserName) ? prev : [...prev, joinedUserName]);
         triggerJoinAlert(joinedUserName);
         triggerScanBeep(true);
+      },
+      (closedSessionId, closedByName) => {
+        handleRemoteSessionClosed(closedSessionId, closedByName);
       }
     );
 
@@ -359,10 +468,15 @@ export const AuditoriaTab: React.FC = () => {
     window.addEventListener('offline', handleNetworkOffline);
 
     // Polling de contingência a cada 3.5 segundos caso realtime webhooks oscilem
-    const interval = setInterval(() => {
+    const interval = setInterval(async () => {
       refreshRemoteSessions();
-      if (currentSessionIdRef.current) {
-        syncSessionBips(currentSessionIdRef.current);
+      const activeSessId = currentSessionIdRef.current;
+      if (activeSessId) {
+        syncSessionBips(activeSessId);
+        const status = await checkAuditSessionStatus(activeSessId, lojaId);
+        if (status === 'CONCLUIDA') {
+          handleRemoteSessionClosed(activeSessId, sessionIniciadaPor?.nome);
+        }
       }
     }, 3500);
 
@@ -371,15 +485,20 @@ export const AuditoriaTab: React.FC = () => {
       window.removeEventListener('offline', handleNetworkOffline);
       clearInterval(interval);
     };
-  }, [operator.loja_id, operator.name, operator.code, operator.matricula, refreshRemoteSessions, syncSessionBips, triggerBorderFlash, triggerOfflineAlert, triggerJoinAlert]);
+  }, [operator.loja_id, operator.name, operator.code, operator.matricula, sessionIniciadaPor?.nome, refreshRemoteSessions, syncSessionBips, triggerBorderFlash, triggerOfflineAlert, triggerJoinAlert, handleRemoteSessionClosed]);
 
   // =========================================================================
-  // PROCESSAMENTO CONTÍNUO DE CÓDIGO DE BARRAS (SEM FECHAR CÂMERA)
-  // Identificou o produto da lista -> marca como confirmado -> grava no banco em tempo real!
+  // PROCESSAMENTO CONTÍNUO DE CÓDIGO DE BARRAS EXCLUSIVAMENTE VIA CÂMERA
+  // Presença: confirma imediatamente | Inventário Cego: solicita quantidade física
   // =========================================================================
-  const processContinuousBarcode = useCallback((scannedCode: string, scanMethod: 'camera' | 'manual' = 'camera') => {
+  const processContinuousBarcode = useCallback((scannedCode: string) => {
     const cleanEan = scannedCode.replace(/[^0-9A-Za-z]/g, '').trim();
     if (!cleanEan) return;
+
+    // Se já houver modal de contagem física aberto no Inventário Cego, evita sobrescrever
+    if (sessionTipoRef.current === 'INVENTARIO' && pendingInventoryCountRef.current) {
+      return;
+    }
 
     // Validação de setor do operador: Somente pessoal daquele setor participa
     const isManager = operator.role === 'gerente' || operator.role === 'saas_admin' || operator.role === 'adm';
@@ -416,13 +535,21 @@ export const AuditoriaTab: React.FC = () => {
       const foundProduct = currentPendentes[pendingIndex];
       const nowTime = new Date().toLocaleTimeString('pt-BR');
 
-      // Remove de pendentes e atualiza ref imediatamente
+      // INVENTÁRIO CEGO: solicita digitação da quantidade física encontrada antes de confirmar
+      if (sessionTipoRef.current === 'INVENTARIO') {
+        triggerScanBeep(true);
+        triggerBorderFlash('green');
+        setPhysicalCountInput('');
+        setPendingInventoryCountItem({ product: foundProduct, scannedAt: nowTime });
+        return;
+      }
+
+      // PRESENÇA: confirma imediatamente via leitura da câmera
       const newPendentes = [...currentPendentes];
       newPendentes.splice(pendingIndex, 1);
       pendentesRef.current = newPendentes;
       setPendentes(newPendentes);
 
-      // Adiciona em confirmados e atualiza ref imediatamente com operador responsável e método
       const operatorDisplayName = operator.name || 'Operador';
       const confirmedItem: ConfirmedProductItem = {
         id: foundProduct.id,
@@ -432,17 +559,16 @@ export const AuditoriaTab: React.FC = () => {
         supplierCode: foundProduct.supplierCode,
         scannedAt: nowTime,
         scannedBy: operatorDisplayName,
-        scanMethod,
+        scanMethod: 'camera',
       };
       setSessionParticipants(prev => prev.includes(operatorDisplayName) ? prev : [...prev, operatorDisplayName]);
       const newConfirmados = [confirmedItem, ...currentConfirmados];
       confirmadosRef.current = newConfirmados;
       setConfirmados(newConfirmados);
 
-      // Persistir bip em tempo real na tabela 'auditoria_presenca_bips' para sincronizar a equipe
       if (currentSessionIdRef.current) {
         insertAuditBipInDatabase({
-          id: `bip_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+          id: `${currentSessionIdRef.current}_${foundProduct.id}`,
           sessao_id: currentSessionIdRef.current,
           loja_id: operator.loja_id || '',
           produto_id: foundProduct.id,
@@ -457,15 +583,13 @@ export const AuditoriaTab: React.FC = () => {
         });
       }
 
-      // Bip sonoro e feedback visual com borda VERDE
       triggerScanBeep(true);
       triggerBorderFlash('green');
       setLastBipFeedback({
         type: 'success',
-        message: `✓ Confirmado: "${foundProduct.name}"`,
+        message: `✓ Confirmado via câmera: "${foundProduct.name}"`,
         ean: foundProduct.ean,
       });
-      setManualBarcodeInput('');
       return;
     }
 
@@ -481,7 +605,6 @@ export const AuditoriaTab: React.FC = () => {
         alreadyConfirmed.scannedBy.toLowerCase() !== (operator.name || 'Operador').toLowerCase();
 
       if (isOtherOperator) {
-        // Bipagem feita por outro membro da seção: piscar LARANJA
         triggerBorderFlash('orange');
         setLastBipFeedback({
           type: 'warning',
@@ -489,7 +612,6 @@ export const AuditoriaTab: React.FC = () => {
           ean: cleanEan,
         });
       } else {
-        // Bipagem dupla pelo próprio operador: piscar AMARELO
         triggerBorderFlash('yellow');
         setLastBipFeedback({
           type: 'warning',
@@ -497,7 +619,6 @@ export const AuditoriaTab: React.FC = () => {
           ean: cleanEan,
         });
       }
-      setManualBarcodeInput('');
       return;
     }
 
@@ -509,8 +630,69 @@ export const AuditoriaTab: React.FC = () => {
       message: `Código ${cleanEan} não consta nos pendentes deste setor (${sessionSetor}).`,
       ean: cleanEan,
     });
-    setManualBarcodeInput('');
   }, [operator.name, operator.loja_id, operator.code, operator.matricula, operator.role, operator.setor_restrito, sessionSetor, triggerBorderFlash]);
+
+  // Confirma quantidade física digitada após bipagem no Inventário Cego
+  const handleConfirmInventoryPhysicalCount = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!pendingInventoryCountItem) return;
+    const parsedQty = Number(physicalCountInput);
+    if (physicalCountInput.trim() === '' || Number.isNaN(parsedQty) || parsedQty < 0 || !Number.isInteger(parsedQty)) {
+      triggerScanBeep(false);
+      return;
+    }
+
+    const { product: foundProduct, scannedAt } = pendingInventoryCountItem;
+    const newPendentes = pendentesRef.current.filter(p => p.id !== foundProduct.id);
+    pendentesRef.current = newPendentes;
+    setPendentes(newPendentes);
+
+    const operatorDisplayName = operator.name || 'Operador';
+    const confirmedItem: ConfirmedProductItem = {
+      id: foundProduct.id,
+      name: foundProduct.name,
+      ean: foundProduct.ean,
+      reducedCode: foundProduct.reducedCode,
+      supplierCode: foundProduct.supplierCode,
+      scannedAt,
+      scannedBy: operatorDisplayName,
+      scanMethod: 'camera',
+      physicalQuantity: parsedQty,
+    };
+
+    setSessionParticipants(prev => prev.includes(operatorDisplayName) ? prev : [...prev, operatorDisplayName]);
+    const newConfirmados = [confirmedItem, ...confirmadosRef.current.filter(c => c.id !== foundProduct.id)];
+    confirmadosRef.current = newConfirmados;
+    setConfirmados(newConfirmados);
+
+    if (currentSessionIdRef.current) {
+      insertAuditBipInDatabase({
+        id: `${currentSessionIdRef.current}_${foundProduct.id}`,
+        sessao_id: currentSessionIdRef.current,
+        loja_id: operator.loja_id || '',
+        produto_id: foundProduct.id,
+        codigo_barras: foundProduct.ean,
+        produto_nome: foundProduct.name,
+        setor: sessionSetor,
+        quantidade_fisica: parsedQty,
+        operador_matricula: operator.code || operator.matricula || '',
+        operador_nome: operatorDisplayName,
+        timestamp: Date.now(),
+      }).catch(err => {
+        console.warn('Aviso ao registrar contagem física no banco:', err);
+      });
+    }
+
+    triggerScanBeep(true);
+    triggerBorderFlash('green');
+    setLastBipFeedback({
+      type: 'success',
+      message: `✓ Contagem registrada: "${foundProduct.name}" — Qtd. Física: ${parsedQty} un`,
+      ean: foundProduct.ean,
+    });
+    setPendingInventoryCountItem(null);
+    setPhysicalCountInput('');
+  };
 
   // Hook do Leitor com Google Barcode Service + ZXing tryHarder + Zoom & Focus
   const {
@@ -529,7 +711,11 @@ export const AuditoriaTab: React.FC = () => {
     setFocusMode,
     focusCapabilities,
     triggerAutoFocus,
-  } = useBarcodeDetector((code) => processContinuousBarcode(code, 'camera'));
+  } = useBarcodeDetector((code) => processContinuousBarcode(code));
+
+  useEffect(() => {
+    stopScanningRef.current = stopScanning;
+  }, [stopScanning]);
 
   // Iniciar/Parar câmera contínua automaticamente durante a auditoria ativa
   useEffect(() => {
@@ -559,10 +745,9 @@ export const AuditoriaTab: React.FC = () => {
   };
 
   // =========================================================================
-  // AÇÕES DA AUDITORIA DE PRESENÇA COM SINCRONIZAÇÃO EM TEMPO REAL
+  // AÇÕES DA AUDITORIA (PRESENÇA E INVENTÁRIO CEGO) COM TEMPO REAL
   // =========================================================================
-  const handleStartPresenceAudit = () => {
-    // Restrição Estrita por Setor: Somente operadores daquele setor podem participar
+  const handleStartAuditSession = (tipo: 'PRESENCA' | 'INVENTARIO' = 'PRESENCA') => {
     const isManager = operator.role === 'gerente' || operator.role === 'saas_admin' || operator.role === 'adm';
     if (!isManager && operator.setor_restrito && operator.setor_restrito !== 'TODOS') {
       if (operator.setor_restrito.toUpperCase() !== selectedSetor.toUpperCase()) {
@@ -592,11 +777,15 @@ export const AuditoriaTab: React.FC = () => {
     const startTimeFormatted = new Date(nowMs).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
 
     const creatorName = operator.name || 'Operador';
+    setSessionTipo(tipo);
+    sessionTipoRef.current = tipo;
     setSessionSetor(selectedSetor);
     pendentesRef.current = [...sectorProducts];
     confirmadosRef.current = [];
     setPendentes([...sectorProducts]);
     setConfirmados([]);
+    setPendingInventoryCountItem(null);
+    setPhysicalCountInput('');
     setSessionStartTime(startTimeFormatted);
     setSessionStartTimeMs(nowMs);
     setSessionIniciadaPor({
@@ -606,16 +795,17 @@ export const AuditoriaTab: React.FC = () => {
     setSessionParticipants([creatorName]);
     setShowStartSessionPopup(true);
     setIsAuditing(true);
+    setIsInventoryLocked(tipo === 'INVENTARIO');
     setIsContinuousCameraActive(true);
     setViewListTab('pendentes');
     setLastBipFeedback(null);
     triggerScanBeep(true);
 
-    // Registra sessão ativa no Supabase na tabela 'auditoria_presenca_sessoes'
     const lojaId = operator.loja_id || '';
     startAuditSessionInDatabase({
       lojaId,
       setor: selectedSetor,
+      tipo,
       nome: operator.name || 'Operador',
       matricula: operator.code || operator.matricula || '',
     }).then(result => {
@@ -644,10 +834,14 @@ export const AuditoriaTab: React.FC = () => {
       }
     }
 
+    const sessTipo: 'PRESENCA' | 'INVENTARIO' = sess.tipo === 'INVENTARIO' ? 'INVENTARIO' : 'PRESENCA';
     const sectorProducts = products.filter(
       p => p.category?.toUpperCase() === sess.setor.toUpperCase()
     );
 
+    setSessionTipo(sessTipo);
+    sessionTipoRef.current = sessTipo;
+    setActiveInterface(sessTipo === 'INVENTARIO' ? 'inventario' : 'presenca');
     setCurrentSessionId(sess.id);
     currentSessionIdRef.current = sess.id;
     setSessionSetor(sess.setor as SetorLoja);
@@ -657,13 +851,14 @@ export const AuditoriaTab: React.FC = () => {
       nome: sess.iniciada_por_nome,
       matricula: sess.iniciada_por_matricula,
     });
+    setPendingInventoryCountItem(null);
+    setPhysicalCountInput('');
 
     const initialParticipants = new Set<string>([
       sess.iniciada_por_nome,
       operator.name || 'Operador',
     ].filter(Boolean));
 
-    // Puxa bips já registrados na tabela 'auditoria_presenca_bips'
     try {
       const bips = await fetchSessionBipsFromDatabase(sess.id);
       const bipMap = new Map<string, DbAuditBip>();
@@ -689,6 +884,7 @@ export const AuditoriaTab: React.FC = () => {
             scannedAt: new Date(foundBip.timestamp).toLocaleTimeString('pt-BR'),
             scannedBy: foundBip.operador_nome,
             scanMethod: 'camera',
+            physicalQuantity: foundBip.quantidade_fisica !== null && foundBip.quantidade_fisica !== undefined ? Number(foundBip.quantidade_fisica) : undefined,
           });
         } else {
           initPendentes.push(prod);
@@ -708,12 +904,12 @@ export const AuditoriaTab: React.FC = () => {
 
     setSessionParticipants(Array.from(initialParticipants));
     setIsAuditing(true);
+    setIsInventoryLocked(sessTipo === 'INVENTARIO');
     setIsContinuousCameraActive(true);
     setViewListTab('pendentes');
     triggerScanBeep(true);
     triggerBorderFlash('green');
 
-    // Notifica demais operadores em tempo real que este usuário entrou na sessão
     notifySessionJoinRealtime({
       lojaId: operator.loja_id || '',
       sessaoId: sess.id,
@@ -722,14 +918,14 @@ export const AuditoriaTab: React.FC = () => {
     }).catch(() => {});
   };
 
-  // Dispara a câmera externa/modal com Google Service como alternativa se preferir
+  // Dispara a câmera em tela cheia exclusivamente via leitor óptico (sem entrada manual)
   const handleTriggerGoogleBarcodeScanner = () => {
     openScanner((scannedEan) => {
-      processContinuousBarcode(scannedEan, 'camera');
-    });
+      processContinuousBarcode(scannedEan);
+    }, { cameraOnly: true });
   };
 
-  // Finalizar e salvar a auditoria de presença (apenas criador da sessão)
+  // Finalizar e salvar a auditoria (apenas criador da sessão) — fecha automaticamente para todos os participantes
   const handleFinishAndSaveAudit = async (forceAutoExpire = false) => {
     if (!forceAutoExpire && !isSessionCreator) {
       triggerScanBeep(false);
@@ -742,6 +938,10 @@ export const AuditoriaTab: React.FC = () => {
     }
 
     stopScanning();
+    setPendingInventoryCountItem(null);
+    setPhysicalCountInput('');
+
+    const currentTipo = sessionTipoRef.current;
     const totalItems = confirmados.length + pendentes.length;
     const rate = totalItems > 0 ? ((confirmados.length / totalItems) * 100).toFixed(0) : '0';
     const finishedAtMs = Date.now();
@@ -759,13 +959,17 @@ export const AuditoriaTab: React.FC = () => {
     ].filter(Boolean));
     const participantsList = Array.from(participantsSet);
 
-    const cameraScansCount = confirmados.filter(c => (c.scanMethod ?? 'camera') === 'camera').length;
-    const manualScansCount = confirmados.filter(c => c.scanMethod === 'manual').length;
+    const cameraScansCount = confirmados.length;
+    const manualScansCount = 0;
 
-    // Itens em ruptura iminente do setor da auditoria (estoque <= mínimo ou zerado)
     const sectorProducts = products.filter(
       p => p.category?.toUpperCase() === sessionSetor.toUpperCase()
     );
+    const productStockByEan = new Map<string, number>();
+    sectorProducts.forEach(sp => {
+      productStockByEan.set((sp.ean || '').replace(/[^0-9A-Za-z]/g, '').trim(), sp.stock ?? 0);
+    });
+
     const ruptureItems = sectorProducts
       .filter(p => p.stock <= (p.minStock ?? 5) || p.stock === 0)
       .map(p => ({
@@ -777,15 +981,16 @@ export const AuditoriaTab: React.FC = () => {
         minStock: p.minStock ?? 5,
       }));
 
-    const sessId = currentSessionIdRef.current || `aud_${Date.now()}`;
     const lojaId = operator.loja_id || '';
+    const composite = buildAuditCompositeParts(lojaId, sessionSetor, sessionStartTimeMs);
+    const sessId = currentSessionIdRef.current || `${composite.chaveAuditoria}__${currentTipo.toLowerCase()}`;
 
-    // Grava no banco de dados nas tabelas 'auditoria_presenca_sessoes', 'auditorias_finalizadas' e 'auditoria_produtos'
     try {
       await finalizeAuditSessionInDatabase({
         sessaoId: sessId,
         lojaId,
         setor: sessionSetor,
+        tipo: currentTipo,
         iniciadaPorNome: sessionIniciadaPor?.nome || operator.name || 'Operador',
         iniciadaPorMatricula: sessionIniciadaPor?.matricula || operator.code || operator.matricula || '',
         finalizadaPorNome: operator.name || 'Operador',
@@ -795,14 +1000,25 @@ export const AuditoriaTab: React.FC = () => {
         totalDivergentes: pendentes.length,
         iniciadaEm: sessionStartTimeMs,
         finalizadaEm: finishedAtMs,
-        confirmedItems: confirmados.map(c => ({
-          name: c.name,
-          ean: c.ean,
-          reducedCode: c.reducedCode,
-          supplierCode: c.supplierCode,
-          scannedAt: c.scannedAt,
-          scannedBy: c.scannedBy || operator.name || 'Operador',
-        })),
+        participants: participantsList,
+        durationLabel,
+        cameraScansCount,
+        dataAuditoria: composite.dataAuditoria,
+        horaAuditoria: composite.horaAuditoria,
+        chaveAuditoria: composite.chaveAuditoria,
+        confirmedItems: confirmados.map(c => {
+          const cleanEan = (c.ean || '').replace(/[^0-9A-Za-z]/g, '').trim();
+          return {
+            name: c.name,
+            ean: c.ean,
+            reducedCode: c.reducedCode,
+            supplierCode: c.supplierCode,
+            scannedAt: c.scannedAt,
+            scannedBy: c.scannedBy || operator.name || 'Operador',
+            physicalQuantity: c.physicalQuantity,
+            systemQuantity: productStockByEan.get(cleanEan) ?? 0,
+          };
+        }),
         pendingItems: pendentes.map(p => ({
           name: p.name,
           ean: p.ean,
@@ -817,13 +1033,18 @@ export const AuditoriaTab: React.FC = () => {
       console.warn('Erro ao finalizar auditoria remotamente:', err);
     }
 
+    const titlePrefix = currentTipo === 'INVENTARIO' ? 'Inventário Cego' : 'Auditoria de Presença';
     addAudit({
-      title: `Auditoria de Presença - ${sessionSetor}`,
+      lojaId,
+      title: `${titlePrefix} - ${sessionSetor}`,
+      dataAuditoria: composite.dataAuditoria,
+      horaAuditoria: composite.horaAuditoria,
+      chaveAuditoria: composite.chaveAuditoria,
       itemsCount: confirmados.length,
       status: 'Concluída',
       auditor: operator.code || operator.matricula ? `${operator.name || 'Operador'} (${operator.code || operator.matricula})` : (operator.name || 'Operador'),
       department: sessionSetor,
-      type: 'PRESENCA',
+      type: currentTipo,
       totalItems,
       confirmedItems: confirmados.length,
       pendingItems: pendentes.length,
@@ -835,15 +1056,23 @@ export const AuditoriaTab: React.FC = () => {
       durationLabel,
       cameraScansCount,
       manualScansCount,
-      confirmedList: confirmados.map(c => ({
-        name: c.name,
-        ean: c.ean,
-        reducedCode: c.reducedCode,
-        supplierCode: c.supplierCode,
-        scannedAt: c.scannedAt,
-        scannedBy: c.scannedBy || operator.name || 'Operador',
-        scanMethod: c.scanMethod ?? 'camera',
-      })),
+      confirmedList: confirmados.map(c => {
+        const cleanEan = (c.ean || '').replace(/[^0-9A-Za-z]/g, '').trim();
+        const sysQty = productStockByEan.get(cleanEan) ?? 0;
+        const physQty = c.physicalQuantity;
+        return {
+          name: c.name,
+          ean: c.ean,
+          reducedCode: c.reducedCode,
+          supplierCode: c.supplierCode,
+          scannedAt: c.scannedAt,
+          scannedBy: c.scannedBy || operator.name || 'Operador',
+          scanMethod: 'camera',
+          physicalQuantity: physQty,
+          systemQuantity: sysQty,
+          divergence: typeof physQty === 'number' ? physQty - sysQty : undefined,
+        };
+      }),
       pendingList: pendentes.map(p => ({
         name: p.name,
         ean: p.ean,
@@ -851,6 +1080,9 @@ export const AuditoriaTab: React.FC = () => {
         supplierCode: p.supplierCode,
         stock: p.stock,
         minStock: p.minStock ?? 5,
+        systemQuantity: p.stock,
+        physicalQuantity: currentTipo === 'INVENTARIO' ? 0 : undefined,
+        divergence: currentTipo === 'INVENTARIO' ? -(p.stock ?? 0) : undefined,
       })),
       ruptureList: ruptureItems,
     });
@@ -858,12 +1090,14 @@ export const AuditoriaTab: React.FC = () => {
     setCurrentSessionId(null);
     currentSessionIdRef.current = null;
     setIsAuditing(false);
+    setIsInventoryLocked(false);
     setShowStartSessionPopup(false);
     setPendentes([]);
     setConfirmados([]);
     setSessionParticipants([]);
     setLastBipFeedback(null);
     refreshRemoteSessions();
+    refreshAuditsFromDatabase();
     setActiveInterface('relatorio');
     triggerScanBeep(true);
   };
@@ -878,6 +1112,7 @@ export const AuditoriaTab: React.FC = () => {
         } else {
           stopScanning();
           setIsAuditing(false);
+          setIsInventoryLocked(false);
           setCurrentSessionId(null);
           currentSessionIdRef.current = null;
           setLastBipFeedback({
@@ -891,18 +1126,28 @@ export const AuditoriaTab: React.FC = () => {
     return () => clearInterval(timer);
   }, [isAuditing, sessionStartTimeMs, isSessionCreator]);
 
+  // Exportar relatório em PDF (nativo, sem armazenamento local)
+  const handleExportAuditPDF = (audit: AuditItem) => {
+    exportAuditReportToPDF(audit, {
+      storeName,
+      showSystemStock: isManagerUser || audit.type !== 'INVENTARIO',
+    });
+  };
+
   // Exportar relatório em XLSX
   const handleExportAuditXLSX = (audit: AuditItem) => {
     const camCount = audit.cameraScansCount ?? (audit.confirmedList?.filter(c => (c.scanMethod ?? 'camera') === 'camera').length ?? audit.confirmedItems ?? audit.itemsCount);
     const manCount = audit.manualScansCount ?? (audit.confirmedList?.filter(c => c.scanMethod === 'manual').length ?? 0);
     const rows = [
+      { Informação: 'Chave Composta', Valor: audit.chaveAuditoria || audit.id },
       { Informação: 'Título', Valor: audit.title },
       { Informação: 'Setor', Valor: audit.department || '-' },
       { Informação: 'Iniciada por', Valor: audit.startedBy || audit.auditor },
       { Informação: 'Finalizada por / Auditor', Valor: audit.auditor },
       { Informação: 'Participantes', Valor: audit.participants?.join(', ') || audit.auditor },
       { Informação: 'Duração Total', Valor: audit.durationLabel || '-' },
-      { Informação: 'Data', Valor: audit.date },
+      { Informação: 'Data', Valor: audit.dataAuditoria || audit.date },
+      { Informação: 'Hora', Valor: audit.horaAuditoria || '-' },
       { Informação: 'Status', Valor: audit.status },
       { Informação: 'Taxa de Presença', Valor: audit.presenceRate || '100%' },
       { Informação: 'Itens Confirmados', Valor: audit.confirmedItems ?? audit.itemsCount },
@@ -914,7 +1159,7 @@ export const AuditoriaTab: React.FC = () => {
     const ws = XLSX.utils.json_to_sheet(rows);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Resumo');
-    XLSX.writeFile(wb, `auditoria_${audit.department || 'geral'}_${audit.date}.xlsx`);
+    XLSX.writeFile(wb, `auditoria_${audit.department || 'geral'}_${audit.dataAuditoria || audit.date}.xlsx`);
   };
 
   // Cálculos de progresso
@@ -923,7 +1168,7 @@ export const AuditoriaTab: React.FC = () => {
     ? Math.round((confirmados.length / totalSessionProducts) * 100)
     : 0;
 
-  // Bipagem pós-auditoria no relatório para itens não encontrados em área
+  // Bipagem pós-auditoria via câmera no relatório para itens não encontrados em área
   const handleBipMissingItem = (scannedEan: string, expectedItemEan?: string) => {
     if (!selectedAuditForModal) return;
     const cleanEan = scannedEan.replace(/[^0-9A-Za-z]/g, '').trim();
@@ -989,9 +1234,19 @@ export const AuditoriaTab: React.FC = () => {
 
     updateAudit(selectedAuditForModal.id, updatedAudit);
     setSelectedAuditForModal(updatedAudit);
+    confirmMissingAuditProductInDatabase({
+      sessaoId: selectedAuditForModal.id,
+      lojaId: operator.loja_id || selectedAuditForModal.lojaId || '',
+      ean: item.ean,
+      operadorNome: operator.name || 'Operador',
+      operadorMatricula: operator.code || operator.matricula || '',
+      newConfirmedCount,
+      newPendingCount,
+      newCameraScansCount: prevCam + 1,
+    });
     triggerScanBeep(true);
     triggerBorderFlash('green');
-    setModalFeedback(`✓ Produto "${item.name}" localizado na área, bipado com sucesso e transferido para a lista de Bipados!`);
+    setModalFeedback(`✓ Produto "${item.name}" localizado via câmera e transferido para a lista de Bipados!`);
   };
 
   return (
@@ -1082,6 +1337,80 @@ export const AuditoriaTab: React.FC = () => {
         </div>
       )}
       {/* =================================================================== */}
+      {/* MODAL DE QUANTIDADE FÍSICA (INVENTÁRIO CEGO AO BIPAR PELA CÂMERA)   */}
+      {/* =================================================================== */}
+      {pendingInventoryCountItem && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-xs p-4 animate-in fade-in duration-150">
+          <form
+            onSubmit={handleConfirmInventoryPhysicalCount}
+            className="w-full max-w-md bg-white dark:bg-slate-900 border-2 border-amber-500/60 rounded-3xl shadow-2xl p-5 space-y-4"
+          >
+            <div className="flex items-start justify-between gap-3 pb-3 border-b border-slate-100 dark:border-slate-800">
+              <div className="flex items-start gap-2.5">
+                <div className="p-2.5 rounded-2xl bg-amber-500/15 text-amber-600 shrink-0">
+                  <Boxes className="w-5 h-5" />
+                </div>
+                <div>
+                  <span className="text-[10px] font-black uppercase tracking-wider text-amber-600">
+                    Inventário Cego • Produto Bipado
+                  </span>
+                  <h3 className="font-black text-sm text-slate-900 dark:text-white leading-snug">
+                    {pendingInventoryCountItem.product.name}
+                  </h3>
+                  <p className="text-[11px] font-mono text-slate-400 mt-0.5">
+                    EAN: {pendingInventoryCountItem.product.ean}
+                    {pendingInventoryCountItem.product.reducedCode ? ` • Red: ${pendingInventoryCountItem.product.reducedCode}` : ''}
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-xs font-black text-slate-800 dark:text-slate-100 uppercase block">
+                Digite a Quantidade Física Encontrada:
+              </label>
+              <input
+                ref={physicalCountInputRef}
+                type="number"
+                inputMode="numeric"
+                min="0"
+                step="1"
+                required
+                autoFocus
+                placeholder="Ex: 12"
+                value={physicalCountInput}
+                onChange={(e) => setPhysicalCountInput(e.target.value)}
+                className="w-full px-4 py-3 rounded-2xl border-2 border-amber-500/50 bg-slate-50 dark:bg-slate-800 text-xl font-black text-slate-900 dark:text-white text-center focus:outline-none focus:ring-2 focus:ring-amber-500"
+              />
+              <p className="text-[11px] text-slate-400 text-center">
+                Contagem cega: informe exatamente a quantidade física contada na área.
+              </p>
+            </div>
+
+            <div className="flex gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => {
+                  setPendingInventoryCountItem(null);
+                  setPhysicalCountInput('');
+                }}
+                className="flex-1 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-bold text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+              >
+                Cancelar
+              </button>
+              <button
+                type="submit"
+                className="flex-1 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-slate-950 text-xs font-black shadow-md transition flex items-center justify-center gap-1.5 cursor-pointer"
+              >
+                <Check className="w-4 h-4" />
+                <span>Confirmar Quantidade</span>
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* =================================================================== */}
       {offlineAlert && (
         <div className="fixed top-16 right-4 z-50 p-4 bg-rose-600 text-white rounded-3xl shadow-2xl flex items-center gap-3 border border-rose-400 animate-in slide-in-from-right-4 duration-300 max-w-sm">
           <div className="p-2 rounded-2xl bg-white/20 text-white shrink-0">
@@ -1124,8 +1453,12 @@ export const AuditoriaTab: React.FC = () => {
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 border-b border-slate-200 dark:border-slate-800 pb-3">
         {/* 1. Auditoria de Presença */}
         <button
-          onClick={() => setActiveInterface('presenca')}
-          className={`p-3 rounded-2xl border text-xs font-bold flex flex-col items-center justify-center gap-1.5 transition cursor-pointer text-center ${
+          type="button"
+          disabled={isInventoryLocked}
+          onClick={() => !isInventoryLocked && setActiveInterface('presenca')}
+          className={`p-3 rounded-2xl border text-xs font-bold flex flex-col items-center justify-center gap-1.5 transition text-center ${
+            isInventoryLocked ? 'opacity-45 cursor-not-allowed' : 'cursor-pointer'
+          } ${
             activeInterface === 'presenca'
               ? 'bg-emerald-600 text-white border-emerald-600 shadow-md shadow-emerald-600/20 ring-2 ring-emerald-500/30'
               : darkMode
@@ -1137,8 +1470,9 @@ export const AuditoriaTab: React.FC = () => {
           <span>Auditoria de Presença</span>
         </button>
 
-        {/* 2. Auditoria de Inventário */}
+        {/* 2. Auditoria de Inventário (Cega) */}
         <button
+          type="button"
           onClick={() => setActiveInterface('inventario')}
           className={`p-3 rounded-2xl border text-xs font-bold flex flex-col items-center justify-center gap-1.5 transition cursor-pointer text-center relative ${
             activeInterface === 'inventario'
@@ -1149,16 +1483,22 @@ export const AuditoriaTab: React.FC = () => {
           }`}
         >
           <Boxes className="w-5 h-5" />
-          <span>Auditoria de Inventário</span>
-          <span className="text-[9px] font-black px-1.5 py-0.2 rounded-md bg-amber-400 text-slate-900 border border-amber-600/30 uppercase">
-            Em Breve
-          </span>
+          <span>Inventário Cego</span>
+          {isInventoryLocked && (
+            <span className="text-[9px] font-black px-1.5 py-0.2 rounded-md bg-rose-600 text-white uppercase inline-flex items-center gap-0.5">
+              <Lock className="w-2.5 h-2.5" /> Travado
+            </span>
+          )}
         </button>
 
         {/* 3. Auditoria de Validade */}
         <button
-          onClick={() => setActiveInterface('validade')}
-          className={`p-3 rounded-2xl border text-xs font-bold flex flex-col items-center justify-center gap-1.5 transition cursor-pointer text-center relative ${
+          type="button"
+          disabled={isInventoryLocked}
+          onClick={() => !isInventoryLocked && setActiveInterface('validade')}
+          className={`p-3 rounded-2xl border text-xs font-bold flex flex-col items-center justify-center gap-1.5 transition text-center relative ${
+            isInventoryLocked ? 'opacity-45 cursor-not-allowed' : 'cursor-pointer'
+          } ${
             activeInterface === 'validade'
               ? 'bg-amber-500 text-slate-950 border-amber-500 shadow-md ring-2 ring-amber-400/40'
               : darkMode
@@ -1175,8 +1515,12 @@ export const AuditoriaTab: React.FC = () => {
 
         {/* 4. Relatório de Auditorias */}
         <button
-          onClick={() => setActiveInterface('relatorio')}
-          className={`p-3 rounded-2xl border text-xs font-bold flex flex-col items-center justify-center gap-1.5 transition cursor-pointer text-center ${
+          type="button"
+          disabled={isInventoryLocked}
+          onClick={() => !isInventoryLocked && setActiveInterface('relatorio')}
+          className={`p-3 rounded-2xl border text-xs font-bold flex flex-col items-center justify-center gap-1.5 transition text-center ${
+            isInventoryLocked ? 'opacity-45 cursor-not-allowed' : 'cursor-pointer'
+          } ${
             activeInterface === 'relatorio'
               ? 'bg-emerald-600 text-white border-emerald-600 shadow-md shadow-emerald-600/20 ring-2 ring-emerald-500/30'
               : darkMode
@@ -1190,15 +1534,12 @@ export const AuditoriaTab: React.FC = () => {
       </div>
 
       {/* =================================================================== */}
-      {/* INTERFACE 1: AUDITORIA DE PRESENÇA                                  */}
+      {/* INTERFACE 1: AUDITORIA DE PRESENÇA (CONFIGURAÇÃO)                   */}
       {/* =================================================================== */}
-      {activeInterface === 'presenca' && (
+      {activeInterface === 'presenca' && (!isAuditing || sessionTipo !== 'PRESENCA') && (
         <div className="space-y-4">
-          {!isAuditing ? (
-            /* CONFIGURAÇÃO E INÍCIO DA AUDITORIA DE PRESENÇA */
-            <div className="space-y-4">
-              {/* SESSÕES ATIVAS EM TEMPO REAL NO BANCO DE DADOS (COLABORATIVO POR SETOR) */}
-              {activeRemoteSessions.length > 0 && (
+              {/* SESSÕES ATIVAS EM TEMPO REAL DE PRESENÇA */}
+              {activeRemoteSessions.filter(s => (s.tipo || 'PRESENCA') === 'PRESENCA').length > 0 && (
                 <div className="p-4 sm:p-5 rounded-3xl bg-gradient-to-r from-emerald-500/15 via-teal-500/10 to-emerald-500/5 border-2 border-emerald-500/40 shadow-lg space-y-3 animate-in fade-in">
                   <div className="flex items-center justify-between flex-wrap gap-2">
                     <div className="flex items-center gap-2">
@@ -1218,7 +1559,9 @@ export const AuditoriaTab: React.FC = () => {
                   </div>
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
-                    {activeRemoteSessions.map((sess) => {
+                    {activeRemoteSessions
+                      .filter(s => (s.tipo || 'PRESENCA') === 'PRESENCA')
+                      .map((sess) => {
                       const canJoin =
                         operator.role === 'gerente' ||
                         operator.role === 'saas_admin' ||
@@ -1238,7 +1581,7 @@ export const AuditoriaTab: React.FC = () => {
                                 Setor {sess.setor}
                               </span>
                               <span className="text-[10px] text-slate-400">
-                                {new Date(sess.timestamp).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                                {sess.hora_auditoria || new Date(sess.timestamp).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
                               </span>
                             </div>
                             <p className="text-[11px] text-slate-600 dark:text-slate-300">
@@ -1277,7 +1620,7 @@ export const AuditoriaTab: React.FC = () => {
                       Iniciar Nova Auditoria de Presença
                     </h3>
                     <p className="text-xs text-slate-500 dark:text-slate-400">
-                      Selecione o setor da loja para carregar a lista de produtos pendentes e auditar via Google Barcode Service.
+                      Selecione o setor da loja para conferir presença exclusivamente via leitura de código de barras pela câmera.
                     </p>
                   </div>
                 </div>
@@ -1327,13 +1670,13 @@ export const AuditoriaTab: React.FC = () => {
                     Regra de Auditoria de Presença:
                   </h4>
                   <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
-                    Ao iniciar, todos os <strong>{productsInSelectedSetor.length}</strong> produtos do setor <strong>{selectedSetor}</strong> entram na lista <strong>Pendentes</strong>. A cada bipagem com o <strong>Google Barcode Service</strong>, o produto é verificado e transferido para a lista de <strong>Confirmados</strong>.
+                    Ao iniciar, os <strong>{productsInSelectedSetor.length}</strong> produtos do setor <strong>{selectedSetor}</strong> entram em <strong>Pendentes</strong>. A confirmação é feita exclusivamente por bipagem via câmera; quando o anfitrião encerrar, todos os participantes fecham automaticamente.
                   </p>
                 </div>
 
                 <button
                   type="button"
-                  onClick={handleStartPresenceAudit}
+                  onClick={() => handleStartAuditSession('PRESENCA')}
                   className="px-6 py-3 rounded-2xl bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white text-xs font-black shadow-lg shadow-emerald-600/25 transition flex items-center justify-center gap-2 shrink-0 cursor-pointer"
                 >
                   <Play className="w-4 h-4" />
@@ -1348,52 +1691,234 @@ export const AuditoriaTab: React.FC = () => {
                 </div>
               )}
             </div>
+        </div>
+      )}
+
+      {/* =================================================================== */}
+      {/* INTERFACE 2: AUDITORIA DE INVENTÁRIO CEGO (CONFIGURAÇÃO)            */}
+      {/* =================================================================== */}
+      {activeInterface === 'inventario' && (!isAuditing || sessionTipo !== 'INVENTARIO') && (
+        <div className="space-y-4 animate-in fade-in duration-200">
+          {/* SESSÕES ATIVAS DE INVENTÁRIO CEGO */}
+          {activeRemoteSessions.filter(s => s.tipo === 'INVENTARIO').length > 0 && (
+            <div className="p-4 sm:p-5 rounded-3xl bg-gradient-to-r from-amber-500/15 via-orange-500/10 to-amber-500/5 border-2 border-amber-500/50 shadow-lg space-y-3 animate-in fade-in">
+              <div className="flex items-center gap-2">
+                <Radio className="w-5 h-5 text-amber-500 animate-pulse" />
+                <div>
+                  <h4 className="text-xs sm:text-sm font-black text-slate-900 dark:text-white uppercase tracking-wide flex items-center gap-2">
+                    <span>Sessão de Inventário Cego Ativa</span>
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500 text-slate-950 font-extrabold uppercase">
+                      Modo Restrito
+                    </span>
+                  </h4>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                    Entre para realizar a contagem física cega em equipe via leitura de código de barras.
+                  </p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                {activeRemoteSessions
+                  .filter(s => s.tipo === 'INVENTARIO')
+                  .map((sess) => {
+                    const canJoin =
+                      operator.role === 'gerente' ||
+                      operator.role === 'saas_admin' ||
+                      operator.role === 'adm' ||
+                      !operator.setor_restrito ||
+                      operator.setor_restrito === 'TODOS' ||
+                      operator.setor_restrito.toUpperCase() === sess.setor.toUpperCase();
+
+                    return (
+                      <div
+                        key={sess.id}
+                        className="p-3.5 rounded-2xl bg-white dark:bg-slate-900 border border-amber-500/40 flex items-center justify-between gap-3 shadow-sm"
+                      >
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs font-black text-amber-600 uppercase tracking-wide">
+                              Setor {sess.setor}
+                            </span>
+                            <span className="text-[10px] text-slate-400">
+                              {sess.hora_auditoria || new Date(sess.timestamp).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-slate-600 dark:text-slate-300">
+                            Anfitrião: <strong className="text-slate-900 dark:text-white">{sess.iniciada_por_nome}</strong>
+                          </p>
+                        </div>
+
+                        {canJoin ? (
+                          <button
+                            type="button"
+                            onClick={() => handleJoinActiveSession(sess)}
+                            className="px-3.5 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-slate-950 text-xs font-black shadow-md transition flex items-center gap-1.5 cursor-pointer shrink-0"
+                          >
+                            <Users className="w-4 h-4" />
+                            <span>Entrar no Inventário</span>
+                          </button>
+                        ) : (
+                          <span className="text-[10px] text-slate-400 italic">
+                            Restrito ao setor {sess.setor}
+                          </span>
+                        )}
+                      </div>
+                    );
+                  })}
+              </div>
             </div>
-          ) : (
-            /* =============================================================== */
-            /* AUDITORIA DE PRESENÇA EM ANDAMENTO (COLETOR GOOGLE SERVICE)     */
-            /* =============================================================== */
+          )}
+
+          <div className="p-5 sm:p-6 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xl space-y-5">
+            <div className="flex items-center gap-3 pb-3 border-b border-slate-100 dark:border-slate-800">
+              <div className="p-2.5 rounded-2xl bg-amber-500/15 text-amber-600">
+                <Boxes className="w-6 h-6" />
+              </div>
+              <div>
+                <h3 className="font-black text-base text-slate-900 dark:text-white">
+                  Iniciar Auditoria de Inventário (Contagem Cega)
+                </h3>
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  Bipe pela câmera, digite a quantidade física encontrada e opere em Modo Restrito sem visualizar saldos de estoque.
+                </p>
+              </div>
+            </div>
+
+            <div className="space-y-2.5">
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-black text-slate-900 dark:text-white uppercase tracking-wider flex items-center gap-1.5">
+                  <Tag className="w-4 h-4 text-amber-500" />
+                  1. Selecione o Setor para Inventariar:
+                </label>
+                <span className="text-[11px] font-bold text-amber-600">
+                  Setor Escolhido: {selectedSetor} ({productsInSelectedSetor.length} produtos)
+                </span>
+              </div>
+
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-2">
+                {SETORES_DISPONIVEIS.map((setor) => {
+                  const isSelected = selectedSetor === setor;
+                  const countInSetor = products.filter(p => p.category?.toUpperCase() === setor.toUpperCase()).length;
+                  return (
+                    <button
+                      key={setor}
+                      type="button"
+                      onClick={() => setSelectedSetor(setor)}
+                      className={`p-3 rounded-2xl text-xs font-black transition-all flex flex-col items-center justify-center gap-1 border cursor-pointer ${
+                        isSelected
+                          ? 'bg-amber-500 text-slate-950 border-amber-500 shadow-md ring-2 ring-amber-400/40'
+                          : 'bg-slate-50 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:border-amber-500/50'
+                      }`}
+                    >
+                      <span>{setor}</span>
+                      <span className={`text-[10px] font-semibold ${isSelected ? 'text-slate-900' : 'text-slate-400'}`}>
+                        {countInSetor} {countInSetor === 1 ? 'item' : 'itens'}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="space-y-1">
+                <h4 className="text-xs font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2">
+                  <Lock className="w-4 h-4 text-amber-600" />
+                  Regras do Inventário Cego & Modo Restrito:
+                </h4>
+                <ul className="text-[11px] text-slate-600 dark:text-slate-300 space-y-0.5 list-disc list-inside">
+                  <li>Leitura exclusiva via código de barras na câmera; ao bipar, informe a quantidade física.</li>
+                  <li>As quantidades em estoque do sistema ficam ocultas durante toda a sessão.</li>
+                  <li>A interface permanece bloqueada até o anfitrião finalizar o inventário.</li>
+                </ul>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => handleStartAuditSession('INVENTARIO')}
+                className="px-6 py-3 rounded-2xl bg-amber-500 hover:bg-amber-600 active:scale-95 text-slate-950 text-xs font-black shadow-lg shadow-amber-500/25 transition flex items-center justify-center gap-2 shrink-0 cursor-pointer"
+              >
+                <Play className="w-4 h-4" />
+                <span>Iniciar Inventário Cego</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* =================================================================== */}
+      {/* PAINEL DE SESSÃO ATIVA COMPARTILHADO (PRESENÇA E INVENTÁRIO CEGO)   */}
+      {/* =================================================================== */}
+      {isAuditing && (
+        (activeInterface === 'presenca' && sessionTipo === 'PRESENCA') ||
+        (activeInterface === 'inventario' && sessionTipo === 'INVENTARIO')
+      ) && (
             <div className="space-y-4">
+              {sessionTipo === 'INVENTARIO' && (
+                <div className="p-3.5 rounded-2xl bg-amber-500 text-slate-950 font-black text-xs flex items-center justify-between gap-2 shadow-md">
+                  <div className="flex items-center gap-2">
+                    <Lock className="w-4 h-4 shrink-0" />
+                    <span>
+                      MODO RESTRITO ATIVO — Inventário Cego em andamento. Sair, fechar ou trocar de aba está bloqueado até o anfitrião encerrar.
+                    </span>
+                  </div>
+                </div>
+              )}
+
               {/* Barra de Status e Cabeçalho da Sessão */}
               <div className="p-4 sm:p-5 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xl space-y-4">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100 dark:border-slate-800">
                   <div className="flex items-center gap-2.5">
-                    <span className="w-3 h-3 rounded-full bg-emerald-500 animate-ping" />
+                    <span className={`w-3 h-3 rounded-full animate-ping ${sessionTipo === 'INVENTARIO' ? 'bg-amber-500' : 'bg-emerald-500'}`} />
                     <div>
                       <h3 className="font-black text-sm sm:text-base text-slate-900 dark:text-white flex items-center gap-2">
-                        <span>Auditoria Ativa: Setor {sessionSetor}</span>
-                        <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30">
+                        <span>{sessionTipo === 'INVENTARIO' ? 'Inventário Cego Ativo' : 'Auditoria Ativa'}: Setor {sessionSetor}</span>
+                        <span className={`text-[10px] font-extrabold px-2 py-0.5 rounded-full border ${
+                          sessionTipo === 'INVENTARIO'
+                            ? 'bg-amber-500/15 text-amber-700 border-amber-500/30'
+                            : 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border-emerald-500/30'
+                        }`}>
                           Ao Vivo
                         </span>
                       </h3>
                       <p className="text-[11px] text-slate-400">
-                        Início: {sessionStartTime} • Criador: {sessionIniciadaPor?.nome || operator.name || 'Operador'} • Auditor: {operator.name || 'Operador'}{operator.code ? ` (${operator.code})` : ''}
+                        Início: {sessionStartTime} • Anfitrião: {sessionIniciadaPor?.nome || operator.name || 'Operador'} • Auditor: {operator.name || 'Operador'}{operator.code ? ` (${operator.code})` : ''}
                       </p>
                     </div>
                   </div>
 
-                  {/* Ações de Conclusão */}
+                  {/* Ações de Conclusão (Sem botão sair/pausar no Inventário Cego) */}
                   <div className="flex items-center gap-2 self-end sm:self-auto">
-                    <button
-                      type="button"
-                      onClick={() => setIsAuditing(false)}
-                      className="px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-bold text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition"
-                    >
-                      Pausar / Sair
-                    </button>
+                    {sessionTipo === 'PRESENCA' && (
+                      <button
+                        type="button"
+                        onClick={() => setIsAuditing(false)}
+                        className="px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-bold text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition"
+                      >
+                        Pausar / Sair
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={() => handleFinishAndSaveAudit(false)}
                       disabled={!isSessionCreator}
-                      title={!isSessionCreator ? `Apenas o criador (${sessionIniciadaPor?.nome}) pode encerrar esta sessão` : 'Concluir e salvar relatório'}
-                      className={`px-4 py-2 rounded-xl text-white text-xs font-black shadow-md transition flex items-center gap-1.5 ${
+                      title={!isSessionCreator ? `Apenas o anfitrião (${sessionIniciadaPor?.nome}) pode encerrar esta sessão` : 'Concluir e salvar relatório'}
+                      className={`px-4 py-2 rounded-xl text-xs font-black shadow-md transition flex items-center gap-1.5 ${
                         isSessionCreator
-                          ? 'bg-emerald-600 hover:bg-emerald-700 shadow-emerald-600/20 cursor-pointer'
-                          : 'bg-slate-400 dark:bg-slate-700 cursor-not-allowed opacity-70'
+                          ? sessionTipo === 'INVENTARIO'
+                            ? 'bg-amber-500 hover:bg-amber-600 text-slate-950 cursor-pointer'
+                            : 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-emerald-600/20 cursor-pointer'
+                          : 'bg-slate-400 dark:bg-slate-700 text-white cursor-not-allowed opacity-70'
                       }`}
                     >
                       <Check className="w-4 h-4" />
-                      <span>{isSessionCreator ? 'Concluir e Salvar Relatório' : 'Somente Criador Encerra'}</span>
+                      <span>
+                        {isSessionCreator
+                          ? sessionTipo === 'INVENTARIO'
+                            ? 'Concluir e Salvar Inventário'
+                            : 'Concluir e Salvar Relatório'
+                          : 'Aguardando Anfitrião Encerrar'}
+                      </span>
                     </button>
                   </div>
                 </div>
@@ -1405,7 +1930,9 @@ export const AuditoriaTab: React.FC = () => {
                     <span className="text-xl font-black text-slate-800 dark:text-white">{totalSessionProducts}</span>
                   </div>
                   <div className="p-3 rounded-2xl bg-emerald-500/10 border border-emerald-500/30">
-                    <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 uppercase block">Confirmados</span>
+                    <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 uppercase block">
+                      {sessionTipo === 'INVENTARIO' ? 'Contados' : 'Confirmados'}
+                    </span>
                     <span className="text-xl font-black text-emerald-600 dark:text-emerald-400">{confirmados.length}</span>
                   </div>
                   <div className="p-3 rounded-2xl bg-amber-500/10 border border-amber-500/30">
@@ -1417,7 +1944,9 @@ export const AuditoriaTab: React.FC = () => {
                 {/* Barra de Progresso */}
                 <div className="space-y-1">
                   <div className="flex justify-between text-xs font-bold">
-                    <span className="text-slate-500">Conformidade de Presença</span>
+                    <span className="text-slate-500">
+                      {sessionTipo === 'INVENTARIO' ? 'Progresso do Inventário' : 'Conformidade de Presença'}
+                    </span>
                     <span className="text-emerald-600 dark:text-emerald-400">{progressPercent}% auditado</span>
                   </div>
                   <div className="w-full h-3 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden p-0.5">
@@ -1442,7 +1971,7 @@ export const AuditoriaTab: React.FC = () => {
                   </div>
                 )}
 
-                {/* PAINEL DE LEITURA CONTÍNUA COM GOOGLE SERVICE (BARCODE DETECTOR API) */}
+                {/* PAINEL DE LEITURA EXCLUSIVA PELA CÂMERA */}
                 <div className="p-4 sm:p-5 rounded-2xl bg-gradient-to-br from-emerald-500/10 via-teal-500/5 to-slate-900/10 border border-emerald-500/30 space-y-3.5">
                   <div className="flex items-center justify-between flex-wrap gap-2">
                     <div className="flex items-center gap-2.5">
@@ -1451,22 +1980,20 @@ export const AuditoriaTab: React.FC = () => {
                       </div>
                       <div>
                         <h4 className="text-xs font-black text-slate-900 dark:text-white flex items-center gap-1.5 flex-wrap">
-                          <span>Leitor Contínuo Hands-Free</span>
+                          <span>Leitor Contínuo Exclusivo por Câmera</span>
                           <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-500 text-white font-extrabold tracking-wide uppercase">
-                            Google Service + tryHarder
-                          </span>
-                          <span className="text-[9px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-600 dark:text-amber-400 font-bold border border-amber-500/30">
-                            Sem cliques entre itens
+                            Somente Bipe Óptico
                           </span>
                         </h4>
                         <p className="text-[10px] text-slate-500 dark:text-slate-400">
-                          Identificou o código da prateleira, confirma na hora e continua aberto pronto para o próximo.
+                          {sessionTipo === 'INVENTARIO'
+                            ? 'Aponte a câmera para o código de barras e digite a quantidade física encontrada.'
+                            : 'Aponte a câmera para o código de barras na gôndola para confirmar a presença.'}
                         </p>
                       </div>
                     </div>
 
                     <div className="flex items-center gap-1.5 flex-wrap">
-                      {/* Botão de Lanterna (se disponível) */}
                       {torchAvailable && (
                         <button
                           type="button"
@@ -1483,7 +2010,6 @@ export const AuditoriaTab: React.FC = () => {
                         </button>
                       )}
 
-                      {/* Alternar Câmera Contínua (Ligar/Desligar) */}
                       <button
                         type="button"
                         onClick={() => setIsContinuousCameraActive(prev => !prev)}
@@ -1506,7 +2032,6 @@ export const AuditoriaTab: React.FC = () => {
                         )}
                       </button>
 
-                      {/* Opção de Modal Completo de Scanner */}
                       <button
                         type="button"
                         onClick={handleTriggerGoogleBarcodeScanner}
@@ -1519,7 +2044,7 @@ export const AuditoriaTab: React.FC = () => {
                     </div>
                   </div>
 
-                  {/* VIEWPORT DA CÂMERA CONTÍNUA AMPLIADO COM CONTROLE DE ZOOM E FOCO */}
+                  {/* VIEWPORT DA CÂMERA CONTÍNUA */}
                   {isContinuousCameraActive ? (
                     <div className="space-y-2">
                       <div 
@@ -1540,7 +2065,6 @@ export const AuditoriaTab: React.FC = () => {
                           className="w-full h-full object-cover"
                         />
 
-                        {/* ANIMAÇÃO VISUAL DE TAP-TO-FOCUS */}
                         {tapFocusPulse && (
                           <div
                             style={{ left: tapFocusPulse.x, top: tapFocusPulse.y }}
@@ -1551,21 +2075,15 @@ export const AuditoriaTab: React.FC = () => {
                           </div>
                         )}
 
-                        {/* HUD DE MIRA E LASER ANIMADO */}
                         <div className="absolute inset-0 pointer-events-none flex flex-col items-center justify-center p-4">
-                          {/* Caixa de Enquadramento Ampliada */}
                           <div className="w-72 sm:w-96 h-40 sm:h-52 border-2 border-emerald-400/90 rounded-2xl relative shadow-[0_0_25px_rgba(16,185,129,0.35)] bg-emerald-500/5 backdrop-blur-[0.5px]">
-                            {/* Cantoneiras Brilhantes */}
                             <div className="absolute -top-1 -left-1 w-5 h-5 border-t-3 border-l-3 border-emerald-300" />
                             <div className="absolute -top-1 -right-1 w-5 h-5 border-t-3 border-r-3 border-emerald-300" />
                             <div className="absolute -bottom-1 -left-1 w-5 h-5 border-b-3 border-l-3 border-emerald-300" />
                             <div className="absolute -bottom-1 -right-1 w-5 h-5 border-b-3 border-r-3 border-emerald-300" />
-                            
-                            {/* Linha Laser de Varredura */}
                             <div className="absolute inset-x-2 h-0.5 bg-gradient-to-r from-transparent via-red-500 to-transparent shadow-[0_0_12px_#ef4444] animate-pulse top-1/2 -translate-y-1/2" />
                           </div>
 
-                          {/* Legenda Superior no Viewport */}
                           <div className="absolute top-3 inset-x-4 flex items-center justify-between text-[11px] font-bold text-white pointer-events-none">
                             <span className="px-3 py-1 rounded-full bg-black/75 backdrop-blur-md border border-white/15 flex items-center gap-1.5 shadow-md">
                               <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping" />
@@ -1576,7 +2094,6 @@ export const AuditoriaTab: React.FC = () => {
                             </span>
                           </div>
 
-                          {/* Indicador de Foco e Dica de Toque */}
                           <div className="absolute bottom-3 inset-x-4 flex items-center justify-between pointer-events-none">
                             <span className="px-2.5 py-1 rounded-full bg-black/70 backdrop-blur-md border border-white/10 text-[10px] text-slate-300 font-medium">
                               👆 Toque na tela para focar
@@ -1587,7 +2104,6 @@ export const AuditoriaTab: React.FC = () => {
                           </div>
                         </div>
 
-                        {/* Erro de Câmera / Permissão */}
                         {cameraError && (
                           <div className="absolute inset-0 bg-slate-900/95 backdrop-blur-xs flex flex-col items-center justify-center p-4 text-center space-y-3 z-40">
                             <AlertTriangle className="w-10 h-10 text-amber-400" />
@@ -1607,7 +2123,6 @@ export const AuditoriaTab: React.FC = () => {
 
                       {/* BARRA DE CONTROLE AVANÇADO DE ZOOM E FOCO */}
                       <div className="p-3 rounded-2xl bg-slate-900 text-white border border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-3 shadow-md">
-                        {/* Seletor Rápido de Zoom (1x, 1.5x, 2x, 3x) */}
                         <div className="flex items-center gap-2 w-full sm:w-auto">
                           <span className="text-[11px] font-bold text-slate-400 flex items-center gap-1 shrink-0">
                             <ZoomIn className="w-3.5 h-3.5 text-emerald-400" />
@@ -1631,7 +2146,6 @@ export const AuditoriaTab: React.FC = () => {
                           </div>
                         </div>
 
-                        {/* Slider Fino de Zoom */}
                         <div className="flex items-center gap-2 w-full sm:w-44">
                           <input
                             type="range"
@@ -1648,7 +2162,6 @@ export const AuditoriaTab: React.FC = () => {
                           </span>
                         </div>
 
-                        {/* Botões de Foco e Calibração */}
                         <div className="flex items-center gap-1.5 w-full sm:w-auto justify-end">
                           <button
                             type="button"
@@ -1668,7 +2181,7 @@ export const AuditoriaTab: React.FC = () => {
                                 ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
                                 : 'bg-slate-800 text-slate-200 border-slate-700 hover:bg-slate-750'
                             }`}
-                            title="Alternar entre modo Macro (bipagem muito próxima) e Contínuo"
+                            title="Alternar entre modo Macro e Contínuo"
                           >
                             <Sliders className="w-3.5 h-3.5 text-amber-400" />
                             <span>{focusMode === 'macro' ? 'Macro' : 'Normal'}</span>
@@ -1683,33 +2196,10 @@ export const AuditoriaTab: React.FC = () => {
                         Câmera Contínua Pausada
                       </p>
                       <p className="text-xs text-slate-400 max-w-sm mx-auto">
-                        Clique no botão acima "Ativar Câmera" para retomar a conferência contínua com bipagem instantânea.
+                        Clique em "Ativar Câmera" acima para bipar os produtos exclusivamente via câmera.
                       </p>
                     </div>
                   )}
-
-                  {/* Input Rápido Manual / Leitor USB / Bluetooth */}
-                  <div className="flex gap-2">
-                    <input
-                      type="text"
-                      placeholder="Ou digite/bipe o EAN com leitor USB/Bluetooth..."
-                      value={manualBarcodeInput}
-                      onChange={e => setManualBarcodeInput(e.target.value)}
-                      onKeyDown={e => {
-                        if (e.key === 'Enter') {
-                          processContinuousBarcode(manualBarcodeInput, 'manual');
-                        }
-                      }}
-                      className="flex-1 px-3.5 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs text-slate-800 dark:text-slate-100 font-mono focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => processContinuousBarcode(manualBarcodeInput, 'manual')}
-                      className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition shadow-xs cursor-pointer"
-                    >
-                      Confirmar
-                    </button>
-                  </div>
 
                   {/* Feedback do Último Bip */}
                   {lastBipFeedback && (
@@ -1738,7 +2228,7 @@ export const AuditoriaTab: React.FC = () => {
                 </div>
               </div>
 
-              {/* LISTAS: PENDENTES VS CONFIRMADOS VS RUPTURAS */}
+              {/* LISTAS: PENDENTES VS CONFIRMADOS (SEM RUPTURAS/ESTOQUE NO INVENTÁRIO CEGO) */}
               <div className="p-4 sm:p-5 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xl space-y-3">
                 <div className="flex flex-wrap border-b border-slate-100 dark:border-slate-800 text-xs gap-2">
                   <button
@@ -1761,22 +2251,24 @@ export const AuditoriaTab: React.FC = () => {
                     }`}
                   >
                     <CheckCircle2 className="w-4 h-4 text-emerald-500" />
-                    <span>Lista de Confirmados ({confirmados.length})</span>
+                    <span>{sessionTipo === 'INVENTARIO' ? `Itens Contados (${confirmados.length})` : `Lista de Confirmados (${confirmados.length})`}</span>
                   </button>
-                  <button
-                    onClick={() => setViewListTab('rupturas')}
-                    className={`py-2 px-3.5 font-bold border-b-2 flex items-center gap-1.5 transition cursor-pointer ${
-                      viewListTab === 'rupturas'
-                        ? 'border-rose-500 text-rose-600 dark:text-rose-400'
-                        : 'border-transparent text-slate-400 hover:text-slate-600'
-                    }`}
-                  >
-                    <AlertTriangle className="w-4 h-4 text-rose-500" />
-                    <span>Lista de Rupturas ({activeSessionRupturas.length})</span>
-                  </button>
+                  {sessionTipo === 'PRESENCA' && (
+                    <button
+                      onClick={() => setViewListTab('rupturas')}
+                      className={`py-2 px-3.5 font-bold border-b-2 flex items-center gap-1.5 transition cursor-pointer ${
+                        viewListTab === 'rupturas'
+                          ? 'border-rose-500 text-rose-600 dark:text-rose-400'
+                          : 'border-transparent text-slate-400 hover:text-slate-600'
+                      }`}
+                    >
+                      <AlertTriangle className="w-4 h-4 text-rose-500" />
+                      <span>Lista de Rupturas ({activeSessionRupturas.length})</span>
+                    </button>
+                  )}
                 </div>
 
-                {/* Exibição da Lista Pendentes */}
+                {/* Exibição da Lista Pendentes (SEM botão conferir manual e SEM estoque no inventário cego) */}
                 {viewListTab === 'pendentes' && (
                   <div className="space-y-2 max-h-80 overflow-y-auto pr-1">
                     {pendentes.length === 0 ? (
@@ -1786,7 +2278,7 @@ export const AuditoriaTab: React.FC = () => {
                           Todos os produtos do setor foram auditados!
                         </h4>
                         <p className="text-xs text-slate-400 mt-1">
-                          Nenhum produto pendente. Você pode clicar em "Concluir e Salvar Relatório".
+                          Nenhum produto pendente.
                         </p>
                       </div>
                     ) : (
@@ -1806,16 +2298,8 @@ export const AuditoriaTab: React.FC = () => {
 
                           <div className="flex items-center gap-2 shrink-0">
                             <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20">
-                              Pendente
+                              Aguardando Bipe
                             </span>
-                            <button
-                              type="button"
-                              onClick={() => processContinuousBarcode(item.ean, 'manual')}
-                              className="px-2.5 py-1 rounded-xl bg-slate-200 dark:bg-slate-700 hover:bg-emerald-600 hover:text-white text-slate-700 dark:text-slate-200 text-[11px] font-bold transition cursor-pointer"
-                              title="Confirmar manualmente este item"
-                            >
-                              Conferir
-                            </button>
                           </div>
                         </div>
                       ))
@@ -1828,7 +2312,7 @@ export const AuditoriaTab: React.FC = () => {
                   <div className="space-y-2 max-h-80 overflow-y-auto pr-1">
                     {confirmados.length === 0 ? (
                       <div className="p-8 text-center rounded-2xl border border-dashed border-slate-200 dark:border-slate-800 text-slate-400 text-xs">
-                        Nenhum produto auditado ainda. Use a câmera ou digite o EAN acima para conferir os itens.
+                        Nenhum produto bipado ainda. Aponte a câmera para o código de barras do item.
                       </div>
                     ) : (
                       confirmados.map(item => {
@@ -1850,6 +2334,9 @@ export const AuditoriaTab: React.FC = () => {
                               <div className="flex items-center gap-2 text-[11px] text-slate-400 font-mono">
                                 <span>EAN: {item.ean}</span>
                                 {item.reducedCode && <span>• Red: {item.reducedCode}</span>}
+                                {sessionTipo === 'INVENTARIO' && typeof item.physicalQuantity === 'number' && (
+                                  <span className="text-amber-600 font-black">• Qtd. Física: {item.physicalQuantity} un</span>
+                                )}
                               </div>
                             </div>
 
@@ -1874,8 +2361,8 @@ export const AuditoriaTab: React.FC = () => {
                   </div>
                 )}
 
-                {/* Exibição da Lista de Rupturas */}
-                {viewListTab === 'rupturas' && (
+                {/* Exibição da Lista de Rupturas (somente Presença) */}
+                {sessionTipo === 'PRESENCA' && viewListTab === 'rupturas' && (
                   <div className="space-y-2 max-h-80 overflow-y-auto pr-1">
                     {activeSessionRupturas.length === 0 ? (
                       <div className="p-8 text-center rounded-2xl border border-dashed border-slate-200 dark:border-slate-800 text-slate-400 text-xs">
@@ -1914,70 +2401,6 @@ export const AuditoriaTab: React.FC = () => {
                 )}
               </div>
             </div>
-          )}
-        </div>
-      )}
-
-      {/* =================================================================== */}
-      {/* INTERFACE 2: AUDITORIA DE INVENTÁRIO (EM DESENVOLVIMENTO)           */}
-      {/* =================================================================== */}
-      {activeInterface === 'inventario' && (
-        <div className="space-y-4 animate-in fade-in duration-200">
-          {/* FAIXA AMARELA COM LISTRAS PRETAS SUPERIOR (CAUTION TAPE) */}
-          <div 
-            className="w-full h-8 rounded-2xl shadow-inner flex items-center justify-center overflow-hidden border border-amber-500"
-            style={{
-              backgroundImage: 'repeating-linear-gradient(45deg, #facc15, #facc15 15px, #000000 15px, #000000 30px)',
-            }}
-          >
-            <span className="bg-black/90 text-amber-400 font-black text-[11px] tracking-widest px-4 py-1 rounded uppercase">
-              ⚠ EM DESENVOLVIMENTO • AUDITORIA DE INVENTÁRIO • EM BREVE ⚠
-            </span>
-          </div>
-
-          {/* CARD CENTRAL DE CONSTRUÇÃO */}
-          <div className="p-8 sm:p-12 rounded-3xl bg-white dark:bg-slate-900 border-2 border-amber-500/40 text-center space-y-4 shadow-xl">
-            <div className="w-16 h-16 mx-auto rounded-3xl bg-amber-500/15 border border-amber-500/30 text-amber-500 flex items-center justify-center animate-pulse">
-              <Construction className="w-8 h-8" />
-            </div>
-
-            <div className="space-y-1.5 max-w-md mx-auto">
-              <span className="text-[10px] font-black px-2.5 py-1 rounded-full bg-amber-500/15 text-amber-700 dark:text-amber-400 border border-amber-500/30 uppercase tracking-wider">
-                Módulo em Engenharia
-              </span>
-              <h3 className="text-lg font-black text-slate-900 dark:text-white">
-                Auditoria de Inventário Físico
-              </h3>
-              <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
-                Este módulo está em fase ativa de desenvolvimento. Ele permitirá realizar a contagem cega de gôndola, conciliação patrimonial e apuração de quebras e sobras com fechamento de balanço.
-              </p>
-            </div>
-
-            <div className="max-w-md mx-auto p-4 rounded-2xl bg-amber-500/5 dark:bg-amber-950/20 border border-amber-500/20 text-left text-xs space-y-2">
-              <div className="font-bold text-amber-800 dark:text-amber-300 flex items-center gap-1.5">
-                <Boxes className="w-4 h-4 text-amber-500" />
-                <span>Recursos deste módulo:</span>
-              </div>
-              <ul className="list-disc list-inside text-[11px] text-slate-600 dark:text-slate-400 space-y-1 pl-1">
-                <li>Contagem física cega por operador sem visualização de saldo teórico</li>
-                <li>Inventário rotativo diário por curva ABC e produtos de alto valor</li>
-                <li>Geração automática de relatórios de divergência para a gerência</li>
-              </ul>
-            </div>
-          </div>
-
-          {/* FAIXA AMARELA COM LISTRAS PRETAS INFERIOR (CAUTION TAPE) */}
-          <div 
-            className="w-full h-8 rounded-2xl shadow-inner flex items-center justify-center overflow-hidden border border-amber-500"
-            style={{
-              backgroundImage: 'repeating-linear-gradient(45deg, #facc15, #facc15 15px, #000000 15px, #000000 30px)',
-            }}
-          >
-            <span className="bg-black/90 text-amber-400 font-black text-[11px] tracking-widest px-4 py-1 rounded uppercase">
-              ⚠ EM DESENVOLVIMENTO • ÁREA EM CONSTRUÇÃO • OPSYS ⚠
-            </span>
-          </div>
-        </div>
       )}
 
       {/* =================================================================== */}
@@ -2047,27 +2470,39 @@ export const AuditoriaTab: React.FC = () => {
       {/* =================================================================== */}
       {activeInterface === 'relatorio' && (
         <div className="space-y-4 animate-in fade-in duration-200">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between flex-wrap gap-2">
             <div>
               <h3 className="font-black text-base text-slate-900 dark:text-white flex items-center gap-2">
                 <FileText className="w-5 h-5 text-emerald-500" />
                 Histórico & Relatórios de Auditorias
               </h3>
               <p className="text-xs text-slate-500 dark:text-slate-400">
-                Consulte as auditorias de presença realizadas, itens confirmados e faltas registradas.
+                {isManagerUser
+                  ? 'Visão gerencial da loja: todos os setores em ordem cronológica (sem armazenamento local).'
+                  : `Exibindo relatórios do seu setor (${operator.setor_restrito || 'Geral'}) diretamente do servidor.`}
               </p>
             </div>
-            <span className="text-xs font-bold text-slate-400">
-              {audits.length} {audits.length === 1 ? 'registro' : 'registros'}
-            </span>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => refreshAuditsFromDatabase()}
+                className="p-2 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-600 hover:border-emerald-500 transition cursor-pointer"
+                title="Atualizar relatórios do servidor"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+              </button>
+              <span className="text-xs font-bold text-slate-400">
+                {visibleAudits.length} {visibleAudits.length === 1 ? 'registro' : 'registros'}
+              </span>
+            </div>
           </div>
 
-          {audits.length === 0 ? (
+          {visibleAudits.length === 0 ? (
             <div className="p-12 text-center rounded-3xl border border-dashed border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900">
               <FileText className="w-10 h-10 text-slate-400 mx-auto mb-2" />
-              <h4 className="font-bold text-sm text-slate-700 dark:text-slate-200">Nenhum relatório de auditoria</h4>
+              <h4 className="font-bold text-sm text-slate-700 dark:text-slate-200">Nenhum relatório disponível</h4>
               <p className="text-xs text-slate-400 mt-1">
-                Inicie uma <strong>Auditoria de Presença</strong> para gerar seu primeiro relatório de conformidade.
+                Inicie uma <strong>Auditoria de Presença</strong> ou <strong>Inventário Cego</strong> para gerar relatórios no servidor.
               </p>
               <button
                 type="button"
@@ -2079,9 +2514,8 @@ export const AuditoriaTab: React.FC = () => {
             </div>
           ) : (
             <div className="space-y-3">
-              {audits.map(audit => {
+              {visibleAudits.map(audit => {
                 const camScans = audit.cameraScansCount ?? (audit.confirmedList?.filter(c => (c.scanMethod ?? 'camera') === 'camera').length ?? audit.confirmedItems ?? audit.itemsCount);
-                const manScans = audit.manualScansCount ?? (audit.confirmedList?.filter(c => c.scanMethod === 'manual').length ?? 0);
                 const participantsText = audit.participants && audit.participants.length > 0 ? audit.participants.join(', ') : audit.auditor;
 
                 return (
@@ -2099,8 +2533,13 @@ export const AuditoriaTab: React.FC = () => {
                           Setor: {audit.department}
                         </span>
                       )}
+                      {audit.type === 'INVENTARIO' && (
+                        <span className="text-[10px] font-black px-2 py-0.5 rounded-md bg-amber-500/15 text-amber-700 border border-amber-500/30">
+                          Inventário Cego
+                        </span>
+                      )}
                       <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
-                        {audit.date}
+                        {audit.dataAuditoria ? `${audit.dataAuditoria} ${audit.horaAuditoria || ''}` : audit.date}
                       </span>
                     </div>
 
@@ -2113,11 +2552,11 @@ export const AuditoriaTab: React.FC = () => {
 
                     <div className="flex flex-wrap items-center gap-3 text-xs pt-1">
                       <span className="font-bold text-emerald-600 dark:text-emerald-400">
-                        Confirmados: {audit.confirmedItems ?? audit.itemsCount}
+                        {audit.type === 'INVENTARIO' ? 'Contados' : 'Confirmados'}: {audit.confirmedItems ?? audit.itemsCount}
                       </span>
                       {typeof audit.pendingItems === 'number' && (
                         <span className="font-bold text-amber-600 dark:text-amber-400">
-                          Pendentes/Faltas: {audit.pendingItems}
+                          Não Bipados: {audit.pendingItems}
                         </span>
                       )}
                       {audit.presenceRate && (
@@ -2126,27 +2565,40 @@ export const AuditoriaTab: React.FC = () => {
                         </span>
                       )}
                       <span className="text-[11px] font-semibold text-sky-600 dark:text-sky-400">
-                        Câmera: {camScans} • Manual: {manScans}
+                        Bipes Câmera: {camScans}
                       </span>
                     </div>
                   </div>
 
-                  {/* Ações */}
-                  <div className="flex items-center gap-2 shrink-0">
+                  {/* Ações: Exportar PDF, XLSX e Ver Detalhes */}
+                  <div className="flex items-center gap-2 shrink-0 flex-wrap">
                     <button
                       type="button"
-                      onClick={() => handleExportAuditXLSX(audit)}
-                      className="p-2 sm:px-3 sm:py-2 rounded-xl border border-slate-200 dark:border-slate-700 hover:border-emerald-500 text-slate-700 dark:text-slate-300 text-xs font-bold transition flex items-center gap-1.5"
-                      title="Exportar planilha Excel deste relatório"
+                      onClick={() => handleExportAuditPDF(audit)}
+                      className="px-3 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold transition flex items-center gap-1.5 shadow-sm cursor-pointer"
+                      title="Exportar relatório oficial em PDF"
                     >
-                      <Download className="w-3.5 h-3.5" />
-                      <span className="hidden sm:inline">Exportar .XLSX</span>
+                      <FileDown className="w-3.5 h-3.5" />
+                      <span>Exportar PDF</span>
                     </button>
 
                     <button
                       type="button"
-                      onClick={() => setSelectedAuditForModal(audit)}
-                      className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition flex items-center gap-1.5 shadow-sm"
+                      onClick={() => handleExportAuditXLSX(audit)}
+                      className="p-2 sm:px-3 sm:py-2 rounded-xl border border-slate-200 dark:border-slate-700 hover:border-emerald-500 text-slate-700 dark:text-slate-300 text-xs font-bold transition flex items-center gap-1.5 cursor-pointer"
+                      title="Exportar planilha Excel deste relatório"
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                      <span className="hidden sm:inline">.XLSX</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setModalActiveTab('bipados');
+                        setSelectedAuditForModal(audit);
+                      }}
+                      className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition flex items-center gap-1.5 shadow-sm cursor-pointer"
                     >
                       <Eye className="w-3.5 h-3.5" />
                       <span>Ver Detalhes</span>
@@ -2263,18 +2715,20 @@ export const AuditoriaTab: React.FC = () => {
                 <span>Não Bipados ({selectedAuditForModal.pendingList?.length ?? selectedAuditForModal.pendingItems ?? 0})</span>
               </button>
 
-              <button
-                type="button"
-                onClick={() => setModalActiveTab('rupturas')}
-                className={`py-2 px-3 font-bold border-b-2 flex items-center gap-1.5 transition cursor-pointer ${
-                  modalActiveTab === 'rupturas'
-                    ? 'border-rose-500 text-rose-600 dark:text-rose-400'
-                    : 'border-transparent text-slate-400 hover:text-slate-600'
-                }`}
-              >
-                <Tag className="w-3.5 h-3.5 text-rose-500" />
-                <span>Rupturas Iminentes ({selectedAuditForModal.ruptureList?.length ?? 0})</span>
-              </button>
+              {(selectedAuditForModal.type !== 'INVENTARIO' || isManagerUser) && (
+                <button
+                  type="button"
+                  onClick={() => setModalActiveTab('rupturas')}
+                  className={`py-2 px-3 font-bold border-b-2 flex items-center gap-1.5 transition cursor-pointer ${
+                    modalActiveTab === 'rupturas'
+                      ? 'border-rose-500 text-rose-600 dark:text-rose-400'
+                      : 'border-transparent text-slate-400 hover:text-slate-600'
+                  }`}
+                >
+                  <Tag className="w-3.5 h-3.5 text-rose-500" />
+                  <span>Rupturas Iminentes ({selectedAuditForModal.ruptureList?.length ?? 0})</span>
+                </button>
+              )}
             </div>
 
             {/* Feedback de Bipagem Pós-Auditoria */}
@@ -2310,10 +2764,18 @@ export const AuditoriaTab: React.FC = () => {
                               <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
                               <span>{item.name}</span>
                             </p>
-                            <div className="flex items-center gap-2 text-[10px] text-slate-400 font-mono">
+                            <div className="flex items-center gap-2 text-[10px] text-slate-400 font-mono flex-wrap">
                               <span>EAN: {item.ean}</span>
                               {item.reducedCode && <span>• Reduzido: {item.reducedCode}</span>}
                               {item.supplierCode && <span>• Forn: {item.supplierCode}</span>}
+                              {selectedAuditForModal.type === 'INVENTARIO' && typeof item.physicalQuantity === 'number' && (
+                                <span className="text-amber-600 font-black">• Qtd. Física: {item.physicalQuantity} un</span>
+                              )}
+                              {selectedAuditForModal.type === 'INVENTARIO' && isManagerUser && typeof item.systemQuantity === 'number' && (
+                                <span className="text-slate-600 font-bold">
+                                  • Sistema: {item.systemQuantity} un (Div: {(item.physicalQuantity ?? 0) - item.systemQuantity})
+                                </span>
+                              )}
                             </div>
                           </div>
                           <div className="text-right shrink-0">
@@ -2391,19 +2853,15 @@ export const AuditoriaTab: React.FC = () => {
                             <button
                               type="button"
                               onClick={() => {
-                                if (selectedAuditForModal.status === 'Concluída') {
-                                  openScanner((scannedEan) => {
-                                    handleBipMissingItem(scannedEan, item.ean);
-                                  }, { cameraOnly: true });
-                                } else {
-                                  handleBipMissingItem(item.ean);
-                                }
+                                openScanner((scannedEan) => {
+                                  handleBipMissingItem(scannedEan, item.ean);
+                                }, { cameraOnly: true });
                               }}
                               className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs shadow-sm flex items-center gap-1.5 transition cursor-pointer"
-                              title={selectedAuditForModal.status === 'Concluída' ? 'Abrir câmera para confirmar/revisar via leitura de código de barras' : 'Bipar este produto que foi localizado na área'}
+                              title="Abrir câmera para confirmar exclusivamente via código de barras"
                             >
                               <Camera className="w-3.5 h-3.5" />
-                              <span>{selectedAuditForModal.status === 'Concluída' ? 'Ler Câmera' : 'Bipar'}</span>
+                              <span>Ler Câmera</span>
                             </button>
                           </div>
                         </div>
@@ -2461,7 +2919,15 @@ export const AuditoriaTab: React.FC = () => {
 
             </div>
 
-            <div className="pt-2 border-t border-slate-100 dark:border-slate-800 flex justify-end">
+            <div className="pt-2 border-t border-slate-100 dark:border-slate-800 flex justify-between items-center gap-2">
+              <button
+                type="button"
+                onClick={() => handleExportAuditPDF(selectedAuditForModal)}
+                className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold flex items-center gap-1.5 transition cursor-pointer"
+              >
+                <FileDown className="w-3.5 h-3.5" />
+                <span>Exportar PDF</span>
+              </button>
               <button
                 type="button"
                 onClick={() => setSelectedAuditForModal(null)}

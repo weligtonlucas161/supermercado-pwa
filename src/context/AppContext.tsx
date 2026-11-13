@@ -67,13 +67,16 @@ import {
   subscribeToAvariasRealtime,
   lockProductInSupabase,
   unlockProductInSupabase,
-  updateProductInSupabase
+  updateProductInSupabase,
+  fetchAuditReportsFromDatabase
 } from '../services/supabaseService';
 
 interface AppContextType {
   // Navigation & UI
   activeTab: TabId;
   setActiveTab: (tab: TabId) => void;
+  isInventoryLocked: boolean;
+  setIsInventoryLocked: (locked: boolean) => void;
   darkMode: boolean;
   isDesktop: boolean;
   storeName: string;
@@ -131,6 +134,7 @@ interface AppContextType {
   applyDiscount: (validityId: string, percentage: number) => void;
   addAudit: (audit: Omit<AuditItem, 'id' | 'date'>) => AuditItem;
   updateAudit: (auditId: string, updated: Partial<AuditItem>) => void;
+  refreshAuditsFromDatabase: () => Promise<void>;
   resetAllData: () => void;
 
   // Avarias no Estoque (perdas, quebras e trocas)
@@ -182,12 +186,37 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return 'inicio';
   });
 
+  const [isInventoryLocked, setIsInventoryLocked] = useState<boolean>(false);
+
   const setActiveTab = (tab: TabId) => {
+    if (isInventoryLocked && tab !== 'auditoria') return;
     setActiveTabState(tab);
     if (typeof window !== 'undefined') {
       localStorage.setItem(STORAGE_KEYS.ACTIVE_TAB, tab);
     }
   };
+
+  // Bloqueio de navegador/aba/botão voltar enquanto sessão de Inventário Cego estiver ativa
+  useEffect(() => {
+    if (typeof window === 'undefined' || !isInventoryLocked) return;
+
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = '';
+    };
+
+    window.history.pushState({ inventoryLock: true }, '', window.location.href);
+    const handlePopState = () => {
+      window.history.pushState({ inventoryLock: true }, '', window.location.href);
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    window.addEventListener('popstate', handlePopState);
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+      window.removeEventListener('popstate', handlePopState);
+    };
+  }, [isInventoryLocked]);
 
   // =========================================================================
   // 1. MODO CLARO PADRÃO FIXO (SEM OPÇÃO DE MODO ESCURO)
@@ -241,8 +270,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return loaded.filter(v => !['v1', 'v2', 'v3', 'v4', 'v5'].includes(v.id));
   });
 
+  // Relatórios de auditoria NUNCA são armazenados localmente (apenas em memória / Supabase)
   const [audits, setAudits] = useState<AuditItem[]>(() => {
-    return loadStoredData<AuditItem[]>(STORAGE_KEYS.AUDITS, INITIAL_AUDITS);
+    if (typeof window !== 'undefined') {
+      try {
+        localStorage.removeItem(STORAGE_KEYS.AUDITS);
+      } catch {
+        // ignore
+      }
+    }
+    return INITIAL_AUDITS;
   });
 
   // Autenticação Segura & Papéis
@@ -472,7 +509,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (idx === -1) return prev;
       const copy = [...prev];
       copy[idx] = { ...copy[idx], ...updated };
-      saveStoredData(STORAGE_KEYS.AUDITS, copy);
       return copy;
     });
   };
@@ -533,10 +569,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, [isAuthenticated, currentUser, operator.store, operator.loja_id]);
 
   const logout = () => {
+    if (isInventoryLocked) return;
     setCurrentUser(null);
     setIsAuthenticated(false);
+    setAudits([]);
     localStorage.removeItem(STORAGE_KEYS.AUTH_USER);
     localStorage.removeItem(STORAGE_KEYS.AUTH_TOKEN);
+    localStorage.removeItem(STORAGE_KEYS.AUDITS);
     setActiveTab('inicio');
   };
 
@@ -552,10 +591,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   useEffect(() => {
     saveStoredData(STORAGE_KEYS.VALIDITIES, validities);
   }, [validities]);
-
-  useEffect(() => {
-    saveStoredData(STORAGE_KEYS.AUDITS, audits);
-  }, [audits]);
 
   useEffect(() => {
     saveStoredData(STORAGE_KEYS.OPERATOR, operator);
@@ -594,12 +629,29 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   }, [currentUser?.loja_id, operator.loja_id]);
 
-  // Consulta automática do estoque remoto no carregamento
+  const refreshAuditsFromDatabase = useCallback(async () => {
+    if (!isSupabaseConfigured()) return;
+    const lojaId = operator.loja_id || currentUser?.loja_id || '';
+    if (!lojaId) return;
+    const role = operator.role || currentUser?.cargo || 'operador';
+    const isManagerUser = role === 'gerente' || role === 'adm' || role === 'saas_admin' || role === 'master';
+    const userSector = operator.setor_restrito || currentUser?.setor;
+    const list = await fetchAuditReportsFromDatabase(lojaId, {
+      isManager: isManagerUser,
+      userSector,
+    });
+    if (list !== null) {
+      setAudits(list);
+    }
+  }, [operator.loja_id, operator.role, operator.setor_restrito, currentUser?.loja_id, currentUser?.cargo, currentUser?.setor]);
+
+  // Consulta automática do estoque remoto e relatórios no carregamento
   useEffect(() => {
     if (isAuthenticated) {
       refreshProductsFromDatabase();
+      refreshAuditsFromDatabase();
     }
-  }, [isAuthenticated, refreshProductsFromDatabase]);
+  }, [isAuthenticated, refreshProductsFromDatabase, refreshAuditsFromDatabase]);
 
   // Assinatura em Tempo Real (Realtime Channel) para multi-sessões
   useEffect(() => {
@@ -1261,6 +1313,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       value={{
         activeTab,
         setActiveTab,
+        isInventoryLocked,
+        setIsInventoryLocked,
         darkMode,
         isDesktop,
         storeName,
@@ -1313,6 +1367,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         applyDiscount,
         addAudit,
         updateAudit,
+        refreshAuditsFromDatabase,
         resetAllData,
 
         avarias,

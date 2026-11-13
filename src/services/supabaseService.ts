@@ -1317,19 +1317,25 @@ export async function syncOfflineQueueToSupabase(
 
 // ============================================================================
 // GESTÃO EM TEMPO REAL DAS 4 TABELAS DE AUDITORIA (MULTI-USUÁRIOS / REALTIME)
-// 1. auditoria_presenca_sessoes (sessões ativas no setor)
+// 1. auditoria_presenca_sessoes (sessões ativas no setor - Presença e Inventário)
 // 2. auditoria_presenca_bips (produtos bipados ao vivo por cada membro)
 // 3. produtos (produtos do setor a serem conferidos)
 // 4. auditorias_finalizadas & auditoria_produtos (histórico permanente e relatórios)
 // ============================================================================
 
+export type AuditSessionTipo = 'PRESENCA' | 'INVENTARIO' | 'VALIDADE';
+
 export interface DbActiveAuditSession {
   id: string;
   loja_id: string;
   setor: string;
+  tipo?: AuditSessionTipo;
   iniciada_por_nome: string;
   iniciada_por_matricula: string;
   status: 'ATIVA' | 'PAUSADA' | 'CONCLUIDA';
+  data_auditoria?: string;
+  hora_auditoria?: string;
+  chave_auditoria?: string;
   timestamp: number;
   created_at?: string;
 }
@@ -1342,9 +1348,24 @@ export interface DbAuditBip {
   codigo_barras: string;
   produto_nome: string;
   setor: string;
+  quantidade_fisica?: number | null;
   operador_matricula: string;
   operador_nome: string;
+  data_auditoria?: string;
+  hora_auditoria?: string;
+  chave_auditoria?: string;
   timestamp: number;
+}
+
+export function buildAuditCompositeParts(lojaId: string, setor: string, timestampMs: number) {
+  const d = new Date(timestampMs);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const dataAuditoria = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  const horaAuditoria = `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  const cleanLoja = (lojaId || 'sem_loja').replace(/[^a-zA-Z0-9_-]/g, '');
+  const cleanSetor = (setor || 'GERAL').toUpperCase().replace(/[^A-Z0-9_-]/g, '');
+  const chaveAuditoria = `${cleanLoja}__${cleanSetor}__${dataAuditoria}__${horaAuditoria.replace(/:/g, '-')}`;
+  return { dataAuditoria, horaAuditoria, chaveAuditoria };
 }
 
 const LOCAL_ACTIVE_SESSIONS_KEY = 'superpwa_active_audit_sessions';
@@ -1352,10 +1373,10 @@ const LOCAL_AUDIT_BIPS_KEY = 'superpwa_audit_bips_';
 export const AUDIT_SESSION_MAX_INACTIVITY_MS = 5 * 60 * 60 * 1000; // 5 horas
 
 /**
- * Consulta sessões ativas de auditoria (para notificar todos do setor)
- * Sessões com mais de 5h são encerradas automaticamente por expiração.
+ * Consulta sessões ativas de auditoria (isoladas por loja, ordenadas cronologicamente)
  */
 export async function fetchActiveAuditSessions(lojaId: string): Promise<DbActiveAuditSession[]> {
+  if (!lojaId) return [];
   const now = Date.now();
   const isNotExpired = (s: DbActiveAuditSession) => (now - Number(s.timestamp || 0)) < AUDIT_SESSION_MAX_INACTIVITY_MS;
 
@@ -1366,6 +1387,8 @@ export async function fetchActiveAuditSessions(lojaId: string): Promise<DbActive
         .select('*')
         .eq('loja_id', lojaId)
         .eq('status', 'ATIVA')
+        .order('data_auditoria', { ascending: false })
+        .order('hora_auditoria', { ascending: false })
         .order('timestamp', { ascending: false });
 
       if (!error && data) {
@@ -1389,13 +1412,12 @@ export async function fetchActiveAuditSessions(lojaId: string): Promise<DbActive
     }
   }
 
-  // Fallback local
   if (typeof window !== 'undefined') {
     try {
       const raw = localStorage.getItem(LOCAL_ACTIVE_SESSIONS_KEY);
       if (raw) {
         const parsed: DbActiveAuditSession[] = JSON.parse(raw);
-        return parsed.filter(isNotExpired);
+        return parsed.filter(s => s.loja_id === lojaId && isNotExpired(s));
       }
     } catch {
       // ignore
@@ -1405,26 +1427,57 @@ export async function fetchActiveAuditSessions(lojaId: string): Promise<DbActive
 }
 
 /**
- * Inicia uma nova sessão de auditoria no setor e transmite para todos os operadores
+ * Verifica o status atual de uma sessão específica para detectar encerramento do anfitrião
+ */
+export async function checkAuditSessionStatus(
+  sessaoId: string,
+  lojaId: string
+): Promise<'ATIVA' | 'PAUSADA' | 'CONCLUIDA' | null> {
+  if (!client || !isSupabaseConfigured() || !sessaoId || !lojaId) return null;
+  try {
+    const { data, error } = await client
+      .from('auditoria_presenca_sessoes')
+      .select('status')
+      .eq('id', sessaoId)
+      .eq('loja_id', lojaId)
+      .maybeSingle();
+    if (error || !data) return null;
+    return (data.status as 'ATIVA' | 'PAUSADA' | 'CONCLUIDA') || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Inicia uma nova sessão de auditoria com chave composta (loja + setor + data + hora)
  */
 export async function startAuditSessionInDatabase(data: {
   lojaId: string;
   setor: string;
+  tipo?: AuditSessionTipo;
   matricula: string;
   nome: string;
 }): Promise<{ success: boolean; session?: DbActiveAuditSession; error?: string }> {
+  const nowMs = Date.now();
+  const tipo: AuditSessionTipo = data.tipo || 'PRESENCA';
+  const { dataAuditoria, horaAuditoria, chaveAuditoria } = buildAuditCompositeParts(data.lojaId, data.setor, nowMs);
+  const sessaoId = `${chaveAuditoria}__${tipo.toLowerCase()}_${Math.random().toString(36).substring(2, 6)}`;
+
   const newSession: DbActiveAuditSession = {
-    id: `sessao_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+    id: sessaoId,
     loja_id: data.lojaId,
     setor: data.setor,
+    tipo,
     iniciada_por_nome: data.nome,
     iniciada_por_matricula: data.matricula,
     status: 'ATIVA',
-    timestamp: Date.now(),
-    created_at: new Date().toISOString(),
+    data_auditoria: dataAuditoria,
+    hora_auditoria: horaAuditoria,
+    chave_auditoria: chaveAuditoria,
+    timestamp: nowMs,
+    created_at: new Date(nowMs).toISOString(),
   };
 
-  // Salva no Supabase se conectado
   if (client && isSupabaseConfigured()) {
     try {
       await ensureStoreExists(data.lojaId);
@@ -1432,9 +1485,13 @@ export async function startAuditSessionInDatabase(data: {
         id: newSession.id,
         loja_id: newSession.loja_id,
         setor: newSession.setor,
+        tipo: newSession.tipo,
         iniciada_por_nome: newSession.iniciada_por_nome,
         iniciada_por_matricula: newSession.iniciada_por_matricula,
         status: newSession.status,
+        data_auditoria: newSession.data_auditoria,
+        hora_auditoria: newSession.hora_auditoria,
+        chave_auditoria: newSession.chave_auditoria,
         timestamp: newSession.timestamp,
       });
 
@@ -1446,7 +1503,6 @@ export async function startAuditSessionInDatabase(data: {
     }
   }
 
-  // Atualiza cache local
   if (typeof window !== 'undefined') {
     const active = await fetchActiveAuditSessions(data.lojaId);
     const updated = [newSession, ...active.filter(s => s.id !== newSession.id)];
@@ -1479,7 +1535,6 @@ export async function fetchSessionBipsFromDatabase(sessaoId: string): Promise<Db
     }
   }
 
-  // Fallback local
   if (typeof window !== 'undefined') {
     try {
       const raw = localStorage.getItem(LOCAL_AUDIT_BIPS_KEY + sessaoId);
@@ -1492,24 +1547,39 @@ export async function fetchSessionBipsFromDatabase(sessaoId: string): Promise<Db
 }
 
 /**
- * Grava um bip no banco Supabase em tempo real (notificando os demais operadores do setor)
+ * Grava um bip no banco Supabase em tempo real (com chave composta loja/setor/data/hora)
  */
 export async function insertAuditBipInDatabase(bip: DbAuditBip): Promise<{ success: boolean; error?: string }> {
-  // Salva no banco de dados Supabase
+  const { dataAuditoria, horaAuditoria, chaveAuditoria } = buildAuditCompositeParts(
+    bip.loja_id,
+    bip.setor,
+    bip.timestamp || Date.now()
+  );
+  const enrichedBip: DbAuditBip = {
+    ...bip,
+    data_auditoria: bip.data_auditoria || dataAuditoria,
+    hora_auditoria: bip.hora_auditoria || horaAuditoria,
+    chave_auditoria: bip.chave_auditoria || chaveAuditoria,
+  };
+
   if (client && isSupabaseConfigured()) {
     try {
-      await ensureStoreExists(bip.loja_id);
+      await ensureStoreExists(enrichedBip.loja_id);
       const { error } = await client.from('auditoria_presenca_bips').upsert({
-        id: bip.id,
-        sessao_id: bip.sessao_id,
-        loja_id: bip.loja_id,
-        produto_id: bip.produto_id,
-        codigo_barras: bip.codigo_barras,
-        produto_nome: bip.produto_nome,
-        setor: bip.setor,
-        operador_matricula: bip.operador_matricula,
-        operador_nome: bip.operador_nome,
-        timestamp: bip.timestamp,
+        id: enrichedBip.id,
+        sessao_id: enrichedBip.sessao_id,
+        loja_id: enrichedBip.loja_id,
+        produto_id: enrichedBip.produto_id,
+        codigo_barras: enrichedBip.codigo_barras,
+        produto_nome: enrichedBip.produto_nome,
+        setor: enrichedBip.setor,
+        quantidade_fisica: enrichedBip.quantidade_fisica ?? null,
+        operador_matricula: enrichedBip.operador_matricula,
+        operador_nome: enrichedBip.operador_nome,
+        data_auditoria: enrichedBip.data_auditoria,
+        hora_auditoria: enrichedBip.hora_auditoria,
+        chave_auditoria: enrichedBip.chave_auditoria,
+        timestamp: enrichedBip.timestamp,
       });
 
       if (error) {
@@ -1520,13 +1590,12 @@ export async function insertAuditBipInDatabase(bip: DbAuditBip): Promise<{ succe
     }
   }
 
-  // Atualiza cache local
   if (typeof window !== 'undefined') {
     try {
-      const key = LOCAL_AUDIT_BIPS_KEY + bip.sessao_id;
+      const key = LOCAL_AUDIT_BIPS_KEY + enrichedBip.sessao_id;
       const raw = localStorage.getItem(key);
       const currentBips: DbAuditBip[] = raw ? JSON.parse(raw) : [];
-      const updated = [bip, ...currentBips.filter(b => b.id !== bip.id)];
+      const updated = [enrichedBip, ...currentBips.filter(b => b.id !== enrichedBip.id)];
       localStorage.setItem(key, JSON.stringify(updated));
     } catch {
       // ignore
@@ -1537,12 +1606,13 @@ export async function insertAuditBipInDatabase(bip: DbAuditBip): Promise<{ succe
 }
 
 /**
- * Finaliza a sessão no Supabase e arquiva os dados em 'auditorias_finalizadas' e 'auditoria_produtos'
+ * Finaliza a sessão no Supabase, transmite fechamento automático e arquiva o relatório na nuvem
  */
 export async function finalizeAuditSessionInDatabase(data: {
   sessaoId: string;
   lojaId: string;
   setor: string;
+  tipo?: AuditSessionTipo;
   iniciadaPorNome: string;
   iniciadaPorMatricula: string;
   finalizadaPorNome: string;
@@ -1552,24 +1622,73 @@ export async function finalizeAuditSessionInDatabase(data: {
   totalDivergentes: number;
   iniciadaEm: number;
   finalizadaEm: number;
-  confirmedItems: Array<{ name: string; ean: string; reducedCode?: string; supplierCode?: string; scannedAt: string; scannedBy?: string }>;
-  pendingItems: Array<{ name: string; ean: string; reducedCode?: string; supplierCode?: string; stock?: number; minStock?: number }>;
+  participants?: string[];
+  durationLabel?: string;
+  cameraScansCount?: number;
+  dataAuditoria?: string;
+  horaAuditoria?: string;
+  chaveAuditoria?: string;
+  confirmedItems: Array<{
+    name: string;
+    ean: string;
+    reducedCode?: string;
+    supplierCode?: string;
+    scannedAt: string;
+    scannedBy?: string;
+    physicalQuantity?: number;
+    systemQuantity?: number;
+  }>;
+  pendingItems: Array<{
+    name: string;
+    ean: string;
+    reducedCode?: string;
+    supplierCode?: string;
+    stock?: number;
+    minStock?: number;
+  }>;
   ruptureItems: Array<{ name: string; ean: string; stock: number; minStock: number }>;
 }): Promise<{ success: boolean; error?: string }> {
+  const composite = buildAuditCompositeParts(data.lojaId, data.setor, data.iniciadaEm || data.finalizadaEm);
+  const dataAuditoria = data.dataAuditoria || composite.dataAuditoria;
+  const horaAuditoria = data.horaAuditoria || composite.horaAuditoria;
+  const chaveAuditoria = data.chaveAuditoria || composite.chaveAuditoria;
+  const tipo: AuditSessionTipo = data.tipo || 'PRESENCA';
+
   if (client && isSupabaseConfigured()) {
     try {
       // 1. Marca status como 'CONCLUIDA' na tabela auditoria_presenca_sessoes
       await client
         .from('auditoria_presenca_sessoes')
         .update({ status: 'CONCLUIDA' })
-        .eq('id', data.sessaoId);
+        .eq('id', data.sessaoId)
+        .eq('loja_id', data.lojaId);
 
-      // 2. Grava na tabela auditorias_finalizadas
+      // 1.1 Notifica imediatamente via Broadcast todos os participantes conectados para fechamento automático
+      if (activeAuditChannelRef && activeAuditChannelRef.lojaId === data.lojaId) {
+        try {
+          await activeAuditChannelRef.ready;
+          await activeAuditChannelRef.channel.send({
+            type: 'broadcast',
+            event: 'session_closed',
+            payload: {
+              sessaoId: data.sessaoId,
+              lojaId: data.lojaId,
+              setor: data.setor,
+              tipo,
+              finalizadaPorNome: data.finalizadaPorNome,
+            },
+          });
+        } catch {
+          // fallback via postgres_changes UPDATE e polling
+        }
+      }
+
+      // 2. Grava na tabela auditorias_finalizadas (fonte única de verdade — sem armazenamento local)
       await client.from('auditorias_finalizadas').upsert({
         id: data.sessaoId,
         loja_id: data.lojaId,
         setor: data.setor,
-        tipo: 'PRESENCA',
+        tipo,
         iniciada_por_nome: data.iniciadaPorNome,
         iniciada_por_matricula: data.iniciadaPorMatricula,
         finalizada_por_nome: data.finalizadaPorNome,
@@ -1579,39 +1698,67 @@ export async function finalizeAuditSessionInDatabase(data: {
         total_divergentes: data.totalDivergentes,
         iniciada_em: data.iniciadaEm,
         finalizada_em: data.finalizadaEm,
+        data_auditoria: dataAuditoria,
+        hora_auditoria: horaAuditoria,
+        chave_auditoria: chaveAuditoria,
+        participantes: data.participants || [],
+        duracao_label: data.durationLabel || null,
+        camera_scans_count: data.cameraScansCount ?? data.confirmedItems.length,
         status: 'CONCLUIDA',
       });
 
-      // 3. Grava itens individuais em auditoria_produtos
+      // 3. Grava itens individuais em auditoria_produtos com isolamento direto por loja_id + chave composta
       const produtosPayload = [
-        ...data.confirmedItems.map(c => ({
-          id: `${data.sessaoId}_${c.ean}`,
-          sessao_id: data.sessaoId,
-          produto_id: c.ean,
-          codigo_barras: c.ean,
-          plu: c.reducedCode || null,
-          nome: c.name,
-          setor: data.setor,
-          quantidade_sistema: 0,
-          status_presenca: 'CONFIRMADO',
-          operador_nome: c.scannedBy || data.finalizadaPorNome,
-          operador_matricula: data.finalizadaPorMatricula,
-          auditado_em: Date.now(),
-        })),
-        ...data.pendingItems.map(p => ({
-          id: `${data.sessaoId}_${p.ean}`,
-          sessao_id: data.sessaoId,
-          produto_id: p.ean,
-          codigo_barras: p.ean,
-          plu: p.reducedCode || null,
-          nome: p.name,
-          setor: data.setor,
-          quantidade_sistema: p.stock ?? 0,
-          status_presenca: 'AUSENTE',
-          operador_nome: null,
-          operador_matricula: null,
-          auditado_em: Date.now(),
-        })),
+        ...data.confirmedItems.map(c => {
+          const qtdSistema = c.systemQuantity ?? 0;
+          const qtdFisica = tipo === 'INVENTARIO' ? (c.physicalQuantity ?? 0) : null;
+          const divergencia = tipo === 'INVENTARIO' && qtdFisica !== null ? qtdFisica - qtdSistema : null;
+          return {
+            id: `${chaveAuditoria}_${c.ean}`,
+            sessao_id: data.sessaoId,
+            loja_id: data.lojaId,
+            produto_id: c.ean,
+            codigo_barras: c.ean,
+            plu: c.reducedCode || null,
+            nome: c.name,
+            setor: data.setor,
+            quantidade_sistema: qtdSistema,
+            quantidade_fisica: qtdFisica,
+            divergencia,
+            status_presenca: 'CONFIRMADO',
+            operador_nome: c.scannedBy || data.finalizadaPorNome,
+            operador_matricula: data.finalizadaPorMatricula,
+            data_auditoria: dataAuditoria,
+            hora_auditoria: horaAuditoria,
+            chave_auditoria: chaveAuditoria,
+            auditado_em: data.finalizadaEm,
+          };
+        }),
+        ...data.pendingItems.map(p => {
+          const qtdSistema = p.stock ?? 0;
+          const qtdFisica = tipo === 'INVENTARIO' ? 0 : null;
+          const divergencia = tipo === 'INVENTARIO' ? -qtdSistema : null;
+          return {
+            id: `${chaveAuditoria}_${p.ean}`,
+            sessao_id: data.sessaoId,
+            loja_id: data.lojaId,
+            produto_id: p.ean,
+            codigo_barras: p.ean,
+            plu: p.reducedCode || null,
+            nome: p.name,
+            setor: data.setor,
+            quantidade_sistema: qtdSistema,
+            quantidade_fisica: qtdFisica,
+            divergencia,
+            status_presenca: 'AUSENTE',
+            operador_nome: null,
+            operador_matricula: null,
+            data_auditoria: dataAuditoria,
+            hora_auditoria: horaAuditoria,
+            chave_auditoria: chaveAuditoria,
+            auditado_em: data.finalizadaEm,
+          };
+        }),
       ];
 
       if (produtosPayload.length > 0) {
@@ -1622,16 +1769,198 @@ export async function finalizeAuditSessionInDatabase(data: {
     }
   }
 
-  // Limpa cache local de sessão ativa
+  // Remove caches temporários da sessão encerrada
   if (typeof window !== 'undefined') {
-    const raw = localStorage.getItem(LOCAL_ACTIVE_SESSIONS_KEY);
-    if (raw) {
-      const active: DbActiveAuditSession[] = JSON.parse(raw);
-      localStorage.setItem(LOCAL_ACTIVE_SESSIONS_KEY, JSON.stringify(active.filter(s => s.id !== data.sessaoId)));
+    try {
+      const raw = localStorage.getItem(LOCAL_ACTIVE_SESSIONS_KEY);
+      if (raw) {
+        const active: DbActiveAuditSession[] = JSON.parse(raw);
+        localStorage.setItem(LOCAL_ACTIVE_SESSIONS_KEY, JSON.stringify(active.filter(s => s.id !== data.sessaoId)));
+      }
+      localStorage.removeItem(LOCAL_AUDIT_BIPS_KEY + data.sessaoId);
+    } catch {
+      // ignore
     }
   }
 
   return { success: true };
+}
+
+/**
+ * Carrega relatórios de auditoria diretamente do Supabase (sem armazenamento local),
+ * com isolamento por loja, ordenação cronológica e restrição de setor para não-gerentes.
+ */
+export async function fetchAuditReportsFromDatabase(
+  lojaId: string,
+  options: { isManager: boolean; userSector?: string }
+): Promise<AuditItem[] | null> {
+  if (!client || !isSupabaseConfigured() || !lojaId) return null;
+
+  try {
+    let query = client
+      .from('auditorias_finalizadas')
+      .select('*')
+      .eq('loja_id', lojaId)
+      .order('data_auditoria', { ascending: false })
+      .order('hora_auditoria', { ascending: false })
+      .order('finalizada_em', { ascending: false })
+      .limit(100);
+
+    const sectorFilter = options.userSector?.trim();
+    if (
+      !options.isManager &&
+      sectorFilter &&
+      sectorFilter.toUpperCase() !== 'TODOS' &&
+      sectorFilter.toUpperCase() !== 'GERAL'
+    ) {
+      query = query.ilike('setor', sectorFilter);
+    }
+
+    const { data: rows, error } = await query;
+    if (error || !rows) {
+      console.warn('[Relatórios] Erro ao buscar auditorias finalizadas:', error?.message);
+      return null;
+    }
+
+    if (rows.length === 0) return [];
+
+    const sessionIds = rows.map(r => String(r.id));
+    const { data: prodRows } = await client
+      .from('auditoria_produtos')
+      .select('*')
+      .eq('loja_id', lojaId)
+      .in('sessao_id', sessionIds);
+
+    const prodsBySession = new Map<string, Array<Record<string, unknown>>>();
+    (prodRows || []).forEach((pr: Record<string, unknown>) => {
+      const sid = String(pr.sessao_id);
+      const arr = prodsBySession.get(sid) || [];
+      arr.push(pr);
+      prodsBySession.set(sid, arr);
+    });
+
+    return rows.map((row: Record<string, unknown>) => {
+      const sid = String(row.id);
+      const setor = String(row.setor || 'GERAL');
+      const tipo = ((row.tipo as string) || 'PRESENCA') as 'PRESENCA' | 'INVENTARIO' | 'VALIDADE';
+      const items = prodsBySession.get(sid) || [];
+
+      const confirmedList = items
+        .filter(it => String(it.status_presenca) === 'CONFIRMADO')
+        .map(it => ({
+          name: String(it.nome || ''),
+          ean: String(it.codigo_barras || ''),
+          reducedCode: it.plu ? String(it.plu) : undefined,
+          scannedAt: it.auditado_em
+            ? new Date(Number(it.auditado_em)).toLocaleTimeString('pt-BR')
+            : String(row.hora_auditoria || ''),
+          scannedBy: it.operador_nome ? String(it.operador_nome) : undefined,
+          scanMethod: 'camera' as const,
+          physicalQuantity: it.quantidade_fisica !== null && it.quantidade_fisica !== undefined ? Number(it.quantidade_fisica) : undefined,
+          systemQuantity: it.quantidade_sistema !== null && it.quantidade_sistema !== undefined ? Number(it.quantidade_sistema) : undefined,
+          divergence: it.divergencia !== null && it.divergencia !== undefined ? Number(it.divergencia) : undefined,
+        }));
+
+      const pendingList = items
+        .filter(it => String(it.status_presenca) !== 'CONFIRMADO')
+        .map(it => ({
+          name: String(it.nome || ''),
+          ean: String(it.codigo_barras || ''),
+          reducedCode: it.plu ? String(it.plu) : undefined,
+          stock: it.quantidade_sistema !== null && it.quantidade_sistema !== undefined ? Number(it.quantidade_sistema) : undefined,
+          systemQuantity: it.quantidade_sistema !== null && it.quantidade_sistema !== undefined ? Number(it.quantidade_sistema) : undefined,
+          physicalQuantity: it.quantidade_fisica !== null && it.quantidade_fisica !== undefined ? Number(it.quantidade_fisica) : undefined,
+          divergence: it.divergencia !== null && it.divergencia !== undefined ? Number(it.divergencia) : undefined,
+        }));
+
+      const totalEsperado = Number(row.total_esperado) || (confirmedList.length + pendingList.length);
+      const totalAuditado = Number(row.total_auditado) || confirmedList.length;
+      const totalDivergentes = Number(row.total_divergentes) || pendingList.length;
+      const rate = totalEsperado > 0 ? `${Math.round((totalAuditado / totalEsperado) * 100)}%` : '0%';
+      const startedMs = Number(row.iniciada_em) || Date.now();
+      const finishedMs = Number(row.finalizada_em) || startedMs;
+      const dataAuditoria = row.data_auditoria ? String(row.data_auditoria) : new Date(startedMs).toISOString().slice(0, 10);
+      const horaAuditoria = row.hora_auditoria ? String(row.hora_auditoria) : new Date(startedMs).toTimeString().slice(0, 8);
+
+      const titlePrefix = tipo === 'INVENTARIO' ? 'Inventário Cego' : 'Auditoria de Presença';
+
+      return {
+        id: sid,
+        lojaId: String(row.loja_id),
+        title: `${titlePrefix} - ${setor}`,
+        date: `${dataAuditoria} ${horaAuditoria}`,
+        dataAuditoria,
+        horaAuditoria,
+        chaveAuditoria: row.chave_auditoria ? String(row.chave_auditoria) : sid,
+        itemsCount: totalAuditado,
+        status: 'Concluída',
+        auditor: row.finalizada_por_matricula
+          ? `${row.finalizada_por_nome} (${row.finalizada_por_matricula})`
+          : String(row.finalizada_por_nome || 'Operador'),
+        department: setor,
+        type: tipo,
+        totalItems: totalEsperado,
+        confirmedItems: totalAuditado,
+        pendingItems: totalDivergentes,
+        presenceRate: rate,
+        startedBy: row.iniciada_por_matricula
+          ? `${row.iniciada_por_nome} (${row.iniciada_por_matricula})`
+          : String(row.iniciada_por_nome || ''),
+        participants: Array.isArray(row.participantes) ? (row.participantes as string[]) : [],
+        startedAtMs: startedMs,
+        finishedAtMs: finishedMs,
+        durationLabel: row.duracao_label ? String(row.duracao_label) : undefined,
+        cameraScansCount: Number(row.camera_scans_count) || confirmedList.length,
+        manualScansCount: 0,
+        confirmedList,
+        pendingList,
+      } satisfies AuditItem;
+    });
+  } catch (err) {
+    console.warn('[Relatórios] Falha ao carregar relatórios da nuvem:', err);
+    return null;
+  }
+}
+
+/**
+ * Atualiza item bipado pós-auditoria no relatório (somente via câmera) diretamente no banco
+ */
+export async function confirmMissingAuditProductInDatabase(data: {
+  sessaoId: string;
+  lojaId: string;
+  ean: string;
+  operadorNome: string;
+  operadorMatricula: string;
+  newConfirmedCount: number;
+  newPendingCount: number;
+  newCameraScansCount: number;
+}): Promise<void> {
+  if (!client || !isSupabaseConfigured() || !data.lojaId) return;
+  try {
+    await client
+      .from('auditoria_produtos')
+      .update({
+        status_presenca: 'CONFIRMADO',
+        operador_nome: data.operadorNome,
+        operador_matricula: data.operadorMatricula,
+        auditado_em: Date.now(),
+      })
+      .eq('sessao_id', data.sessaoId)
+      .eq('loja_id', data.lojaId)
+      .eq('codigo_barras', data.ean);
+
+    await client
+      .from('auditorias_finalizadas')
+      .update({
+        total_auditado: data.newConfirmedCount,
+        total_divergentes: data.newPendingCount,
+        camera_scans_count: data.newCameraScansCount,
+      })
+      .eq('id', data.sessaoId)
+      .eq('loja_id', data.lojaId);
+  } catch (err) {
+    console.warn('[Relatórios] Erro ao atualizar bip pós-auditoria:', err);
+  }
 }
 
 let activeAuditChannelRef: { lojaId: string; channel: ReturnType<NonNullable<typeof client>['channel']>; ready: Promise<void> } | null = null;
@@ -1664,8 +1993,7 @@ export async function notifySessionJoinRealtime(data: {
 }
 
 /**
- * Assina as alterações em tempo real de auditoria (sessões e bips) e presença de operadores
- * para sincronizar instantaneamente todos os participantes do setor e alertar desconexões/entradas.
+ * Assina as alterações em tempo real de auditoria (isolada por loja_id)
  */
 export function subscribeToAuditRealtime(
   lojaId: string,
@@ -1673,9 +2001,10 @@ export function subscribeToAuditRealtime(
   onNewBip?: (bip: DbAuditBip) => void,
   operatorPresence?: { matricula: string; nome: string },
   onUserOffline?: (userName: string) => void,
-  onUserJoinedSession?: (userName: string, sessaoId: string, matricula?: string) => void
+  onUserJoinedSession?: (userName: string, sessaoId: string, matricula?: string) => void,
+  onSessionClosed?: (sessaoId: string, closedByName?: string, tipo?: string) => void
 ): () => void {
-  if (!client || !isSupabaseConfigured()) return () => {};
+  if (!client || !isSupabaseConfigured() || !lojaId) return () => {};
 
   try {
     const channelName = `realtime_auditoria_${lojaId}`;
@@ -1695,14 +2024,22 @@ export function subscribeToAuditRealtime(
     channel
       .on(
         'postgres_changes',
-        { event: '*', schema: 'public', table: 'auditoria_presenca_sessoes' },
-        () => {
+        { event: '*', schema: 'public', table: 'auditoria_presenca_sessoes', filter: `loja_id=eq.${lojaId}` },
+        (payload) => {
+          const row = payload.new as Record<string, unknown> | undefined;
+          if (payload.eventType === 'UPDATE' && row && row.status === 'CONCLUIDA' && onSessionClosed) {
+            onSessionClosed(
+              String(row.id || ''),
+              row.iniciada_por_nome ? String(row.iniciada_por_nome) : undefined,
+              row.tipo ? String(row.tipo) : undefined
+            );
+          }
           onEvent();
         }
       )
       .on(
         'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'auditoria_presenca_bips' },
+        { event: 'INSERT', schema: 'public', table: 'auditoria_presenca_bips', filter: `loja_id=eq.${lojaId}` },
         (payload) => {
           if (payload.new && onNewBip) {
             onNewBip(payload.new as DbAuditBip);
@@ -1712,7 +2049,7 @@ export function subscribeToAuditRealtime(
       )
       .on(
         'postgres_changes',
-        { event: 'UPDATE', schema: 'public', table: 'auditoria_presenca_bips' },
+        { event: 'UPDATE', schema: 'public', table: 'auditoria_presenca_bips', filter: `loja_id=eq.${lojaId}` },
         () => {
           onEvent();
         }
@@ -1722,6 +2059,14 @@ export function subscribeToAuditRealtime(
           const p = payload as { nome?: string; sessaoId?: string; matricula?: string };
           if (p.nome && p.sessaoId) {
             onUserJoinedSession(p.nome, p.sessaoId, p.matricula);
+          }
+        }
+      })
+      .on('broadcast', { event: 'session_closed' }, ({ payload }) => {
+        if (payload && onSessionClosed) {
+          const p = payload as { sessaoId?: string; finalizadaPorNome?: string; tipo?: string };
+          if (p.sessaoId) {
+            onSessionClosed(p.sessaoId, p.finalizadaPorNome, p.tipo);
           }
         }
       });

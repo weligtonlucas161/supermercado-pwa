@@ -163,8 +163,12 @@ export interface ValidityItem {
 
 export interface AuditItem {
   id: string;
+  lojaId?: string;
   title: string;
   date: string;
+  dataAuditoria?: string;
+  horaAuditoria?: string;
+  chaveAuditoria?: string;
   itemsCount: number;
   status: AuditStatus;
   auditor: string;
@@ -190,6 +194,9 @@ export interface AuditItem {
     scanMethod?: 'camera' | 'manual';
     reducedCode?: string;
     supplierCode?: string;
+    physicalQuantity?: number;
+    systemQuantity?: number;
+    divergence?: number;
   }>;
   pendingList?: Array<{ 
     name: string; 
@@ -198,6 +205,9 @@ export interface AuditItem {
     supplierCode?: string;
     stock?: number;
     minStock?: number;
+    physicalQuantity?: number;
+    systemQuantity?: number;
+    divergence?: number;
   }>;
   ruptureList?: Array<{
     name: string;

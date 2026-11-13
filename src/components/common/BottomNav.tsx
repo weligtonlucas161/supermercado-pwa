@@ -35,7 +35,17 @@ const NavItem: React.FC<NavItemProps> = ({ icon, label, active, onClick, badge }
 };
 
 export const BottomNav: React.FC = () => {
-  const { activeTab, setActiveTab, validities, products, isGerente, currentUser, storeColor } = useApp();
+  const { activeTab, setActiveTab, validities, products, isGerente, currentUser, storeColor, isInventoryLocked } = useApp();
+
+  if (isInventoryLocked) {
+    return (
+      <div className="fixed bottom-3 sm:bottom-4 left-3 right-3 sm:left-4 sm:right-4 z-40 max-w-xl mx-auto pointer-events-none">
+        <div className="pointer-events-auto rounded-2xl border border-amber-500/40 bg-amber-500/95 text-slate-950 px-4 py-2.5 shadow-2xl text-center text-xs font-black">
+          Modo Restrito Ativo — Aguarde a conclusão do Inventário Cego para navegar
+        </div>
+      </div>
+    );
+  }
 
   const urgentValiditiesCount = validities.filter(v => v.status === 'urgent').length;
   const lowStockCount = products.filter(p => p.stock <= p.minStock).length;
