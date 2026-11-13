@@ -334,7 +334,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const addOrUpdateEmployee = async (emp: StoreEmployee) => {
     const res = await saveStoreEmployee(emp);
     if (res.success) {
-      await refreshEmployees(emp.loja_id);
+      await refreshEmployees(isSaasAdmin ? 'todas' : emp.loja_id);
     }
     return res;
   };

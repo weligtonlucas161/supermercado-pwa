@@ -171,9 +171,11 @@ export const AdminSaasScreen: React.FC = () => {
   // Feedback
   const [feedbackMessage, setFeedbackMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
-  // Filtro de gerentes
+  // Filtro de gerentes (exclui saas_admin)
   const storeManagers = employees.filter(
-    e => e.cargo.toLowerCase().includes('gerente') || e.cargo.toLowerCase().includes('admin') || e.cargo.toLowerCase().includes('master')
+    e =>
+      e.cargo.toLowerCase() !== 'saas_admin' &&
+      (e.cargo.toLowerCase().includes('gerente') || e.cargo.toLowerCase().includes('admin') || e.cargo.toLowerCase().includes('master'))
   );
 
   const totalUserCapacity = stores.reduce((acc, s) => acc + (s.limite_usuarios || 0), 0);
@@ -221,8 +223,9 @@ export const AdminSaasScreen: React.FC = () => {
 
   const handleCreateManager = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!managerName.trim() || !managerMatricula.trim() || !managerPassword.trim()) {
-      setFeedbackMessage({ type: 'error', text: 'Preencha todos os campos do gerente de loja.' });
+    const targetStoreId = managerStoreId || stores[0]?.id || '';
+    if (!managerName.trim() || !managerMatricula.trim() || !managerPassword.trim() || !targetStoreId) {
+      setFeedbackMessage({ type: 'error', text: 'Preencha todos os campos do gerente e selecione uma loja.' });
       return;
     }
 
@@ -233,7 +236,7 @@ export const AdminSaasScreen: React.FC = () => {
       senha: managerPassword.trim(),
       cargo: 'Gerente Geral da Loja',
       setor_restrito: 'TODOS',
-      loja_id: managerStoreId,
+      loja_id: targetStoreId,
       ativo: true,
       created_at: new Date().toISOString(),
     };
@@ -886,34 +889,44 @@ export const AdminSaasScreen: React.FC = () => {
                     </div>
                   ) : (
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                      {storeActiveSessions.map((sess, idx) => (
+                      {storeActiveSessions.map((sess, idx) => {
+                        const matchedEmp = storeEmps.find(
+                          e => e.matricula.trim().toLowerCase() === sess.matricula.trim().toLowerCase()
+                        );
+                        return (
                         <div 
                           key={sess.matricula + '_' + idx}
                           className="p-2.5 rounded-xl bg-white dark:bg-slate-800 border border-emerald-200 dark:border-emerald-800/60 flex items-center justify-between gap-2 shadow-xs"
                         >
-                          <div className="space-y-0.5">
-                            <div className="flex items-center gap-1.5">
+                          <div className="space-y-0.5 min-w-0">
+                            <div className="flex items-center gap-1.5 flex-wrap">
                               <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0" />
-                              <span className="font-extrabold text-xs text-slate-900 dark:text-white">
-                                {sess.usuario_nome || sess.matricula}
+                              <span className="font-extrabold text-xs text-slate-900 dark:text-white truncate">
+                                {sess.usuario_nome || matchedEmp?.nome || sess.matricula}
                               </span>
+                              {matchedEmp?.cargo && (
+                                <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300">
+                                  {matchedEmp.cargo}
+                                </span>
+                              )}
                             </div>
                             <p className="text-[11px] text-slate-400 font-mono">
                               Matrícula: <strong>{sess.matricula}</strong>
                             </p>
                           </div>
-                          <div className="text-right">
+                          <div className="text-right shrink-0">
                             <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400">
                               🟢 Ativa
                             </span>
                             {sess.last_seen && (
                               <p className="text-[9px] text-slate-400 mt-1">
-                                Visto às {new Date(sess.last_seen).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                                Visto às {new Date(Number(sess.last_seen)).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
                               </p>
                             )}
                           </div>
                         </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   )}
                 </div>
@@ -1245,7 +1258,7 @@ export const AdminSaasScreen: React.FC = () => {
                   Vincular à Loja *
                 </label>
                 <select
-                  value={managerStoreId}
+                  value={managerStoreId || stores[0]?.id || ''}
                   onChange={e => setManagerStoreId(e.target.value)}
                   className="w-full p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-bold"
                 >

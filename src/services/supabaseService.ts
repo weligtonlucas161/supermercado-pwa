@@ -578,9 +578,11 @@ export async function createStoreInDatabase(store: Store): Promise<{ success: bo
       });
       if (error) {
         console.warn('Aviso upsert loja:', error.message);
+        return { success: false, error: error.message };
       }
-    } catch (err) {
+    } catch (err: any) {
       console.warn('Erro ao salvar loja no banco:', err);
+      return { success: false, error: err?.message || 'Erro ao salvar loja no banco.' };
     }
   }
 
@@ -687,7 +689,7 @@ export async function fetchSaasTelemetry(): Promise<SaasTelemetryData> {
   try {
     const [storesRes, usersRes, prodsRes, sessRes, logsRes] = await Promise.allSettled([
       client.from('lojas').select('id, ativa, limite_usuarios'),
-      client.from('usuarios').select('id, loja_id'),
+      client.from('usuarios').select('id, loja_id').neq('cargo', 'saas_admin'),
       client.from('produtos').select('id, loja_id'),
       client.from('sessoes_ativas').select('matricula, loja_id').eq('status', 'ATIVA'),
       client.from('app_logs').select('id, loja_id'),
@@ -777,6 +779,7 @@ export async function fetchStoreEmployees(lojaId?: string): Promise<StoreEmploye
     let query = client
       .from('usuarios')
       .select('*')
+      .neq('cargo', 'saas_admin')
       .order('nome', { ascending: true });
 
     if (lojaId && lojaId !== 'todas') {
