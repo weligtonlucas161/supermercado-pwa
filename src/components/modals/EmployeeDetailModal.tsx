@@ -45,7 +45,6 @@ export const EmployeeDetailModal: React.FC<EmployeeDetailModalProps> = ({
   const [matricula, setMatricula] = useState('');
   const [senha, setSenha] = useState('');
   const [cargo, setCargo] = useState('');
-  const [codigoFornecedor, setCodigoFornecedor] = useState('');
   const [setorRestrito, setSetorRestrito] = useState<string>('TODOS');
   const [ativo, setAtivo] = useState(true);
 
@@ -62,7 +61,6 @@ export const EmployeeDetailModal: React.FC<EmployeeDetailModalProps> = ({
       setMatricula(employee.matricula || '');
       setSenha(employee.senha || '123456');
       setCargo(employee.cargo || 'Operador de Gôndola');
-      setCodigoFornecedor(employee.codigo_fornecedor || '');
       setSetorRestrito(employee.setor_restrito || 'TODOS');
       setAtivo(employee.ativo);
       
@@ -88,30 +86,15 @@ export const EmployeeDetailModal: React.FC<EmployeeDetailModalProps> = ({
       return;
     }
 
-    if (cargo === 'Promotor' && !codigoFornecedor.trim()) {
-      setNotice({ type: 'error', text: 'O Código de Fornecedor Atribuído é obrigatório para o cargo Promotor.' });
-      return;
-    }
-
-    const isPromotorRole = cargo.trim().toLowerCase() === 'promotor';
-
     const updatedEmployee: StoreEmployee = {
       ...employee,
       nome: nome.trim(),
       matricula: matricula.trim(),
       senha: senha.trim() || employee.senha || '123456',
       cargo: cargo.trim(),
-      codigo_fornecedor: isPromotorRole ? codigoFornecedor.trim().toUpperCase() : undefined,
       setor_restrito: setorRestrito,
       ativo,
-      permissoes: isPromotorRole ? {
-        setores_permitidos: setorRestrito === 'TODOS' ? [] : [setorRestrito],
-        pode_auditar: false,
-        pode_ajustar_estoque: false,
-        pode_importar_planilha: false,
-        pode_gerenciar_validade: true,
-        pode_acessar_chat: false,
-      } : {
+      permissoes: {
         setores_permitidos: setorRestrito === 'TODOS' ? [] : [setorRestrito],
         pode_auditar: podeAuditar,
         pode_ajustar_estoque: podeAjustarEstoque,
@@ -318,17 +301,7 @@ export const EmployeeDetailModal: React.FC<EmployeeDetailModalProps> = ({
             {isEditing ? (
               <select
                 value={cargo}
-                onChange={e => {
-                  const newCargo = e.target.value;
-                  setCargo(newCargo);
-                  if (newCargo === 'Promotor') {
-                    setPodeAuditar(false);
-                    setPodeAjustarEstoque(false);
-                    setPodeImportarPlanilha(false);
-                    setPodeGerenciarValidade(true);
-                    setPodeAcessarChat(false);
-                  }
-                }}
+                onChange={e => setCargo(e.target.value)}
                 className="w-full p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-bold"
               >
                 {roles.map(r => (
@@ -339,7 +312,6 @@ export const EmployeeDetailModal: React.FC<EmployeeDetailModalProps> = ({
                 <option value="Fiscal de Prevenção">Fiscal de Prevenção</option>
                 <option value="Gerente de Setor (GS)">Gerente de Setor (GS)</option>
                 <option value="Supervisor">Supervisor</option>
-                <option value="Promotor">Promotor</option>
               </select>
             ) : (
               <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 flex items-center justify-between">
@@ -348,40 +320,6 @@ export const EmployeeDetailModal: React.FC<EmployeeDetailModalProps> = ({
               </div>
             )}
           </div>
-
-          {/* Código de Fornecedor Atribuído (Exibido para Promotor ou se cadastrado) */}
-          {(cargo === 'Promotor' || (!isEditing && employee.codigo_fornecedor)) && (
-            <div className="p-3.5 rounded-2xl bg-blue-500/10 border border-blue-500/25 space-y-2">
-              <label className="font-black text-blue-700 dark:text-blue-400 uppercase tracking-wider text-[10px] flex items-center gap-1.5">
-                <Layers className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />
-                Código de Fornecedor Atribuído {isEditing && <span className="text-rose-500">*</span>}
-              </label>
-              {isEditing ? (
-                <div>
-                  <input
-                    type="text"
-                    required={cargo === 'Promotor'}
-                    placeholder="Ex: FORN-NESTLE-01 ou 7891000"
-                    value={codigoFornecedor}
-                    onChange={e => setCodigoFornecedor(e.target.value)}
-                    className="w-full p-2.5 rounded-xl border border-blue-500/40 bg-white dark:bg-slate-800 font-mono font-bold text-slate-900 dark:text-white uppercase"
-                  />
-                  <p className="text-[10px] text-blue-600 dark:text-blue-300 mt-1">
-                    O Promotor terá acesso restrito unicamente aos produtos cadastrados com este código de fornecedor.
-                  </p>
-                </div>
-              ) : (
-                <div className="flex items-center justify-between">
-                  <span className="font-mono font-bold text-blue-800 dark:text-blue-200">
-                    {employee.codigo_fornecedor || 'Não especificado'}
-                  </span>
-                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-700 dark:text-blue-300 font-semibold">
-                    Produtos Restritos ao Fornecedor
-                  </span>
-                </div>
-              )}
-            </div>
-          )}
 
           {/* Setor Restrito */}
           <div className="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-850 border border-slate-200 dark:border-slate-700 space-y-2">

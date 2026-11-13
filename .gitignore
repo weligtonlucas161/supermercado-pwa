@@ -7,3 +7,12 @@ coverage/
 *.log
 .env*
 !.env.example
+
+# Migrações e scripts SQL do Supabase (mantidos fora do repositório)
+supabase/
+
+# Assets locais (ex.: .sql gerados em public/assets/aistudio)
+public/assets/
+
+# O projeto usa bun.lock (Bun) como gerenciador de pacotes
+package-lock.json

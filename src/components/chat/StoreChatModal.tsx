@@ -13,8 +13,7 @@ import {
   Clock, 
   Building2,
   Sparkles,
-  UserCheck,
-  Trash2
+  UserCheck
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { ChatMessage, StoreEmployee } from '../../types';
@@ -25,13 +24,9 @@ export const StoreChatModal: React.FC = () => {
     closeChat, 
     chatMessages, 
     sendChatMessage, 
-    clearAllChatMessages,
-    deleteChatMessage,
     operator, 
     employees, 
     directLeaderMatricula, 
-    isGerente,
-    isSaasAdmin,
     darkMode 
   } = useApp();
 
@@ -39,10 +34,6 @@ export const StoreChatModal: React.FC = () => {
   const [inputText, setInputText] = useState('');
   const [isAnonimo, setIsAnonimo] = useState(false);
   const [selectedLeaderMatricula, setSelectedLeaderMatricula] = useState<string>('');
-  const [showConfirmClear, setShowConfirmClear] = useState(false);
-  const [isClearing, setIsClearing] = useState(false);
-  
-  const canClearChat = isGerente || isSaasAdmin || (operator.role || '').toLowerCase().includes('gerente');
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -96,16 +87,6 @@ export const StoreChatModal: React.FC = () => {
       return isSenderToLeader || isLeaderToSender || isDirectedToUser;
     }
   });
-
-  const handleConfirmClearChat = async () => {
-    setIsClearing(true);
-    try {
-      await clearAllChatMessages();
-      setShowConfirmClear(false);
-    } finally {
-      setIsClearing(false);
-    }
-  };
 
   const handleSend = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
@@ -165,66 +146,14 @@ export const StoreChatModal: React.FC = () => {
             </div>
           </div>
 
-          <div className="flex items-center gap-1.5">
-            {canClearChat && (
-              <button
-                type="button"
-                onClick={() => setShowConfirmClear(true)}
-                className="px-2.5 py-1.5 rounded-xl bg-rose-50 hover:bg-rose-100 dark:bg-rose-950/40 dark:hover:bg-rose-900/50 text-rose-600 dark:text-rose-400 text-xs font-bold transition flex items-center gap-1.5 cursor-pointer border border-rose-200 dark:border-rose-900/40"
-                title="Limpar todo o chat da loja (Ação exclusiva de Gerente Geral)"
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-                <span className="hidden sm:inline">Limpar Chat</span>
-              </button>
-            )}
-
-            <button
-              onClick={closeChat}
-              className="p-2 rounded-xl text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition cursor-pointer"
-              title="Fechar chat"
-            >
-              <X className="w-5 h-5" />
-            </button>
-          </div>
+          <button
+            onClick={closeChat}
+            className="p-2 rounded-xl text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition cursor-pointer"
+            title="Fechar chat"
+          >
+            <X className="w-5 h-5" />
+          </button>
         </div>
-
-        {/* Modal de Confirmação para Limpeza do Chat pelo Gerente Geral */}
-        {showConfirmClear && (
-          <div className="p-4 bg-rose-500/15 border-b border-rose-500/30 text-rose-900 dark:text-rose-200 animate-in slide-in-from-top-2 duration-150 shrink-0">
-            <div className="flex items-start gap-3">
-              <div className="p-2 rounded-xl bg-rose-600 text-white shrink-0 mt-0.5">
-                <AlertTriangle className="w-4 h-4" />
-              </div>
-              <div className="flex-1 space-y-1">
-                <h4 className="font-extrabold text-xs text-rose-800 dark:text-rose-200">
-                  Deseja limpar todo o histórico de mensagens?
-                </h4>
-                <p className="text-[11px] text-rose-700 dark:text-rose-300 leading-relaxed">
-                  Como <strong>Gerente Geral</strong>, esta ação excluirá as mensagens do banco de dados e atualizará a interface de todos os colaboradores em tempo real.
-                </p>
-                <div className="pt-2 flex items-center gap-2">
-                  <button
-                    type="button"
-                    disabled={isClearing}
-                    onClick={handleConfirmClearChat}
-                    className="px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs shadow-sm flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                    <span>{isClearing ? 'Limpando...' : 'Sim, Limpar Tudo'}</span>
-                  </button>
-                  <button
-                    type="button"
-                    disabled={isClearing}
-                    onClick={() => setShowConfirmClear(false)}
-                    className="px-3 py-1.5 rounded-xl bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-bold text-xs border border-slate-200 dark:border-slate-700 hover:bg-slate-50 cursor-pointer"
-                  >
-                    Cancelar
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
 
         {/* Seleção de Abas do Chat */}
         <div className="p-2 border-b border-slate-100 dark:border-slate-800 bg-white dark:bg-slate-900 flex items-center gap-2 shrink-0">
@@ -364,7 +293,7 @@ export const StoreChatModal: React.FC = () => {
 
                   {/* Balão da Mensagem */}
                   <div
-                    className={`relative group max-w-[85%] sm:max-w-[75%] p-3 rounded-2xl text-xs leading-relaxed shadow-xs ${
+                    className={`max-w-[85%] sm:max-w-[75%] p-3 rounded-2xl text-xs leading-relaxed shadow-xs ${
                       isMe
                         ? 'bg-emerald-600 text-white rounded-tr-none'
                         : msg.is_anonimo
@@ -373,17 +302,6 @@ export const StoreChatModal: React.FC = () => {
                     }`}
                   >
                     <p className="whitespace-pre-wrap break-words">{msg.conteudo}</p>
-
-                    {(canClearChat || isMe) && (
-                      <button
-                        type="button"
-                        onClick={() => deleteChatMessage(msg.id)}
-                        className={`absolute -bottom-2 ${isMe ? '-left-2' : '-right-2'} p-1 rounded-full opacity-0 group-hover:opacity-100 transition shadow-sm bg-rose-500 text-white hover:bg-rose-600 cursor-pointer`}
-                        title="Excluir esta mensagem para todos"
-                      >
-                        <Trash2 className="w-2.5 h-2.5" />
-                      </button>
-                    )}
                   </div>
                 </div>
               );

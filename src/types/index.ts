@@ -40,9 +40,6 @@ export interface Product {
   isLockedForEdit?: boolean; // Bloqueado para edição concorrente
   lockedBy?: string; // Nome e matrícula do operador que está editando
   lockedAt?: string; // Timestamp do bloqueio
-  rebaixaStatus?: 'nenhum' | 'pendente' | 'confirmada';
-  rebaixaSolicitadaEm?: string;
-  rebaixaConfirmadaEm?: string;
 }
 
 export interface SpreadsheetProductItem {
@@ -100,7 +97,6 @@ export interface StoreEmployee {
   senha?: string;
   cargo: string;
   cargo_id?: string;
-  codigo_fornecedor?: string; // Código de fornecedor atribuído (obrigatório para Promotores)
   setor_restrito?: string; // 'TODOS' ou setor específico e.g. 'MERCEARIA', 'FRIOS'
   loja_id: string;
   ativo: boolean;
@@ -138,9 +134,8 @@ export interface AuthUser {
   id: string;
   matricula: string;
   nome: string;
-  cargo: 'saas_admin' | 'gerente' | 'adm' | 'master' | 'operador' | 'promotor';
+  cargo: 'saas_admin' | 'gerente' | 'adm' | 'master' | 'operador';
   setor?: string;
-  codigo_fornecedor?: string;
   loja_id: string;
   loja_nome?: string;
   primeiro_login?: boolean;
@@ -162,10 +157,6 @@ export interface ValidityItem {
   quantity: number;
   status: UrgencyStatus;
   discountApplied?: boolean;
-  registradoPorPromotor?: boolean;
-  promotorNome?: string;
-  supplierCode?: string;
-  sector?: string;
 }
 
 export interface AuditItem {
@@ -212,51 +203,17 @@ export interface Operator {
   name: string;
   code: string;         // Matrícula
   matricula?: string;
-  role: 'saas_admin' | 'gerente' | 'adm' | 'master' | 'operador' | 'promotor';
+  role: 'saas_admin' | 'gerente' | 'adm' | 'master' | 'operador';
   store: string;
   loja_id: string;      // ID da loja vinculada
   shift: string;
   setor_restrito?: string;
-  codigo_fornecedor?: string;
   primeiro_login?: boolean;
-}
-
-export type TipoAvaria = 
-  | 'Embalagem danificada'
-  | 'Agentes da natureza'
-  | 'Falha do produto'
-  | 'Vazamento ou quebra'
-  | 'Prazo de validade expirado'
-  | 'Outro';
-
-export const TIPOS_AVARIA: TipoAvaria[] = [
-  'Embalagem danificada',
-  'Agentes da natureza',
-  'Falha do produto',
-  'Vazamento ou quebra',
-  'Prazo de validade expirado',
-  'Outro',
-];
-
-export interface AvariaItem {
-  id: string;
-  loja_id: string;
-  codigo_barras: string;
-  codigo_reduzido?: string;
-  produto_nome: string;
-  quantidade: number;
-  tipo_avaria: TipoAvaria;
-  para_troca: boolean; // Sim/Não
-  setor?: string;
-  registrado_por_nome: string;
-  registrado_por_matricula: string;
-  registrado_em: string;
-  timestamp: number;
 }
 
 export interface OfflineAction {
   id: string;
-  type: 'ADD_PRODUCT' | 'UPDATE_STOCK' | 'ADD_VALIDITY' | 'ADD_AUDIT' | 'APPLY_DISCOUNT' | 'IMPORT_ENCRYPTED_SPREADSHEET' | 'REGISTRAR_AVARIA' | 'SOLICITAR_REBAIXA';
+  type: 'ADD_PRODUCT' | 'UPDATE_STOCK' | 'ADD_VALIDITY' | 'ADD_AUDIT' | 'APPLY_DISCOUNT' | 'IMPORT_ENCRYPTED_SPREADSHEET';
   payload: unknown;
   timestamp: string;
 }

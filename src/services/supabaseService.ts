@@ -10,8 +10,7 @@ import {
   Store,
   StoreEmployee,
   StoreRole,
-  ChatMessage,
-  AvariaItem
+  ChatMessage
 } from '../types';
 import { decryptSingleField, isEncrypted } from '../utils/encryptionUtils';
 
@@ -200,18 +199,6 @@ export function getStoredEmployees(): StoreEmployee[] {
       ativo: true,
       created_at: new Date().toISOString(),
     },
-    {
-      id: 'usr_promotor_001',
-      matricula: 'PROM-01',
-      nome: 'Lucas Promotor',
-      senha: '123456',
-      cargo: 'Promotor',
-      codigo_fornecedor: 'FORN-01',
-      setor_restrito: 'MERCEARIA',
-      loja_id: 'loja_padrao_001',
-      ativo: true,
-      created_at: new Date().toISOString(),
-    },
   ];
   try {
     localStorage.setItem(LOCAL_STORAGE_EMPLOYEES_KEY, JSON.stringify(defaultEmps));
@@ -267,19 +254,6 @@ export function getStoredRoles(): StoreRole[] {
         pode_auditar: true,
         pode_ajustar_estoque: true,
         pode_importar_planilha: true,
-        pode_gerenciar_validade: true,
-      },
-    },
-    {
-      id: 'role_promotor',
-      loja_id: 'loja_padrao_001',
-      nome: 'Promotor',
-      descricao: 'Promotor de vendas com acesso exclusivo ao controle de validade dos seus produtos atribuídos',
-      permissoes: {
-        setores_permitidos: [],
-        pode_auditar: false,
-        pode_ajustar_estoque: false,
-        pode_importar_planilha: false,
         pode_gerenciar_validade: true,
       },
     },
@@ -339,8 +313,7 @@ export function changeUserPassword(matricula: string, newPassword: string): { su
 }
 
 /**
- * Validação de Segurança Ativa: Verifica se o usuário ainda existe e está ativo no servidor.
- * Ficar offline NUNCA deve ser interpretado como desligamento da empresa!
+ * Validação de Segurança Ativa: Verifica se o usuário ainda existe e está ativo no servidor
  */
 export function verifyUserStillActive(matricula: string, lojaId?: string): { active: boolean; companyName?: string } {
   const cleanMatricula = matricula.trim();
@@ -348,16 +321,11 @@ export function verifyUserStillActive(matricula: string, lojaId?: string): { act
     return { active: true };
   }
 
-  // Falso positivo evitado: queda de sinal ou internet offline mantém o usuário ativo localmente
-  if (typeof navigator !== 'undefined' && !navigator.onLine) {
-    return { active: true };
-  }
-
   const emps = getStoredEmployees();
   const emp = emps.find(e => e.matricula.toLowerCase() === cleanMatricula.toLowerCase());
 
-  // Apenas considera inativo se o funcionário existe na base local e seu status foi explicitamente desativado
-  if (emp && emp.ativo === false) {
+  // Se o usuário foi removido da base ou está inativo
+  if (!emp || !emp.ativo) {
     const stores = getStoredStores();
     const store = stores.find(s => s.id === (lojaId || emp?.loja_id));
     return {
@@ -372,7 +340,6 @@ export function verifyUserStillActive(matricula: string, lojaId?: string): { act
 /**
  * Verificação remota direta no banco Supabase: desconecta instantaneamente se o usuário
  * for excluído da tabela 'usuarios' ou tiver 'ativo = false'.
- * Se houver perda de internet ou erro de rede, o usuário NÃO é desconectado.
  */
 export async function verifyUserStillActiveRemote(
   matricula: string,
@@ -380,11 +347,6 @@ export async function verifyUserStillActiveRemote(
 ): Promise<{ active: boolean; companyName?: string }> {
   const cleanMatricula = matricula.trim();
   if (cleanMatricula === '@200309' || cleanMatricula === '111111') {
-    return { active: true };
-  }
-
-  // Evita falso positivo por queda de sinal/rede
-  if (typeof navigator !== 'undefined' && !navigator.onLine) {
     return { active: true };
   }
 
@@ -399,7 +361,7 @@ export async function verifyUserStillActiveRemote(
 
       if (!error) {
         if (!data) {
-          // Usuário NÃO EXISTE mais no banco de dados (apagado explicitamente pelo gerente/admin)
+          // Usuário NÃO EXISTE mais no banco de dados (apagado)
           const stores = getStoredStores();
           const store = stores.find(s => s.id === lojaId);
           return {
@@ -419,18 +381,13 @@ export async function verifyUserStillActiveRemote(
         }
 
         return { active: true };
-      } else {
-        // Se houver erro de rede, mantém o usuário ativo
-        console.debug('Aviso rede ao consultar usuário ativo no Supabase:', error.message);
-        return { active: true };
       }
     } catch (err) {
-      console.debug('Aviso exceção rede ao consultar usuário ativo no Supabase:', err);
-      return { active: true };
+      console.debug('Aviso ao consultar usuário ativo no Supabase:', err);
     }
   }
 
-  // 2. Fallback de verificação local segura
+  // 2. Fallback de verificação local
   return verifyUserStillActive(matricula, lojaId);
 }
 
@@ -545,11 +502,7 @@ export async function loginUser(matricula: string, senha: string): Promise<Login
     if (!matchedEmp.ativo) {
       return { success: false, message: 'Usuário inativo. Contate o gerente da sua loja.' };
     }
-    const cargoLower = matchedEmp.cargo.toLowerCase();
-    const isGerente = cargoLower.includes('gerente') || cargoLower.includes('admin');
-    const isPromotor = cargoLower.includes('promotor');
-    const roleFinal: 'saas_admin' | 'gerente' | 'adm' | 'master' | 'operador' | 'promotor' = 
-      isGerente ? 'gerente' : isPromotor ? 'promotor' : 'operador';
+    const isGerente = matchedEmp.cargo.toLowerCase().includes('gerente') || matchedEmp.cargo.toLowerCase().includes('admin');
     const stores = getStoredStores();
     const matchedStore = stores.find(s => s.id === matchedEmp.loja_id);
 
@@ -560,9 +513,8 @@ export async function loginUser(matricula: string, senha: string): Promise<Login
         id: matchedEmp.id,
         matricula: matchedEmp.matricula,
         nome: matchedEmp.nome,
-        cargo: roleFinal,
+        cargo: isGerente ? 'gerente' : 'operador',
         setor: matchedEmp.setor_restrito === 'TODOS' ? 'Geral' : (matchedEmp.setor_restrito || 'Geral'),
-        codigo_fornecedor: matchedEmp.codigo_fornecedor,
         loja_id: matchedEmp.loja_id,
         loja_nome: matchedStore ? matchedStore.nome_loja : 'Supermercado Silva',
         primeiro_login: matchedEmp.primeiro_login ?? true,
@@ -580,8 +532,7 @@ export async function loginUser(matricula: string, senha: string): Promise<Login
 
       if (!error && data && data.success && data.user) {
         const dbCargo = String(data.user.cargo || 'operador').toLowerCase();
-        const mappedCargo: 'saas_admin' | 'gerente' | 'adm' | 'master' | 'operador' | 'promotor' = 
-          dbCargo.includes('saas') ? 'saas_admin' : dbCargo.includes('gerente') ? 'gerente' : dbCargo.includes('promotor') ? 'promotor' : 'operador';
+        const mappedCargo = dbCargo.includes('saas') ? 'saas_admin' : dbCargo.includes('gerente') ? 'gerente' : 'operador';
 
         return {
           success: true,
@@ -592,7 +543,6 @@ export async function loginUser(matricula: string, senha: string): Promise<Login
             nome: data.user.nome,
             cargo: mappedCargo,
             setor: data.user.setor,
-            codigo_fornecedor: data.user.codigo_fornecedor,
             loja_id: data.user.loja_id || 'loja_padrao_001',
             loja_nome: data.user.loja_nome || 'Supermercado Silva - Loja 01',
             primeiro_login: data.user.primeiro_login ?? true,
@@ -611,8 +561,7 @@ export async function loginUser(matricula: string, senha: string): Promise<Login
       if (!userError && userData) {
         if (userData.senha === cleanSenha) {
           const dbCargo = String(userData.cargo || 'operador').toLowerCase();
-          const mappedCargo: 'saas_admin' | 'gerente' | 'adm' | 'master' | 'operador' | 'promotor' = 
-            dbCargo.includes('saas') ? 'saas_admin' : dbCargo.includes('gerente') ? 'gerente' : dbCargo.includes('promotor') ? 'promotor' : 'operador';
+          const mappedCargo = dbCargo.includes('saas') ? 'saas_admin' : dbCargo.includes('gerente') ? 'gerente' : 'operador';
 
           return {
             success: true,
@@ -623,7 +572,6 @@ export async function loginUser(matricula: string, senha: string): Promise<Login
               nome: userData.nome,
               cargo: mappedCargo,
               setor: userData.setor || 'Prevenção e Estoque',
-              codigo_fornecedor: userData.codigo_fornecedor,
               loja_id: userData.loja_id || 'loja_padrao_001',
               loja_nome: 'Supermercado Silva - Loja 01',
             },
@@ -1248,8 +1196,6 @@ export interface DbAuditBip {
   timestamp: number;
 }
 
-let activeAuditRealtimeChannel: any = null;
-
 const LOCAL_ACTIVE_SESSIONS_KEY = 'superpwa_active_audit_sessions';
 const LOCAL_AUDIT_BIPS_KEY = 'superpwa_audit_bips_';
 
@@ -1516,29 +1462,11 @@ export async function finalizeAuditSessionInDatabase(data: {
     }
   }
 
-  // Notifica instantaneamente todos os participantes da auditoria via WebSocket Broadcast
-  try {
-    if (activeAuditRealtimeChannel) {
-      activeAuditRealtimeChannel.send({
-        type: 'broadcast',
-        event: 'audit_session_finalized',
-        payload: {
-          sessaoId: data.sessaoId,
-          finalizadaPorNome: data.finalizadaPorNome,
-          finalizadaPorMatricula: data.finalizadaPorMatricula,
-          setor: data.setor,
-          totalAuditado: data.totalAuditado,
-          totalEsperado: data.totalEsperado,
-        },
-      });
-    }
-  } catch (err) {
-    console.debug('Aviso broadcast finalização de auditoria:', err);
-  }
-
   return { success: true };
 }
 
+/**
+ * Assina as alterações em tempo real de auditoria (sessões e bips) para sincronizar
 /**
  * Assina as alterações em tempo real de auditoria (sessões e bips) e presença de operadores
  * para sincronizar instantaneamente todos os participantes do setor e alertar desconexões.
@@ -1548,8 +1476,7 @@ export function subscribeToAuditRealtime(
   onEvent: () => void,
   onNewBip?: (bip: DbAuditBip) => void,
   operatorPresence?: { matricula: string; nome: string },
-  onUserOffline?: (userName: string) => void,
-  onSessionFinalized?: (info: { sessaoId: string; finalizadaPorNome: string; setor: string }) => void
+  onUserOffline?: (userName: string) => void
 ): () => void {
   if (!client || !isSupabaseConfigured()) return () => {};
 
@@ -1558,23 +1485,12 @@ export function subscribeToAuditRealtime(
     const channel = client.channel(channelName, {
       config: operatorPresence ? { presence: { key: operatorPresence.matricula } } : {},
     });
-    activeAuditRealtimeChannel = channel;
 
     channel
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'auditoria_presenca_sessoes' },
-        (payload) => {
-          if (payload.eventType === 'UPDATE' && payload.new && (payload.new as Record<string, unknown>).status === 'CONCLUIDA') {
-            const raw = payload.new as Record<string, unknown>;
-            if (onSessionFinalized) {
-              onSessionFinalized({
-                sessaoId: String(raw.id),
-                finalizadaPorNome: String(raw.finalizada_por_nome || 'Liderança'),
-                setor: String(raw.setor || ''),
-              });
-            }
-          }
+        () => {
           onEvent();
         }
       )
@@ -1592,20 +1508,6 @@ export function subscribeToAuditRealtime(
         'postgres_changes',
         { event: 'UPDATE', schema: 'public', table: 'auditoria_presenca_bips' },
         () => {
-          onEvent();
-        }
-      )
-      .on(
-        'broadcast',
-        { event: 'audit_session_finalized' },
-        ({ payload }) => {
-          if (payload && onSessionFinalized) {
-            onSessionFinalized({
-              sessaoId: String(payload.sessaoId),
-              finalizadaPorNome: String(payload.finalizadaPorNome || 'Outro participante'),
-              setor: String(payload.setor || ''),
-            });
-          }
           onEvent();
         }
       );
@@ -1652,7 +1554,6 @@ export function subscribeToAuditRealtime(
 // ============================================================================
 
 export const LOCAL_STORAGE_CHAT_KEY = 'superpwa_chat_messages_v1';
-let activeChatRealtimeChannel: any = null;
 
 export function getStoredChatMessages(lojaId?: string): ChatMessage[] {
   if (typeof window === 'undefined') return [];
@@ -1684,32 +1585,6 @@ export function saveStoredChatMessage(message: ChatMessage): void {
   }
 }
 
-export function deleteStoredChatMessage(messageId: string): void {
-  if (typeof window === 'undefined') return;
-  try {
-    const current = getStoredChatMessages();
-    const filtered = current.filter(m => m.id !== messageId);
-    localStorage.setItem(LOCAL_STORAGE_CHAT_KEY, JSON.stringify(filtered));
-  } catch (e) {
-    console.warn('[Chat] Erro ao excluir mensagem local:', e);
-  }
-}
-
-export function clearStoredChatMessages(lojaId?: string): void {
-  if (typeof window === 'undefined') return;
-  try {
-    if (lojaId) {
-      const current = getStoredChatMessages();
-      const filtered = current.filter(m => m.loja_id !== lojaId);
-      localStorage.setItem(LOCAL_STORAGE_CHAT_KEY, JSON.stringify(filtered));
-    } else {
-      localStorage.removeItem(LOCAL_STORAGE_CHAT_KEY);
-    }
-  } catch (e) {
-    console.warn('[Chat] Erro ao limpar mensagens locais:', e);
-  }
-}
-
 /**
  * Consulta mensagens de chat da loja com suporte a modo offline e fallback
  */
@@ -1733,7 +1608,7 @@ export async function fetchChatMessagesFromSupabase(lojaId: string): Promise<Cha
       return localList;
     }
 
-    if (data) {
+    if (data && data.length > 0) {
       const mapped: ChatMessage[] = data.map(row => ({
         id: String(row.id),
         loja_id: String(row.loja_id),
@@ -1749,7 +1624,7 @@ export async function fetchChatMessagesFromSupabase(lojaId: string): Promise<Cha
         created_at: row.created_at ? String(row.created_at) : undefined,
       }));
 
-      // Sincroniza localmente
+      // Sincroniza local
       try {
         localStorage.setItem(LOCAL_STORAGE_CHAT_KEY, JSON.stringify(mapped));
       } catch {
@@ -1768,7 +1643,6 @@ export async function fetchChatMessagesFromSupabase(lojaId: string): Promise<Cha
 
 /**
  * Envia mensagem para o canal do chat (grupo da loja ou direto com líderes)
- * Utiliza WebSockets Broadcast para latência ultra-baixa instantânea + persistência no Supabase
  */
 export async function sendChatMessageToSupabase(
   msg: Omit<ChatMessage, 'id' | 'timestamp' | 'created_at'>
@@ -1782,19 +1656,6 @@ export async function sendChatMessageToSupabase(
 
   // Salva no armazenamento local imediatamente
   saveStoredChatMessage(newMsg);
-
-  // Transmite via WebSocket Broadcast instantâneo para todos os clientes conectados (< 50ms)
-  try {
-    if (activeChatRealtimeChannel) {
-      activeChatRealtimeChannel.send({
-        type: 'broadcast',
-        event: 'new_message',
-        payload: newMsg,
-      });
-    }
-  } catch (e) {
-    console.debug('[Chat] Erro broadcast mensagem:', e);
-  }
 
   if (!client || !isSupabaseConfigured()) {
     return { success: true, data: newMsg };
@@ -1829,116 +1690,17 @@ export async function sendChatMessageToSupabase(
 }
 
 /**
- * Limpeza completa do chat da loja (Ação exclusiva de Gerente Geral)
- * Deleta todas as mensagens do banco de dados e notifica via WebSocket em tempo real todos os usuários
- */
-export async function clearAllChatMessagesInDatabase(lojaId: string): Promise<{ success: boolean; error?: string }> {
-  // Limpa localmente
-  clearStoredChatMessages(lojaId);
-
-  // Notifica todos os clientes via WebSocket Broadcast instantâneo
-  try {
-    if (activeChatRealtimeChannel) {
-      activeChatRealtimeChannel.send({
-        type: 'broadcast',
-        event: 'chat_cleared',
-        payload: { loja_id: lojaId },
-      });
-    }
-  } catch (e) {
-    console.debug('[Chat] Erro broadcast clear_chat:', e);
-  }
-
-  if (client && isSupabaseConfigured()) {
-    try {
-      const { error } = await client
-        .from('chat_mensagens')
-        .delete()
-        .eq('loja_id', lojaId);
-
-      if (error) {
-        console.warn('[Chat] Erro ao deletar mensagens no Supabase:', error.message);
-      }
-    } catch (err) {
-      console.warn('[Chat] Falha ao deletar do Supabase:', err);
-    }
-  }
-
-  return { success: true };
-}
-
-/**
- * Exclui uma mensagem individual diretamente no banco e sincroniza para todos
- */
-export async function deleteChatMessageFromDatabase(messageId: string, lojaId: string): Promise<{ success: boolean }> {
-  deleteStoredChatMessage(messageId);
-
-  try {
-    if (activeChatRealtimeChannel) {
-      activeChatRealtimeChannel.send({
-        type: 'broadcast',
-        event: 'delete_message',
-        payload: { id: messageId },
-      });
-    }
-  } catch (e) {
-    console.debug('[Chat] Erro broadcast delete_message:', e);
-  }
-
-  if (client && isSupabaseConfigured()) {
-    try {
-      await client.from('chat_mensagens').delete().eq('id', messageId);
-    } catch (err) {
-      console.warn('[Chat] Erro ao deletar mensagem individual:', err);
-    }
-  }
-
-  return { success: true };
-}
-
-/**
- * Assina o canal de chat da loja em tempo real (WebSockets / Broadcast / Postgres Changes)
- * Suporta inserção instantânea, exclusão de mensagens sincronizada e limpeza total de chat
+ * Assina o canal de chat da loja em tempo real
  */
 export function subscribeToChatRealtime(
   lojaId: string,
-  onNewMessage: (msg: ChatMessage) => void,
-  onDeleteMessage?: (messageId: string) => void,
-  onChatCleared?: () => void
+  onNewMessage: (msg: ChatMessage) => void
 ): () => void {
   if (!client || !isSupabaseConfigured()) return () => {};
 
   try {
-    // Canal estável para todos os usuários daquela loja
-    const channelName = `realtime_chat_${lojaId}`;
-    const channel = client.channel(channelName);
-    activeChatRealtimeChannel = channel;
-
-    channel
-      // 1. Mensagens instantâneas via WebSocket Broadcast (< 50ms)
-      .on('broadcast', { event: 'new_message' }, ({ payload }) => {
-        if (payload) {
-          saveStoredChatMessage(payload as ChatMessage);
-          onNewMessage(payload as ChatMessage);
-        }
-      })
-      // 2. Notificação de exclusão de mensagem individual via Broadcast
-      .on('broadcast', { event: 'delete_message' }, ({ payload }) => {
-        if (payload && payload.id) {
-          deleteStoredChatMessage(String(payload.id));
-          if (onDeleteMessage) {
-            onDeleteMessage(String(payload.id));
-          }
-        }
-      })
-      // 3. Notificação de limpeza total de chat via Broadcast
-      .on('broadcast', { event: 'chat_cleared' }, () => {
-        clearStoredChatMessages(lojaId);
-        if (onChatCleared) {
-          onChatCleared();
-        }
-      })
-      // 4. Alterações diretas no banco de dados (INSERT)
+    const channel = client
+      .channel(`realtime_chat_${lojaId}_${Date.now()}`)
       .on(
         'postgres_changes',
         {
@@ -1969,32 +1731,6 @@ export function subscribeToChatRealtime(
           }
         }
       )
-      // 5. Exclusão direta no banco de dados (DELETE) - sincroniza para todos os clientes
-      .on(
-        'postgres_changes',
-        {
-          event: 'DELETE',
-          schema: 'public',
-          table: 'chat_mensagens',
-        },
-        (payload) => {
-          const oldRec = payload.old as Record<string, unknown> | null;
-          if (oldRec && oldRec.id) {
-            deleteStoredChatMessage(String(oldRec.id));
-            if (onDeleteMessage) {
-              onDeleteMessage(String(oldRec.id));
-            }
-          } else {
-            // Se foi truncate ou exclusão em lote no banco de dados sem old.id
-            fetchChatMessagesFromSupabase(lojaId).then(msgs => {
-              if (msgs.length === 0) {
-                clearStoredChatMessages(lojaId);
-                if (onChatCleared) onChatCleared();
-              }
-            });
-          }
-        }
-      )
       .subscribe();
 
     return () => {
@@ -2002,198 +1738,6 @@ export function subscribeToChatRealtime(
     };
   } catch (err) {
     console.warn('[Chat] Falha ao registrar realtime:', err);
-    return () => {};
-  }
-}
-
-// ============================================================================
-// 13. GESTÃO DE AVARIAS NO ESTOQUE (ACESSÍVEL A TODOS OS CARGOS)
-// ============================================================================
-
-export const LOCAL_STORAGE_AVARIAS_KEY = 'superpwa_avarias_estoque_v1';
-let activeAvariasRealtimeChannel: any = null;
-
-export function getStoredAvarias(lojaId?: string): AvariaItem[] {
-  if (typeof window === 'undefined') return [];
-  try {
-    const raw = localStorage.getItem(LOCAL_STORAGE_AVARIAS_KEY);
-    if (!raw) return [];
-    const list: AvariaItem[] = JSON.parse(raw);
-    if (lojaId) {
-      return list.filter(a => a.loja_id === lojaId);
-    }
-    return list;
-  } catch (e) {
-    console.warn('[Avarias] Erro ao ler avarias locais:', e);
-    return [];
-  }
-}
-
-export function saveStoredAvaria(avaria: AvariaItem): void {
-  if (typeof window === 'undefined') return;
-  try {
-    const current = getStoredAvarias();
-    const updated = [avaria, ...current.filter(a => a.id !== avaria.id)];
-    localStorage.setItem(LOCAL_STORAGE_AVARIAS_KEY, JSON.stringify(updated));
-  } catch (e) {
-    console.warn('[Avarias] Erro ao salvar avaria local:', e);
-  }
-}
-
-export async function saveAvariaInDatabase(
-  avariaData: Omit<AvariaItem, 'id' | 'registrado_em' | 'timestamp'>
-): Promise<{ success: boolean; data?: AvariaItem; error?: string }> {
-  const nowMs = Date.now();
-  const newAvaria: AvariaItem = {
-    ...avariaData,
-    id: `avaria_${nowMs}_${Math.random().toString(36).substring(2, 7)}`,
-    registrado_em: new Date(nowMs).toLocaleString('pt-BR'),
-    timestamp: nowMs,
-  };
-
-  saveStoredAvaria(newAvaria);
-
-  // Notifica via WebSocket Broadcast
-  try {
-    if (activeAvariasRealtimeChannel) {
-      activeAvariasRealtimeChannel.send({
-        type: 'broadcast',
-        event: 'new_avaria',
-        payload: newAvaria,
-      });
-    }
-  } catch (e) {
-    console.debug('[Avarias] Erro broadcast nova avaria:', e);
-  }
-
-  if (client && isSupabaseConfigured()) {
-    try {
-      await ensureStoreExists(newAvaria.loja_id);
-      const { error } = await client.from('avarias_estoque').upsert({
-        id: newAvaria.id,
-        loja_id: newAvaria.loja_id,
-        codigo_barras: newAvaria.codigo_barras,
-        codigo_reduzido: newAvaria.codigo_reduzido || null,
-        produto_nome: newAvaria.produto_nome,
-        quantidade: newAvaria.quantidade,
-        tipo_avaria: newAvaria.tipo_avaria,
-        para_troca: newAvaria.para_troca,
-        setor: newAvaria.setor || null,
-        registrado_por_nome: newAvaria.registrado_por_nome,
-        registrado_por_matricula: newAvaria.registrado_por_matricula,
-        timestamp: newAvaria.timestamp,
-      });
-
-      if (error) {
-        console.warn('[Avarias] Aviso upsert avaria:', error.message);
-      }
-    } catch (err) {
-      console.warn('[Avarias] Erro ao salvar avaria no Supabase:', err);
-    }
-  }
-
-  return { success: true, data: newAvaria };
-}
-
-export async function fetchAvariasFromDatabase(lojaId: string): Promise<AvariaItem[]> {
-  const localList = getStoredAvarias(lojaId);
-
-  if (!client || !isSupabaseConfigured()) {
-    return localList;
-  }
-
-  try {
-    const { data, error } = await client
-      .from('avarias_estoque')
-      .select('*')
-      .eq('loja_id', lojaId)
-      .order('timestamp', { ascending: false })
-      .limit(200);
-
-    if (!error && data && data.length > 0) {
-      const mapped: AvariaItem[] = data.map(row => ({
-        id: String(row.id),
-        loja_id: String(row.loja_id),
-        codigo_barras: String(row.codigo_barras),
-        codigo_reduzido: row.codigo_reduzido ? String(row.codigo_reduzido) : undefined,
-        produto_nome: String(row.produto_nome || ''),
-        quantidade: Number(row.quantidade) || 1,
-        tipo_avaria: (row.tipo_avaria as any) || 'Outro',
-        para_troca: Boolean(row.para_troca),
-        setor: row.setor ? String(row.setor) : undefined,
-        registrado_por_nome: String(row.registrado_por_nome || ''),
-        registrado_por_matricula: String(row.registrado_por_matricula || ''),
-        registrado_em: new Date(Number(row.timestamp) || Date.now()).toLocaleString('pt-BR'),
-        timestamp: Number(row.timestamp) || Date.now(),
-      }));
-
-      try {
-        localStorage.setItem(LOCAL_STORAGE_AVARIAS_KEY, JSON.stringify(mapped));
-      } catch {
-        // ignore
-      }
-
-      return mapped;
-    }
-
-    return localList;
-  } catch (err) {
-    console.warn('[Avarias] Erro ao carregar avarias do Supabase:', err);
-    return localList;
-  }
-}
-
-export function subscribeToAvariasRealtime(
-  lojaId: string,
-  onNewAvaria: (avaria: AvariaItem) => void
-): () => void {
-  if (!client || !isSupabaseConfigured()) return () => {};
-
-  try {
-    const channelName = `realtime_avarias_${lojaId}`;
-    const channel = client.channel(channelName);
-    activeAvariasRealtimeChannel = channel;
-
-    channel
-      .on('broadcast', { event: 'new_avaria' }, ({ payload }) => {
-        if (payload) {
-          saveStoredAvaria(payload as AvariaItem);
-          onNewAvaria(payload as AvariaItem);
-        }
-      })
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'avarias_estoque' },
-        (payload) => {
-          if (payload.new) {
-            const raw = payload.new as Record<string, unknown>;
-            const avaria: AvariaItem = {
-              id: String(raw.id),
-              loja_id: String(raw.loja_id),
-              codigo_barras: String(raw.codigo_barras),
-              codigo_reduzido: raw.codigo_reduzido ? String(raw.codigo_reduzido) : undefined,
-              produto_nome: String(raw.produto_nome || ''),
-              quantidade: Number(raw.quantidade) || 1,
-              tipo_avaria: (raw.tipo_avaria as any) || 'Outro',
-              para_troca: Boolean(raw.para_troca),
-              setor: raw.setor ? String(raw.setor) : undefined,
-              registrado_por_nome: String(raw.registrado_por_nome || ''),
-              registrado_por_matricula: String(raw.registrado_por_matricula || ''),
-              registrado_em: new Date(Number(raw.timestamp) || Date.now()).toLocaleString('pt-BR'),
-              timestamp: Number(raw.timestamp) || Date.now(),
-            };
-            saveStoredAvaria(avaria);
-            onNewAvaria(avaria);
-          }
-        }
-      )
-      .subscribe();
-
-    return () => {
-      client?.removeChannel(channel);
-    };
-  } catch (err) {
-    console.warn('[Avarias] Erro ao registrar realtime de avarias:', err);
     return () => {};
   }
 }
