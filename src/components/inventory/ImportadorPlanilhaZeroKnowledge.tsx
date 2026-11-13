@@ -66,8 +66,8 @@ interface ImportadorProps {
 }
 
 export const ImportadorPlanilhaZeroKnowledge: React.FC<ImportadorProps> = ({
-  lojaId = 'loja_padrao_001',
-  usuarioId = 'operador_4092',
+  lojaId = '',
+  usuarioId = '',
   onImportComplete,
 }) => {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -342,39 +342,11 @@ export const ImportadorPlanilhaZeroKnowledge: React.FC<ImportadorProps> = ({
   const handleDownloadTemplate = () => {
     const templateData = [
       {
-        'Produto': 'Leite UHT Integral 1 Litro',
-        'Código de fornecedor': 'FORN-8832',
-        'Código Reduzido': 'RED-104',
-        'Código de barras': '7891000100011',
-        'Quantidade': 120,
-      },
-      {
-        'Produto': 'Iogurte Tradicional Morango 170g',
-        'Código de fornecedor': 'FORN-4421',
-        'Código Reduzido': 'RED-208',
-        'Código de barras': '7891000100028',
-        'Quantidade': 45,
-      },
-      {
-        'Produto': 'Arroz Branco Longo Fino Tipo 1 5kg',
-        'Código de fornecedor': 'FORN-9910',
-        'Código Reduzido': 'RED-305',
-        'Código de barras': '7891000100035',
-        'Quantidade': 80,
-      },
-      {
-        'Produto': 'Feijão Carioca Nobre 1kg',
-        'Código de fornecedor': 'FORN-9910',
-        'Código Reduzido': 'RED-309',
-        'Código de barras': '7891000100042',
-        'Quantidade': 30,
-      },
-      {
-        'Produto': 'Café Torrado e Moído Tradicional 500g',
-        'Código de fornecedor': 'FORN-1205',
-        'Código Reduzido': 'RED-401',
-        'Código de barras': '7891000100059',
-        'Quantidade': 60,
+        'Produto': '',
+        'Código de fornecedor': '',
+        'Código Reduzido': '',
+        'Código de barras': '',
+        'Quantidade': '',
       },
     ];
 

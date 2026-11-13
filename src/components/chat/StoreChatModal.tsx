@@ -71,7 +71,7 @@ export const StoreChatModal: React.FC = () => {
   if (!isChatOpen) return null;
 
   const selectedLeader = storeLeaders.find(l => l.matricula === selectedLeaderMatricula) || storeLeaders[0];
-  const userMatricula = operator.code || operator.matricula || '4092';
+  const userMatricula = operator.code || operator.matricula || '';
 
   // Filtra as mensagens pelo canal ativo
   const filteredMessages = chatMessages.filter(m => {

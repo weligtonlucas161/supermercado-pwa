@@ -85,7 +85,7 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
 
   if (!isOpen || !product) return null;
 
-  const operatorIdentifier = `${operator.name || 'Operador'} (${operator.code || '4092'})`;
+  const operatorIdentifier = operator.code ? `${operator.name || 'Operador'} (${operator.code})` : (operator.name || 'Operador');
   const isLockedByOther = Boolean(
     product.isLockedForEdit && 
     product.lockedBy && 

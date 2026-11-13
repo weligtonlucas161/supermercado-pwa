@@ -49,7 +49,7 @@ function AppContent() {
         {showFirstLoginModal && (
           <FirstLoginPasswordModal
             isOpen={true}
-            matricula={currentUser?.matricula || '@200309'}
+            matricula={currentUser?.matricula || ''}
             userName={currentUser?.nome || 'Administrador SaaS'}
             isSaasAdmin={true}
             onPasswordChanged={updateUserPassword}

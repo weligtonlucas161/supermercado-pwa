@@ -307,7 +307,7 @@ export const InicioTab: React.FC = () => {
         </div>
 
         <h2 className="text-2xl font-black mt-2 tracking-tight">
-          Supermercado Silva
+          {operator.store || 'Controle de Validade e Auditorias'}
         </h2>
         <p className="text-emerald-100 text-xs sm:text-sm mt-1 max-w-lg">
           {urgentValidities.length > 0

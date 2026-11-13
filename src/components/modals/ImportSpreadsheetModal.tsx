@@ -207,39 +207,11 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
   const handleDownloadTemplate = () => {
     const template = [
       {
-        'Descrição do produto': 'Leite UHT Integral 1 Litro',
-        'Código de fornecedor': 'FORN-8832',
-        'Código reduzido': 'RED-104',
-        'Código EAN': '7891000100011',
-        'Quantidade': 120,
-      },
-      {
-        'Descrição do produto': 'Iogurte Tradicional Morango 170g',
-        'Código de fornecedor': 'FORN-4421',
-        'Código reduzido': 'RED-208',
-        'Código EAN': '7891000100028',
-        'Quantidade': 45,
-      },
-      {
-        'Descrição do produto': 'Arroz Branco Longo Fino 5kg',
-        'Código de fornecedor': 'FORN-9910',
-        'Código reduzido': 'RED-305',
-        'Código EAN': '7891000100035',
-        'Quantidade': 80,
-      },
-      {
-        'Descrição do produto': 'Feijão Carioca Nobre 1kg',
-        'Código de fornecedor': 'FORN-9910',
-        'Código reduzido': 'RED-309',
-        'Código EAN': '7891000100042',
-        'Quantidade': 30,
-      },
-      {
-        'Descrição do produto': 'Café Torrado e Moído Tradicional 500g',
-        'Código de fornecedor': 'FORN-1205',
-        'Código reduzido': 'RED-401',
-        'Código EAN': '7891000100059',
-        'Quantidade': 60,
+        'Descrição do produto': '',
+        'Código de fornecedor': '',
+        'Código reduzido': '',
+        'Código EAN': '',
+        'Quantidade': '',
       },
     ];
 
@@ -398,9 +370,9 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
           setUploadProgress(pct);
         },
         {
-          lojaId: operator.loja_id || 'loja_padrao_001',
-          operatorMatricula: operator.code || '4092',
-          operatorNome: operator.name || 'Carlos Silva',
+          lojaId: operator.loja_id || '',
+          operatorMatricula: operator.code || '',
+          operatorNome: operator.name || 'Operador',
         }
       );
 
@@ -415,7 +387,7 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
         setor: selectedSetor,
         sector: selectedSetor,
       }));
-      importProductsBatch(itemsToBatch, selectedSetor, operator.loja_id || 'loja_padrao_001');
+      importProductsBatch(itemsToBatch, selectedSetor, operator.loja_id || '');
 
       setIsUploading(false);
 

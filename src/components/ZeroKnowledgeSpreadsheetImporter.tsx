@@ -128,7 +128,7 @@ interface ImporterProps {
 }
 
 export const ZeroKnowledgeSpreadsheetImporter: React.FC<ImporterProps> = ({
-  lojaId = 'loja_padrao_001',
+  lojaId = '',
   tableName = 'produtos',
   onImportSuccess,
 }) => {
@@ -636,41 +636,7 @@ export const ListagemProdutos: React.FC<ListagemProps> = ({ encryptedData, encry
   const [showRawEncrypted, setShowRawEncrypted] = useState<boolean>(false);
   const [searchTerm, setSearchTerm] = useState<string>('');
 
-  // Fallback com dados simulados caso o usuário ainda não tenha feito upload
-  const displayItems: EncryptedProductPayload[] = encryptedData.length > 0 
-    ? encryptedData 
-    : [
-        {
-          id: 'sim-1',
-          nome: encryptField('Leite Integral 1L', encryptionKey),
-          codigo_fornecedor: encryptField('FORN-991', encryptionKey),
-          plu: encryptField('1022', encryptionKey),
-          codigo_barras: encryptField('7891000100011', encryptionKey),
-          quantidade: 142,
-          is_encrypted: true,
-          loja_id: 'loja_padrao_001',
-        },
-        {
-          id: 'sim-2',
-          nome: encryptField('Arroz Tipo 1 5kg', encryptionKey),
-          codigo_fornecedor: encryptField('FORN-330', encryptionKey),
-          plu: encryptField('2040', encryptionKey),
-          codigo_barras: encryptField('7891000100035', encryptionKey),
-          quantidade: 85,
-          is_encrypted: true,
-          loja_id: 'loja_padrao_001',
-        },
-        {
-          id: 'sim-3',
-          nome: encryptField('Azeite Extra Virgem 500ml', encryptionKey),
-          codigo_fornecedor: encryptField('FORN-554', encryptionKey),
-          plu: encryptField('3090', encryptionKey),
-          codigo_barras: encryptField('7891000100073', encryptionKey),
-          quantidade: 19,
-          is_encrypted: true,
-          loja_id: 'loja_padrao_001',
-        },
-      ];
+  const displayItems: EncryptedProductPayload[] = encryptedData;
 
   // Descriptografia pontual em memória RAM para busca e exibição
   const processedRows = displayItems.map((item, index) => {

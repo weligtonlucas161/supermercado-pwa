@@ -8,14 +8,14 @@ export const INITIAL_VALIDITIES: ValidityItem[] = [];
 export const INITIAL_AUDITS: AuditItem[] = [];
 
 export const INITIAL_OPERATOR: Operator = {
-  id: 'usr_op_carlos_4092',
-  name: 'Carlos Silva',
-  code: '4092',
-  matricula: '4092',
+  id: '',
+  name: '',
+  code: '',
+  matricula: '',
   role: 'operador',
-  store: 'Supermercado Silva - Loja 01 (Matriz)',
-  loja_id: 'loja_padrao_001',
-  shift: 'Manhã (07:00 - 15:20)',
+  store: '',
+  loja_id: '',
+  shift: '',
 };
 
 // Sem notificações simuladas - apenas eventos reais do sistema

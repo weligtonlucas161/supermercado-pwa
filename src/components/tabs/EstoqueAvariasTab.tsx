@@ -113,7 +113,7 @@ export const EstoqueAvariasTab: React.FC = () => {
 
     setEnviando(true);
     const res = await addAvaria({
-      loja_id: operator.loja_id || 'loja_padrao_001',
+      loja_id: operator.loja_id || '',
       codigo_barras: codigo,
       codigo_reduzido: codigoReduzido.trim() || undefined,
       produto_nome: produtoNome.trim(),

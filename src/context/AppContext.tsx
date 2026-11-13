@@ -305,10 +305,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, []);
 
   const refreshEmployees = useCallback(async (lojaId?: string) => {
-    const targetLoja = lojaId || operator.loja_id || 'loja_padrao_001';
+    const targetLoja = lojaId || (isSaasAdmin ? 'todas' : (operator.loja_id || ''));
     const emps = await fetchStoreEmployees(targetLoja);
     setEmployees(emps);
-  }, [operator.loja_id]);
+  }, [operator.loja_id, isSaasAdmin]);
 
   const refreshRoles = useCallback(async () => {
     const r = getStoredRoles();
@@ -859,7 +859,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   });
 
   const refreshAvarias = useCallback(async () => {
-    const lojaId = operator.loja_id || 'loja_padrao_001';
+    const lojaId = operator.loja_id || '';
     const list = await fetchAvariasFromDatabase(lojaId);
     setAvarias(list);
   }, [operator.loja_id]);
@@ -900,7 +900,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Carrega as avarias e assina o canal em tempo real ao autenticar
   useEffect(() => {
     if (!isAuthenticated) return;
-    const lojaId = operator.loja_id || 'loja_padrao_001';
+    const lojaId = operator.loja_id || '';
 
     refreshAvarias();
 
@@ -968,11 +968,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     is_anonimo: boolean;
   }) => {
     const res = await sendChatMessageToSupabase({
-      loja_id: operator.loja_id || 'loja_padrao_001',
+      loja_id: operator.loja_id || '',
       canal_tipo: msgData.canal_tipo,
       destinatario_id: msgData.destinatario_id,
       destinatario_nome: msgData.destinatario_nome,
-      remetente_matricula: operator.code || '4092',
+      remetente_matricula: operator.code || operator.matricula || '',
       remetente_nome: msgData.is_anonimo ? 'Operador Anônimo' : (operator.name || 'Operador'),
       remetente_cargo: msgData.is_anonimo ? 'Sigilo Operacional' : operator.role,
       is_anonimo: msgData.is_anonimo,
@@ -1004,7 +1004,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Carregar mensagens do chat e registrar canal em tempo real
   useEffect(() => {
     if (!isAuthenticated) return;
-    const lojaId = operator.loja_id || 'loja_padrao_001';
+    const lojaId = operator.loja_id || '';
 
     const mergeIncoming = (msgs: ChatMessage[]) => {
       if (!msgs || msgs.length === 0) return;

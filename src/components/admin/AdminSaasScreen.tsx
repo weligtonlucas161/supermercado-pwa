@@ -34,7 +34,13 @@ import {
 import { useApp } from '../../context/AppContext';
 import { Store, StoreEmployee } from '../../types';
 import { triggerScanBeep } from '../../utils/haptics';
-import { fetchSaasTelemetry, SaasTelemetryData } from '../../services/supabaseService';
+import { 
+  fetchSaasTelemetry, 
+  SaasTelemetryData, 
+  fetchStoreEmployees, 
+  fetchStoreActiveSessions, 
+  ActiveSession 
+} from '../../services/supabaseService';
 
 export const AdminSaasScreen: React.FC = () => {
   const { 
@@ -73,11 +79,14 @@ export const AdminSaasScreen: React.FC = () => {
     return () => clearInterval(interval);
   }, [stores.length, employees.length]);
 
-  // Modal de Detalhes da Loja com Hierarquia de Usuários e Revelação de Senhas
+  // Modal de Detalhes da Loja com Hierarquia de Usuários, Senhas e Sessões Ativas
   const [selectedStoreForDetails, setSelectedStoreForDetails] = useState<Store | null>(null);
   const [editingUserLimit, setEditingUserLimit] = useState<number>(15);
   const [isSavingLimit, setIsSavingLimit] = useState(false);
   const [revealedPasswords, setRevealedPasswords] = useState<Record<string, boolean>>({});
+  const [storeActiveSessions, setStoreActiveSessions] = useState<ActiveSession[]>([]);
+  const [localStoreEmps, setLocalStoreEmps] = useState<StoreEmployee[]>([]);
+  const [isLoadingStoreDetails, setIsLoadingStoreDetails] = useState(false);
 
   const togglePasswordReveal = (empId: string) => {
     setRevealedPasswords(prev => ({
@@ -86,10 +95,35 @@ export const AdminSaasScreen: React.FC = () => {
     }));
   };
 
+  const loadStoreDetailsData = async (storeId: string) => {
+    setIsLoadingStoreDetails(true);
+    try {
+      const [emps, sessions] = await Promise.all([
+        fetchStoreEmployees(storeId),
+        fetchStoreActiveSessions(storeId),
+      ]);
+      setLocalStoreEmps(emps);
+      setStoreActiveSessions(sessions);
+    } catch (err) {
+      console.warn('Erro ao carregar detalhes da loja:', err);
+    } finally {
+      setIsLoadingStoreDetails(false);
+    }
+  };
+
   const handleOpenStoreDetails = (store: Store) => {
     setSelectedStoreForDetails(store);
     setEditingUserLimit(store.limite_usuarios || 15);
+    loadStoreDetailsData(store.id);
   };
+
+  useEffect(() => {
+    if (!selectedStoreForDetails) return;
+    const interval = setInterval(() => {
+      loadStoreDetailsData(selectedStoreForDetails.id);
+    }, 15000);
+    return () => clearInterval(interval);
+  }, [selectedStoreForDetails?.id]);
 
   const handleSaveStoreUserLimit = async () => {
     if (!selectedStoreForDetails) return;
@@ -132,7 +166,7 @@ export const AdminSaasScreen: React.FC = () => {
   const [managerName, setManagerName] = useState('');
   const [managerMatricula, setManagerMatricula] = useState('');
   const [managerPassword, setManagerPassword] = useState('');
-  const [managerStoreId, setManagerStoreId] = useState(stores[0]?.id || 'loja_padrao_001');
+  const [managerStoreId, setManagerStoreId] = useState(stores[0]?.id || '');
 
   // Feedback
   const [feedbackMessage, setFeedbackMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
@@ -659,10 +693,12 @@ export const AdminSaasScreen: React.FC = () => {
       </main>
 
       {/* =================================================================== */}
-      {/* POP-UP DETALHADO DA LOJA: DADOS, HIERARQUIA E VISUALIZAÇÃO DE SENHAS */}
+      {/* POP-UP DETALHADO DA LOJA: DADOS, HIERARQUIA, SESSÕES E VISUALIZAÇÃO DE SENHAS */}
       {/* =================================================================== */}
       {selectedStoreForDetails && (() => {
-        const storeEmps = employees.filter(e => e.loja_id === selectedStoreForDetails.id);
+        const storeEmps = localStoreEmps.length > 0 
+          ? localStoreEmps 
+          : employees.filter(e => e.loja_id === selectedStoreForDetails.id);
         const gerentes = storeEmps.filter(
           e => e.cargo.toLowerCase().includes('gerente') || e.cargo.toLowerCase().includes('admin') || e.cargo.toLowerCase().includes('master')
         );
@@ -694,7 +730,11 @@ export const AdminSaasScreen: React.FC = () => {
                 </div>
 
                 <button 
-                  onClick={() => setSelectedStoreForDetails(null)}
+                  onClick={() => {
+                    setSelectedStoreForDetails(null);
+                    setLocalStoreEmps([]);
+                    setStoreActiveSessions([]);
+                  }}
                   className="p-1.5 rounded-xl text-slate-400 hover:text-slate-600 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 transition"
                 >
                   <X className="w-5 h-5" />
@@ -724,7 +764,7 @@ export const AdminSaasScreen: React.FC = () => {
                 <div>
                   <span className="text-[10px] font-bold text-slate-400 uppercase block">Tipo</span>
                   <span className="font-semibold text-slate-800 dark:text-slate-200 block">
-                    {selectedStoreForDetails.id === 'loja_padrao_001' ? 'Matriz' : 'Filial'}
+                    {selectedStoreForDetails.nome_loja.toLowerCase().includes('matriz') ? 'Matriz' : 'Unidade'}
                   </span>
                 </div>
               </div>
@@ -792,28 +832,26 @@ export const AdminSaasScreen: React.FC = () => {
               </div>
 
               {/* Métricas de Consumo da Loja no Modal */}
-              {telemetry?.stores?.[selectedStoreForDetails.id] && (
-                <div className="grid grid-cols-3 gap-2 p-2.5 rounded-2xl bg-slate-50 dark:bg-slate-850 border border-slate-200/70 dark:border-slate-800 text-center text-xs">
-                  <div>
-                    <span className="text-[10px] text-slate-400 block font-medium uppercase">Produtos em Estoque</span>
-                    <span className="font-extrabold text-slate-900 dark:text-white text-sm">
-                      {telemetry.stores[selectedStoreForDetails.id].products_count} itens
-                    </span>
-                  </div>
-                  <div className="border-x border-slate-200 dark:border-slate-750">
-                    <span className="text-[10px] text-slate-400 block font-medium uppercase">Conexões Ativas</span>
-                    <span className="font-extrabold text-emerald-600 dark:text-emerald-400 text-sm">
-                      {telemetry.stores[selectedStoreForDetails.id].sessions_count} online
-                    </span>
-                  </div>
-                  <div>
-                    <span className="text-[10px] text-slate-400 block font-medium uppercase">Logs & Auditorias</span>
-                    <span className="font-extrabold text-slate-900 dark:text-white text-sm">
-                      {telemetry.stores[selectedStoreForDetails.id].logs_count} registros
-                    </span>
-                  </div>
+              <div className="grid grid-cols-3 gap-2 p-2.5 rounded-2xl bg-slate-50 dark:bg-slate-850 border border-slate-200/70 dark:border-slate-800 text-center text-xs">
+                <div>
+                  <span className="text-[10px] text-slate-400 block font-medium uppercase">Produtos em Estoque</span>
+                  <span className="font-extrabold text-slate-900 dark:text-white text-sm">
+                    {telemetry?.stores?.[selectedStoreForDetails.id]?.products_count ?? 0} itens
+                  </span>
                 </div>
-              )}
+                <div className="border-x border-slate-200 dark:border-slate-750">
+                  <span className="text-[10px] text-slate-400 block font-medium uppercase">Conexões Ativas</span>
+                  <span className="font-extrabold text-emerald-600 dark:text-emerald-400 text-sm">
+                    {storeActiveSessions.length} online
+                  </span>
+                </div>
+                <div>
+                  <span className="text-[10px] text-slate-400 block font-medium uppercase">Logs & Auditorias</span>
+                  <span className="font-extrabold text-slate-900 dark:text-white text-sm">
+                    {telemetry?.stores?.[selectedStoreForDetails.id]?.logs_count ?? 0} registros
+                  </span>
+                </div>
+              </div>
 
               {/* Endereço */}
               {selectedStoreForDetails.endereco && (
@@ -823,19 +861,79 @@ export const AdminSaasScreen: React.FC = () => {
                 </p>
               )}
 
-              {/* Seção Hierárquica: Gerentes vs Funcionários */}
+              {/* Seção de Sessões Ativas e Hierarquia */}
               <div className="flex-1 overflow-y-auto space-y-4 pr-1">
-                {/* 1. HIERARQUIA 1: GERENTES E LIDERANÇAS */}
+                {/* 1. SESSÕES ATIVAS SINCRONIZADAS EM TEMPO REAL */}
+                <div className="space-y-2 p-3.5 rounded-2xl bg-emerald-500/5 dark:bg-emerald-950/20 border border-emerald-500/20">
+                  <div className="flex items-center justify-between">
+                    <h4 className="text-xs font-black uppercase tracking-wider text-emerald-600 dark:text-emerald-400 flex items-center gap-1.5">
+                      <Radio className="w-3.5 h-3.5 animate-pulse" />
+                      <span>Sessões Ativas Online ({storeActiveSessions.length})</span>
+                    </h4>
+                    <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-bold">
+                      Banco de Dados (sessoes_ativas)
+                    </span>
+                  </div>
+
+                  {isLoadingStoreDetails && storeActiveSessions.length === 0 ? (
+                    <div className="p-3 text-center text-xs text-slate-400 flex items-center justify-center gap-2">
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                      <span>Sincronizando sessões ativas do banco...</span>
+                    </div>
+                  ) : storeActiveSessions.length === 0 ? (
+                    <div className="p-3 rounded-xl bg-white/70 dark:bg-slate-800/60 text-xs text-slate-400 text-center border border-dashed border-slate-200 dark:border-slate-700">
+                      Nenhuma sessão ativa conectada nesta unidade no momento.
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      {storeActiveSessions.map((sess, idx) => (
+                        <div 
+                          key={sess.matricula + '_' + idx}
+                          className="p-2.5 rounded-xl bg-white dark:bg-slate-800 border border-emerald-200 dark:border-emerald-800/60 flex items-center justify-between gap-2 shadow-xs"
+                        >
+                          <div className="space-y-0.5">
+                            <div className="flex items-center gap-1.5">
+                              <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0" />
+                              <span className="font-extrabold text-xs text-slate-900 dark:text-white">
+                                {sess.usuario_nome || sess.matricula}
+                              </span>
+                            </div>
+                            <p className="text-[11px] text-slate-400 font-mono">
+                              Matrícula: <strong>{sess.matricula}</strong>
+                            </p>
+                          </div>
+                          <div className="text-right">
+                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400">
+                              🟢 Ativa
+                            </span>
+                            {sess.last_seen && (
+                              <p className="text-[9px] text-slate-400 mt-1">
+                                Visto às {new Date(sess.last_seen).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* 2. HIERARQUIA 1: GERENTES E LIDERANÇAS */}
                 <div className="space-y-2">
                   <div className="flex items-center justify-between">
                     <h4 className="text-xs font-black uppercase tracking-wider text-rose-600 dark:text-rose-400 flex items-center gap-1.5">
                       <KeyRound className="w-3.5 h-3.5" />
-                      <span>1. Gerentes & Lideranças da Loja ({gerentes.length})</span>
+                      <span>2. Gerentes & Lideranças da Loja ({gerentes.length})</span>
                     </h4>
                     <span className="text-[10px] text-slate-400">Nível Hierárquico 1</span>
                   </div>
 
-                  {gerentes.length === 0 ? (
+                  {isLoadingStoreDetails && gerentes.length === 0 ? (
+                    <div className="p-3 text-center text-xs text-slate-400 flex items-center justify-center gap-2">
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                      <span>Carregando gerentes da loja...</span>
+                    </div>
+                  ) : gerentes.length === 0 ? (
                     <div className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-800 text-xs text-slate-400 text-center">
                       Nenhum gerente cadastrado nesta loja.
                     </div>
@@ -843,6 +941,10 @@ export const AdminSaasScreen: React.FC = () => {
                     <div className="space-y-1.5">
                       {gerentes.map(emp => {
                         const isRevealed = Boolean(revealedPasswords[emp.id]);
+                        const isOnline = storeActiveSessions.some(
+                          s => s.matricula.trim().toLowerCase() === emp.matricula.trim().toLowerCase()
+                        );
+
                         return (
                           <div 
                             key={emp.id}
@@ -854,6 +956,16 @@ export const AdminSaasScreen: React.FC = () => {
                                 <span className="text-[10px] font-bold px-1.5 py-0.2 rounded bg-rose-500 text-white">
                                   {emp.cargo}
                                 </span>
+                                {isOnline ? (
+                                  <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
+                                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                                    Online
+                                  </span>
+                                ) : (
+                                  <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-slate-200 dark:bg-slate-700 text-slate-500 dark:text-slate-400">
+                                    Offline
+                                  </span>
+                                )}
                               </div>
                               <p className="text-[11px] text-slate-400 font-mono">
                                 Matrícula: <strong>{emp.matricula}</strong> • Setor: {emp.setor_restrito || 'TODOS'}
@@ -879,17 +991,22 @@ export const AdminSaasScreen: React.FC = () => {
                   )}
                 </div>
 
-                {/* 2. HIERARQUIA 2: FUNCIONÁRIOS E OPERADORES */}
+                {/* 3. HIERARQUIA 2: FUNCIONÁRIOS E OPERADORES */}
                 <div className="space-y-2 pt-2">
                   <div className="flex items-center justify-between">
                     <h4 className="text-xs font-black uppercase tracking-wider text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
                       <Users className="w-3.5 h-3.5 text-slate-400" />
-                      <span>2. Funcionários & Operadores de Área ({funcionarios.length})</span>
+                      <span>3. Funcionários & Operadores de Área ({funcionarios.length})</span>
                     </h4>
                     <span className="text-[10px] text-slate-400">Nível Hierárquico 2</span>
                   </div>
 
-                  {funcionarios.length === 0 ? (
+                  {isLoadingStoreDetails && funcionarios.length === 0 ? (
+                    <div className="p-3 text-center text-xs text-slate-400 flex items-center justify-center gap-2">
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                      <span>Carregando funcionários da loja...</span>
+                    </div>
+                  ) : funcionarios.length === 0 ? (
                     <div className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-800 text-xs text-slate-400 text-center">
                       Nenhum operador cadastrado nesta loja ainda.
                     </div>
@@ -897,6 +1014,10 @@ export const AdminSaasScreen: React.FC = () => {
                     <div className="space-y-1.5">
                       {funcionarios.map(emp => {
                         const isRevealed = Boolean(revealedPasswords[emp.id]);
+                        const isOnline = storeActiveSessions.some(
+                          s => s.matricula.trim().toLowerCase() === emp.matricula.trim().toLowerCase()
+                        );
+
                         return (
                           <div 
                             key={emp.id}
@@ -908,6 +1029,16 @@ export const AdminSaasScreen: React.FC = () => {
                                 <span className="text-[10px] font-semibold px-2 py-0.2 rounded-full bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300">
                                   {emp.cargo}
                                 </span>
+                                {isOnline ? (
+                                  <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
+                                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                                    Online
+                                  </span>
+                                ) : (
+                                  <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-slate-200 dark:bg-slate-700 text-slate-500 dark:text-slate-400">
+                                    Offline
+                                  </span>
+                                )}
                               </div>
                               <p className="text-[11px] text-slate-400 font-mono">
                                 Matrícula: <strong>{emp.matricula}</strong> • Setor: {emp.setor_restrito || 'Geral'}
@@ -937,11 +1068,15 @@ export const AdminSaasScreen: React.FC = () => {
               {/* Rodapé do Modal */}
               <div className="pt-3 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between">
                 <span className="text-[11px] text-slate-400 font-semibold">
-                  Total de {storeEmps.length} colaboradores na base da unidade
+                  Total de {storeEmps.length} colaboradores na base da unidade • {storeActiveSessions.length} conectados
                 </span>
                 <button
                   type="button"
-                  onClick={() => setSelectedStoreForDetails(null)}
+                  onClick={() => {
+                    setSelectedStoreForDetails(null);
+                    setLocalStoreEmps([]);
+                    setStoreActiveSessions([]);
+                  }}
                   className="px-5 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-extrabold text-xs shadow-md shadow-rose-600/20 transition cursor-pointer"
                 >
                   Fechar Detalhes
@@ -987,7 +1122,7 @@ export const AdminSaasScreen: React.FC = () => {
                 <input
                   type="text"
                   required
-                  placeholder="Ex: Supermercado Silva - Loja 02 (Bairro Novo)"
+                  placeholder="Ex: Supermercado Central - Loja 02"
                   value={newStoreName}
                   onChange={e => setNewStoreName(e.target.value)}
                   className="w-full p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-medium focus:outline-none focus:ring-2 focus:ring-rose-500"

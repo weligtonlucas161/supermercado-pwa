@@ -33,14 +33,10 @@ export const RuptureHistoryChart: React.FC = () => {
     return audits.filter(a => a.status === 'Concluída').length;
   }, [audits]);
 
-  // Gera os dados dos últimos 7 dias de forma dinâmica e coerente
+  // Gera os dados dos últimos 7 dias a partir do estado real atual
   const chartData = useMemo(() => {
     const today = new Date();
     const data = [];
-    
-    // Variação orgânica para compor a série histórica dos 7 dias
-    const baseline = Math.max(2, currentRupturesCount);
-    const deltas = [-3, -1, 2, 4, 1, -2, 0];
 
     for (let i = 6; i >= 0; i--) {
       const d = new Date();
@@ -48,11 +44,8 @@ export const RuptureHistoryChart: React.FC = () => {
       const dayLabel = d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
       const dayName = d.toLocaleDateString('pt-BR', { weekday: 'short' });
 
-      // No dia de hoje (i === 0), usa a contagem exata do estoque atual
-      const delta = deltas[6 - i] || 0;
-      const rupturas = i === 0 ? currentRupturesCount : Math.max(0, baseline + delta);
-      // Itens repostos baseado no volume de reposição
-      const repostos = Math.max(1, Math.round(rupturas * 0.75 + (completedAuditsCount > 0 ? 3 : 1) - Math.abs(delta) * 0.3));
+      const rupturas = i === 0 ? currentRupturesCount : 0;
+      const repostos = 0;
 
       data.push({
         date: `${dayLabel} (${dayName})`,
@@ -63,7 +56,7 @@ export const RuptureHistoryChart: React.FC = () => {
     }
 
     return data;
-  }, [currentRupturesCount, completedAuditsCount]);
+  }, [currentRupturesCount]);
 
   // Indicadores de resumo
   const totalRupturas7D = chartData.reduce((acc, cur) => acc + cur.rupturas, 0);

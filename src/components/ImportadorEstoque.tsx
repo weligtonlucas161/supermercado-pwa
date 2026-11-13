@@ -45,7 +45,7 @@ interface ColumnChoice {
 }
 
 export const ImportadorEstoque: React.FC<ImportadorEstoqueProps> = ({
-  lojaId = 'loja_padrao_001',
+  lojaId = '',
   tableName = 'produtos',
   onImportComplete,
 }) => {

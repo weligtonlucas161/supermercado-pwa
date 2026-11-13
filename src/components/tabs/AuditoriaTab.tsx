@@ -154,7 +154,7 @@ export const AuditoriaTab: React.FC = () => {
   // SINCRONIZAÇÃO EM TEMPO REAL: SESSOES E BIPS MULTI-USUÁRIO
   // -------------------------------------------------------------------------
   const refreshRemoteSessions = useCallback(async () => {
-    const lojaId = operator.loja_id || 'loja_padrao_001';
+    const lojaId = operator.loja_id || '';
     try {
       const sessions = await fetchActiveAuditSessions(lojaId);
       setActiveRemoteSessions(sessions);
@@ -231,7 +231,7 @@ export const AuditoriaTab: React.FC = () => {
 
   // Assinatura em Tempo Real (Supabase Realtime Channel com push instantâneo)
   useEffect(() => {
-    const lojaId = operator.loja_id || 'loja_padrao_001';
+    const lojaId = operator.loja_id || '';
     refreshRemoteSessions();
 
     const unsubscribe = subscribeToAuditRealtime(
@@ -281,7 +281,7 @@ export const AuditoriaTab: React.FC = () => {
         }
       },
       {
-        matricula: operator.code || operator.matricula || '4092',
+        matricula: operator.code || operator.matricula || '',
         nome: operator.name || 'Operador',
       },
       (offlineUserName) => {
@@ -378,12 +378,12 @@ export const AuditoriaTab: React.FC = () => {
         insertAuditBipInDatabase({
           id: `bip_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
           sessao_id: currentSessionIdRef.current,
-          loja_id: operator.loja_id || 'loja_padrao_001',
+          loja_id: operator.loja_id || '',
           produto_id: foundProduct.id,
           codigo_barras: foundProduct.ean,
           produto_nome: foundProduct.name,
           setor: sessionSetor,
-          operador_matricula: operator.code || operator.matricula || '4092',
+          operador_matricula: operator.code || operator.matricula || '',
           operador_nome: operator.name || 'Operador',
           timestamp: Date.now(),
         }).catch(err => {
@@ -534,7 +534,7 @@ export const AuditoriaTab: React.FC = () => {
     setSessionStartTimeMs(nowMs);
     setSessionIniciadaPor({
       nome: operator.name || 'Operador',
-      matricula: operator.code || operator.matricula || '4092',
+      matricula: operator.code || operator.matricula || '',
     });
     setIsAuditing(true);
     setIsContinuousCameraActive(true);
@@ -543,12 +543,12 @@ export const AuditoriaTab: React.FC = () => {
     triggerScanBeep(true);
 
     // Registra sessão ativa no Supabase na tabela 'auditoria_presenca_sessoes'
-    const lojaId = operator.loja_id || 'loja_padrao_001';
+    const lojaId = operator.loja_id || '';
     startAuditSessionInDatabase({
       lojaId,
       setor: selectedSetor,
       nome: operator.name || 'Operador',
-      matricula: operator.code || operator.matricula || '4092',
+      matricula: operator.code || operator.matricula || '',
     }).then(result => {
       if (result.session?.id) {
         setCurrentSessionId(result.session.id);
@@ -666,7 +666,7 @@ export const AuditoriaTab: React.FC = () => {
       }));
 
     const sessId = currentSessionIdRef.current || `aud_${Date.now()}`;
-    const lojaId = operator.loja_id || 'loja_padrao_001';
+    const lojaId = operator.loja_id || '';
 
     // Grava no banco de dados nas tabelas 'auditoria_presenca_sessoes', 'auditorias_finalizadas' e 'auditoria_produtos'
     try {
@@ -675,9 +675,9 @@ export const AuditoriaTab: React.FC = () => {
         lojaId,
         setor: sessionSetor,
         iniciadaPorNome: sessionIniciadaPor?.nome || operator.name || 'Operador',
-        iniciadaPorMatricula: sessionIniciadaPor?.matricula || operator.code || operator.matricula || '4092',
+        iniciadaPorMatricula: sessionIniciadaPor?.matricula || operator.code || operator.matricula || '',
         finalizadaPorNome: operator.name || 'Operador',
-        finalizadaPorMatricula: operator.code || operator.matricula || '4092',
+        finalizadaPorMatricula: operator.code || operator.matricula || '',
         totalEsperado: totalItems,
         totalAuditado: confirmados.length,
         totalDivergentes: pendentes.length,
@@ -709,7 +709,7 @@ export const AuditoriaTab: React.FC = () => {
       title: `Auditoria de Presença - ${sessionSetor}`,
       itemsCount: confirmados.length,
       status: 'Concluída',
-      auditor: `${operator.name || 'Operador'} (${operator.code || operator.matricula || '4092'})`,
+      auditor: operator.code || operator.matricula ? `${operator.name || 'Operador'} (${operator.code || operator.matricula})` : (operator.name || 'Operador'),
       department: sessionSetor,
       type: 'PRESENCA',
       totalItems,
@@ -1133,7 +1133,7 @@ export const AuditoriaTab: React.FC = () => {
                         </span>
                       </h3>
                       <p className="text-[11px] text-slate-400">
-                        Início: {sessionStartTime} • Auditor: {operator.name || 'Operador'} ({operator.code || '4092'})
+                        Início: {sessionStartTime} • Auditor: {operator.name || 'Operador'}{operator.code ? ` (${operator.code})` : ''}
                       </p>
                     </div>
                   </div>

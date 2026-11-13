@@ -59,7 +59,7 @@ export const EmployeeDetailModal: React.FC<EmployeeDetailModalProps> = ({
     if (employee) {
       setNome(employee.nome || '');
       setMatricula(employee.matricula || '');
-      setSenha(employee.senha || '123456');
+      setSenha(employee.senha || '');
       setCargo(employee.cargo || 'Operador de Gôndola');
       setSetorRestrito(employee.setor_restrito || 'TODOS');
       setAtivo(employee.ativo);
@@ -90,7 +90,7 @@ export const EmployeeDetailModal: React.FC<EmployeeDetailModalProps> = ({
       ...employee,
       nome: nome.trim(),
       matricula: matricula.trim(),
-      senha: senha.trim() || employee.senha || '123456',
+      senha: senha.trim() || employee.senha || '',
       cargo: cargo.trim(),
       setor_restrito: setorRestrito,
       ativo,
@@ -241,7 +241,7 @@ export const EmployeeDetailModal: React.FC<EmployeeDetailModalProps> = ({
               <div className="flex items-center justify-between bg-white dark:bg-slate-800/80 p-2.5 rounded-xl border border-slate-200 dark:border-slate-700">
                 <span className="text-slate-500 text-[11px]">Senha cadastrada:</span>
                 <span className="font-mono text-sm font-black text-slate-900 dark:text-white tracking-widest">
-                  {showPassword ? (senha || employee.senha || '123456') : '••••••••'}
+                  {showPassword ? (senha || employee.senha || 'Não cadastrada') : '••••••••'}
                 </span>
               </div>
             )}

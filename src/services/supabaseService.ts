@@ -138,75 +138,38 @@ const LOCAL_STORAGE_STORES_KEY = 'superpwa_stores_data';
 const LOCAL_STORAGE_EMPLOYEES_KEY = 'superpwa_employees_data';
 const LOCAL_STORAGE_ROLES_KEY = 'superpwa_roles_data';
 
-// Obter lojas locais com valores padrão
+// Obter lojas locais
 export function getStoredStores(): Store[] {
   if (typeof window === 'undefined') return [];
   try {
     const raw = localStorage.getItem(LOCAL_STORAGE_STORES_KEY);
-    if (raw) return JSON.parse(raw);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        return parsed;
+      }
+    }
   } catch (e) {
     console.warn('Erro ao ler lojas locais:', e);
   }
-  const defaultStores: Store[] = [
-    {
-      id: 'loja_padrao_001',
-      nome_loja: 'Supermercado Silva - Loja 01 (Matriz)',
-      cnpj: '12.345.678/0001-90',
-      endereco: 'Av. Principal, 1000 - Centro',
-      telefone: '(11) 3456-7890',
-      limite_usuarios: 15,
-      ativa: true,
-      cor_primaria: '#059669',
-      created_at: new Date().toISOString(),
-    },
-  ];
-  try {
-    localStorage.setItem(LOCAL_STORAGE_STORES_KEY, JSON.stringify(defaultStores));
-  } catch {
-    // ignore
-  }
-  return defaultStores;
+  return [];
 }
 
-// Obter funcionários locais com valores padrão
+// Obter funcionários locais
 export function getStoredEmployees(): StoreEmployee[] {
   if (typeof window === 'undefined') return [];
   try {
     const raw = localStorage.getItem(LOCAL_STORAGE_EMPLOYEES_KEY);
-    if (raw) return JSON.parse(raw);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        return parsed;
+      }
+    }
   } catch (e) {
     console.warn('Erro ao ler funcionários locais:', e);
   }
-  const defaultEmps: StoreEmployee[] = [
-    {
-      id: 'usr_ger_001',
-      matricula: 'GER-001',
-      nome: 'Roberto Gerente',
-      senha: 'gerente123',
-      cargo: 'Gerente Geral',
-      setor_restrito: 'TODOS',
-      loja_id: 'loja_padrao_001',
-      ativo: true,
-      created_at: new Date().toISOString(),
-    },
-    {
-      id: 'usr_op_carlos_4092',
-      matricula: '4092',
-      nome: 'Carlos Silva',
-      senha: '123456',
-      cargo: 'Operador de Estoque',
-      setor_restrito: 'MERCEARIA',
-      loja_id: 'loja_padrao_001',
-      ativo: true,
-      created_at: new Date().toISOString(),
-    },
-  ];
-  try {
-    localStorage.setItem(LOCAL_STORAGE_EMPLOYEES_KEY, JSON.stringify(defaultEmps));
-  } catch {
-    // ignore
-  }
-  return defaultEmps;
+  return [];
 }
 
 // Obter cargos da loja
@@ -214,57 +177,16 @@ export function getStoredRoles(): StoreRole[] {
   if (typeof window === 'undefined') return [];
   try {
     const raw = localStorage.getItem(LOCAL_STORAGE_ROLES_KEY);
-    if (raw) return JSON.parse(raw);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        return parsed;
+      }
+    }
   } catch {
     // ignore
   }
-  const defaultRoles: StoreRole[] = [
-    {
-      id: 'role_gerente',
-      loja_id: 'loja_padrao_001',
-      nome: 'Gerente Geral',
-      descricao: 'Acesso pleno ao gerenciamento da loja, criação de funcionários e auditorias',
-      permissoes: {
-        setores_permitidos: [],
-        pode_auditar: true,
-        pode_ajustar_estoque: true,
-        pode_importar_planilha: true,
-        pode_gerenciar_validade: true,
-      },
-    },
-    {
-      id: 'role_conferente',
-      loja_id: 'loja_padrao_001',
-      nome: 'Conferente de Auditoria',
-      descricao: 'Responsável pela bipagem contínua de presença e conferência de inventário',
-      permissoes: {
-        setores_permitidos: [],
-        pode_auditar: true,
-        pode_ajustar_estoque: false,
-        pode_importar_planilha: false,
-        pode_gerenciar_validade: false,
-      },
-    },
-    {
-      id: 'role_operador',
-      loja_id: 'loja_padrao_001',
-      nome: 'Operador de Gôndola',
-      descricao: 'Controle de reposição e registro de vencimento de produtos',
-      permissoes: {
-        setores_permitidos: ['MERCEARIA', 'FRIOS'],
-        pode_auditar: true,
-        pode_ajustar_estoque: true,
-        pode_importar_planilha: true,
-        pode_gerenciar_validade: true,
-      },
-    },
-  ];
-  try {
-    localStorage.setItem(LOCAL_STORAGE_ROLES_KEY, JSON.stringify(defaultRoles));
-  } catch {
-    // ignore
-  }
-  return defaultRoles;
+  return [];
 }
 
 /**
@@ -285,16 +207,7 @@ export async function changeUserPassword(
     return { success: false, message: 'A nova senha deve ter no mínimo 7 caracteres.' };
   }
 
-  // 1. Administrador SaaS Master (@200309 ou 111111)
-  if (cleanMatricula === '@200309' || cleanMatricula === '111111') {
-    if (typeof window !== 'undefined') {
-      localStorage.setItem('saas_admin_custom_password', cleanPassword);
-      localStorage.setItem('saas_admin_password_changed', 'true');
-    }
-    return { success: true, message: 'Senha do Administrador SaaS alterada com sucesso!' };
-  }
-
-  // 2. Funcionários e Gerentes de Loja
+  // Funcionários e Gerentes de Loja
   const emps = getStoredEmployees();
   const idx = emps.findIndex(e => e.matricula.toLowerCase() === cleanMatricula.toLowerCase());
 
@@ -364,7 +277,7 @@ export async function changeUserPassword(
           senha: cleanPassword,
           cargo: String(remoteUser.cargo || 'Operador'),
           setor_restrito: remoteUser.setor ? String(remoteUser.setor) : 'TODOS',
-          loja_id: String(remoteUser.loja_id || 'loja_padrao_001'),
+          loja_id: String(remoteUser.loja_id || ''),
           ativo: Boolean(remoteUser.ativo ?? true),
           primeiro_login: false,
           created_at: new Date().toISOString(),
@@ -388,9 +301,6 @@ export async function changeUserPassword(
  */
 export function verifyUserStillActive(matricula: string, lojaId?: string): { active: boolean; companyName?: string } {
   const cleanMatricula = matricula.trim();
-  if (cleanMatricula === '@200309' || cleanMatricula === '111111') {
-    return { active: true };
-  }
 
   const emps = getStoredEmployees();
   const emp = emps.find(e => e.matricula.toLowerCase() === cleanMatricula.toLowerCase());
@@ -401,7 +311,7 @@ export function verifyUserStillActive(matricula: string, lojaId?: string): { act
     const store = stores.find(s => s.id === (lojaId || emp?.loja_id));
     return {
       active: false,
-      companyName: store ? store.nome_loja : 'Supermercado Silva',
+      companyName: store ? store.nome_loja : 'Sua Loja',
     };
   }
 
@@ -417,9 +327,6 @@ export async function verifyUserStillActiveRemote(
   lojaId?: string
 ): Promise<{ active: boolean; companyName?: string }> {
   const cleanMatricula = matricula.trim();
-  if (cleanMatricula === '@200309' || cleanMatricula === '111111') {
-    return { active: true };
-  }
 
   // 1. Consulta remota no Supabase se cliente conectado
   if (client && isSupabaseConfigured()) {
@@ -437,7 +344,7 @@ export async function verifyUserStillActiveRemote(
           const store = stores.find(s => s.id === lojaId);
           return {
             active: false,
-            companyName: store ? store.nome_loja : 'Supermercado Silva',
+            companyName: store ? store.nome_loja : 'Sua Loja',
           };
         }
 
@@ -447,7 +354,7 @@ export async function verifyUserStillActiveRemote(
           const store = stores.find(s => s.id === (data.loja_id || lojaId));
           return {
             active: false,
-            companyName: store ? store.nome_loja : 'Supermercado Silva',
+            companyName: store ? store.nome_loja : 'Sua Loja',
           };
         }
 
@@ -489,7 +396,7 @@ export function subscribeToUserStatusRealtime(
               const stores = getStoredStores();
               const storeId = String(newRec?.loja_id || oldRec?.loja_id || '');
               const store = stores.find(s => s.id === storeId);
-              onDeactivated(store ? store.nome_loja : 'Supermercado Silva');
+              onDeactivated(store ? store.nome_loja : 'Sua Loja');
             }
           }
         }
@@ -512,61 +419,7 @@ export async function loginUser(matricula: string, senha: string): Promise<Login
   const cleanMatricula = matricula.trim();
   const cleanSenha = senha.trim();
 
-  // 1. CREDENCIAIS EXCLUSIVAS DO ADMINISTRADOR DE SAAS (MASTER DO SERVIDOR)
-  const saasSavedPassword = typeof window !== 'undefined' ? localStorage.getItem('saas_admin_custom_password') : null;
-  const saasPasswordChanged = typeof window !== 'undefined' ? localStorage.getItem('saas_admin_password_changed') === 'true' : false;
-
-  if (cleanMatricula === '@200309' || cleanMatricula === '111111') {
-    const isValid = saasSavedPassword
-      ? cleanSenha === saasSavedPassword
-      : (cleanMatricula === '@200309' ? cleanSenha === '2003@09' : cleanSenha === 'admin123');
-
-    if (isValid) {
-      return {
-        success: true,
-        token: `tok_saas_adm_master_${cleanMatricula}`,
-        user: {
-          id: 'usr_saas_adm_master',
-          matricula: cleanMatricula,
-          nome: 'Administrador do Sistema (SaaS)',
-          cargo: 'saas_admin',
-          setor: 'Infraestrutura Master',
-          loja_id: '',
-          loja_nome: 'Painel Central SaaS (Multi-Lojas)',
-          primeiro_login: !saasPasswordChanged,
-        },
-      };
-    } else {
-      return { success: false, message: 'Senha incorreta para o Administrador SaaS.' };
-    }
-  }
-
-  // 2. CREDENCIAL DO GERENTE DE LOJA DEMO
-  if (cleanMatricula === 'GER-001') {
-    const localEmployees = getStoredEmployees();
-    const gerEmp = localEmployees.find(e => e.matricula === 'GER-001');
-    const validPassword = gerEmp?.senha || 'gerente123';
-    if (cleanSenha === validPassword) {
-      return {
-        success: true,
-        token: 'tok_gerente_loja_001',
-        user: {
-          id: 'usr_ger_001',
-          matricula: 'GER-001',
-          nome: 'Roberto Gerente',
-          cargo: 'gerente',
-          setor: 'Gerência Geral da Loja',
-          loja_id: 'loja_padrao_001',
-          loja_nome: 'Supermercado Silva - Loja 01 (Matriz)',
-          primeiro_login: gerEmp?.primeiro_login ?? true,
-        },
-      };
-    }
-  }
-
-  // 3. Checagem em funcionários/gerentes cadastrados localmente.
-  // A senha precisa bater EXATAMENTE: aceitar `!e.senha` permitiria entrar
-  // com qualquer senha em um cadastro sem senha definida.
+  // 1. Checagem em funcionários/gerentes cadastrados localmente (offline)
   const localEmployees = getStoredEmployees();
   const matchedEmp = localEmployees.find(
     e => e.matricula.toLowerCase() === cleanMatricula.toLowerCase() && !!e.senha && e.senha === cleanSenha
@@ -589,13 +442,13 @@ export async function loginUser(matricula: string, senha: string): Promise<Login
         cargo: isGerente ? 'gerente' : 'operador',
         setor: matchedEmp.setor_restrito === 'TODOS' ? 'Geral' : (matchedEmp.setor_restrito || 'Geral'),
         loja_id: matchedEmp.loja_id,
-        loja_nome: matchedStore ? matchedStore.nome_loja : 'Supermercado Silva',
+        loja_nome: matchedStore ? matchedStore.nome_loja : '',
         primeiro_login: matchedEmp.primeiro_login ?? true,
       },
     };
   }
 
-  // 4. Se o Supabase estiver configurado, tenta autenticar via RPC no banco
+  // 3. Se o Supabase estiver configurado, tenta autenticar via RPC no banco
   if (client) {
     try {
       const { data, error } = await client.rpc('rpc_login_usuario', {
@@ -616,8 +469,8 @@ export async function loginUser(matricula: string, senha: string): Promise<Login
             nome: data.user.nome,
             cargo: mappedCargo,
             setor: data.user.setor,
-            loja_id: data.user.loja_id || 'loja_padrao_001',
-            loja_nome: data.user.loja_nome || 'Supermercado Silva - Loja 01',
+            loja_id: data.user.loja_id || '',
+            loja_nome: data.user.loja_nome || '',
             primeiro_login: data.user.primeiro_login ?? true,
           },
         };
@@ -644,9 +497,9 @@ export async function loginUser(matricula: string, senha: string): Promise<Login
               matricula: userData.matricula,
               nome: userData.nome,
               cargo: mappedCargo,
-              setor: userData.setor || 'Prevenção e Estoque',
-              loja_id: userData.loja_id || 'loja_padrao_001',
-              loja_nome: 'Supermercado Silva - Loja 01',
+              setor: userData.setor || 'Geral',
+              loja_id: userData.loja_id || '',
+              loja_nome: '',
             },
           };
         } else {
@@ -659,23 +512,6 @@ export async function loginUser(matricula: string, senha: string): Promise<Login
     } catch (err) {
       console.warn('Erro ao autenticar com Supabase, recorrendo à contingência local:', err);
     }
-  }
-
-  // 5. Contingência Padrão
-  if (cleanMatricula === '4092' && cleanSenha === '123456') {
-    return {
-      success: true,
-      token: 'tok_local_operador_4092',
-      user: {
-        id: 'usr_op_carlos_4092',
-        matricula: '4092',
-        nome: 'Carlos Silva',
-        cargo: 'operador',
-        setor: 'Prevenção e Estoque',
-        loja_id: 'loja_padrao_001',
-        loja_nome: 'Supermercado Silva - Loja 01 (Matriz)',
-      },
-    };
   }
 
   return {
@@ -890,30 +726,74 @@ export async function fetchSaasTelemetry(): Promise<SaasTelemetryData> {
   }
 }
 
+export interface ActiveSession {
+  matricula: string;
+  usuario_nome?: string;
+  loja_id: string;
+  timestamp?: number;
+  last_seen?: number;
+  status: string;
+  updated_at?: string;
+}
+
+/**
+ * Consulta sessões ativas da tabela 'sessoes_ativas' no Supabase
+ */
+export async function fetchStoreActiveSessions(lojaId?: string): Promise<ActiveSession[]> {
+  if (!client) return [];
+
+  try {
+    let query = client
+      .from('sessoes_ativas')
+      .select('matricula, usuario_nome, loja_id, timestamp, last_seen, status, updated_at')
+      .eq('status', 'ATIVA')
+      .order('last_seen', { ascending: false });
+
+    if (lojaId && lojaId !== 'todas') {
+      query = query.eq('loja_id', lojaId);
+    }
+
+    const { data, error } = await query;
+    if (!error && data) {
+      return data as ActiveSession[];
+    }
+  } catch (err) {
+    console.debug('Aviso ao consultar sessões ativas no Supabase:', err);
+  }
+
+  return [];
+}
+
 /**
  * Operações do Gerente de Loja: Gestão de Funcionários & Permissões de Setor
  */
-export async function fetchStoreEmployees(lojaId: string): Promise<StoreEmployee[]> {
+export async function fetchStoreEmployees(lojaId?: string): Promise<StoreEmployee[]> {
   const allEmps = getStoredEmployees();
   const filtered = allEmps.filter(e => !lojaId || e.loja_id === lojaId || lojaId === 'todas');
 
   if (!client) return filtered;
 
   try {
-    const { data, error } = await client
+    let query = client
       .from('usuarios')
       .select('*')
-      .eq('loja_id', lojaId)
       .order('nome', { ascending: true });
 
-    if (!error && data && data.length > 0) {
+    if (lojaId && lojaId !== 'todas') {
+      query = query.eq('loja_id', lojaId);
+    }
+
+    const { data, error } = await query;
+
+    if (!error && data) {
       const mapped: StoreEmployee[] = data.map((u: Record<string, unknown>) => ({
         id: String(u.id),
         matricula: String(u.matricula),
         nome: String(u.nome),
+        senha: u.senha ? String(u.senha) : '',
         cargo: String(u.cargo || 'Operador'),
         setor_restrito: u.setor ? String(u.setor) : 'TODOS',
-        loja_id: String(u.loja_id || lojaId),
+        loja_id: String(u.loja_id || lojaId || ''),
         ativo: Boolean(u.ativo ?? true),
         created_at: String(u.created_at || new Date().toISOString()),
       }));
@@ -939,7 +819,7 @@ export async function saveStoreEmployee(emp: StoreEmployee): Promise<{ success: 
         id: emp.id,
         matricula: emp.matricula,
         nome: emp.nome,
-        senha: emp.senha || '123456',
+        senha: emp.senha || '',
         cargo: emp.cargo,
         setor: emp.setor_restrito,
         loja_id: emp.loja_id,
@@ -1024,7 +904,7 @@ export async function testSupabaseConnection(): Promise<{ success: boolean; mess
  * Garante que a loja padrão exista na tabela 'lojas' para não quebrar a chave estrangeira
  */
 async function ensureStoreExists(lojaId: string): Promise<void> {
-  if (!client) return;
+  if (!client || !lojaId) return;
   try {
     const { data, error } = await client
       .from('lojas')
@@ -1035,15 +915,10 @@ async function ensureStoreExists(lojaId: string): Promise<void> {
     if (!data && !error) {
       await client.from('lojas').insert({
         id: lojaId,
-        nome_loja: 'Supermercado Silva - Loja 01 (Matriz)',
-        // A coluna real no banco é `cor_borda` (o type usa `cor_primaria`).
-        // Gravar a coluna errada fazia o INSERT falhar e a loja nunca era criada.
-        cor_borda: '#059669',
+        nome_loja: `Loja ${lojaId}`,
+        cor_borda: '#e11d48',
         ativa: true,
         limite_usuarios: 15,
-        cnpj: '12.345.678/0001-90',
-        endereco: 'Av. Principal, 1000 - Centro',
-        telefone: '(11) 3456-7890',
       });
     }
   } catch (err) {
@@ -1070,9 +945,9 @@ export async function uploadEncryptedProductsRealtime(
   }
 ): Promise<{ success: boolean; totalUploaded: number; isLocalOnly?: boolean; error?: string }> {
   const total = items.length;
-  const lojaId = options?.lojaId || 'loja_padrao_001';
-  const matricula = options?.operatorMatricula || '4092';
-  const nomeOperador = options?.operatorNome || 'Carlos Silva';
+  const lojaId = options?.lojaId || '';
+  const matricula = options?.operatorMatricula || 'SISTEMA';
+  const nomeOperador = options?.operatorNome || 'Operador';
 
   // Se o Supabase não estiver configurado, NÃO finge que gravou no banco!
   if (!client || !activeConfig.isConfigured) {
@@ -1216,11 +1091,11 @@ export async function fetchProductsFromSupabase(lojaId?: string): Promise<Produc
     let data: Record<string, unknown>[] | null = null;
 
     // 1. Tenta buscar pela loja específica se informada
-    if (lojaId && lojaId !== 'loja_padrao_001') {
+    if (lojaId) {
       const res = await client
         .from('produtos')
         .select('*')
-        .or(`loja_id.eq.${lojaId},loja_id.eq.loja_padrao_001,loja_id.is.null`)
+        .eq('loja_id', lojaId)
         .order('criado_em', { ascending: false });
       if (res.data && res.data.length > 0) {
         data = res.data;
@@ -1259,7 +1134,7 @@ export async function fetchProductsFromSupabase(lojaId?: string): Promise<Produc
             minStock: 10,
             price: 0,
             location: 'Gôndola - Catálogo',
-            loja_id: lojaId || 'loja_padrao_001',
+            loja_id: lojaId || '',
             isEncryptedInStorage: isEncrypted(rawNome),
           };
         });
@@ -1288,7 +1163,7 @@ export async function fetchProductsFromSupabase(lojaId?: string): Promise<Produc
         minStock: 10,
         price: 0,
         location: `Gôndola - ${row.setor || 'Estoque'}`,
-        loja_id: String(row.loja_id || lojaId || 'loja_padrao_001'),
+        loja_id: String(row.loja_id || lojaId || ''),
         data_vencimento: String(row.data_vencimento || ''),
         isLockedForEdit: Boolean(row.is_locked_for_edit),
         lockedBy: row.locked_by ? String(row.locked_by) : undefined,
@@ -1342,7 +1217,7 @@ export function subscribeToProductsRealtime(onChanged: () => void): () => void {
  */
 export async function syncOfflineQueueToSupabase(
   actions: OfflineAction[],
-  lojaId = 'loja_padrao_001'
+  lojaId = ''
 ): Promise<{ success: boolean; syncedCount: number; error?: string }> {
   if (!client || actions.length === 0) {
     return { success: true, syncedCount: 0 };
@@ -2016,8 +1891,7 @@ export async function sendChatMessageToSupabase(
   }
 
   try {
-    // Garante que a loja exista: sem isso o INSERT falha com FK 409 para
-    // lojas que ainda não foram cadastradas (ex.: 'loja_padrao_001').
+    // Garante que a loja exista antes do INSERT para evitar falha de FK.
     await ensureStoreExists(newMsg.loja_id);
 
     const { error } = await client.from('chat_mensagens').insert({

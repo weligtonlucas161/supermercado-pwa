@@ -47,7 +47,7 @@ export const LojaTab: React.FC = () => {
   // Form Funcionário
   const [empMatricula, setEmpMatricula] = useState('');
   const [empNome, setEmpNome] = useState('');
-  const [empSenha, setEmpSenha] = useState('123456');
+  const [empSenha, setEmpSenha] = useState('');
   const [empCargo, setEmpCargo] = useState('Operador de Gôndola');
   const [empSetorRestrito, setEmpSetorRestrito] = useState<string>('TODOS');
 
@@ -64,10 +64,10 @@ export const LojaTab: React.FC = () => {
   const [notice, setNotice] = useState<{ type: 'success' | 'warning' | 'error'; text: string } | null>(null);
 
   // Loja do gerente atual
-  const currentLojaId = operator.loja_id || 'loja_padrao_001';
+  const currentLojaId = operator.loja_id || stores[0]?.id || '';
   const currentStore = stores.find(s => s.id === currentLojaId) || stores[0] || {
     id: currentLojaId,
-    nome_loja: operator.store || 'Supermercado Silva - Loja 01',
+    nome_loja: operator.store || 'Loja Principal',
     limite_usuarios: 15,
     ativa: true,
   };
@@ -103,7 +103,7 @@ export const LojaTab: React.FC = () => {
       id: `usr_emp_${Date.now()}`,
       matricula: empMatricula.trim(),
       nome: empNome.trim(),
-      senha: empSenha.trim() || '123456',
+      senha: empSenha.trim(),
       cargo: empCargo,
       setor_restrito: empSetorRestrito,
       loja_id: currentLojaId,
@@ -121,7 +121,7 @@ export const LojaTab: React.FC = () => {
       setIsEmployeeModalOpen(false);
       setEmpMatricula('');
       setEmpNome('');
-      setEmpSenha('123456');
+      setEmpSenha('');
       setEmpSetorRestrito('TODOS');
     } else {
       setNotice({ type: 'error', text: res.error || 'Erro ao cadastrar funcionário.' });

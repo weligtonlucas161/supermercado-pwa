@@ -30,8 +30,7 @@ export const LoginScreen: React.FC = () => {
   const [showPatchNotes, setShowPatchNotes] = useState(false);
   const [showTerms, setShowTerms] = useState(false);
 
-  // Detecção dinâmica de Administrador SaaS para mudar detalhes visuais para vermelho
-  const isSaasAdminLogin = matricula.trim() === '@200309' || matricula.trim() === '111111';
+  const isSaasAdminLogin = false;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -155,7 +154,7 @@ export const LoginScreen: React.FC = () => {
                   type="text"
                   value={matricula}
                   onChange={e => setMatricula(e.target.value)}
-                  placeholder="Ex: @200309 ou sua matrícula"
+                  placeholder="Digite sua matrícula"
                   required
                   autoFocus
                   className={`w-full pl-10 pr-4 py-3 rounded-2xl border bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none font-medium transition ${

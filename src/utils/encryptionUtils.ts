@@ -138,7 +138,7 @@ export function decryptDatabaseProduct(raw: Record<string, unknown>, secretKey =
     codigoBarras: decBarras,
     setor: String(raw.setor || raw.category || 'MERCEARIA'),
     quantidade: Math.max(0, Number(raw.quantidade ?? raw.stock ?? 0)),
-    loja_id: String(raw.loja_id || 'loja_padrao_001'),
+    loja_id: String(raw.loja_id || ''),
     is_encrypted: Boolean(raw.is_encrypted ?? isEncrypted(rawNome)),
     criado_em: typeof raw.criado_em === 'number' ? raw.criado_em : Date.now(),
     data_vencimento: String(raw.data_vencimento || ''),
