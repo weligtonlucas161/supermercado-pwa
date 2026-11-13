@@ -29,6 +29,12 @@ import {
 import { useOnlineStatus } from '../pwa/useOnlineStatus';
 import { useBackgroundSync } from '../pwa/useBackgroundSync';
 import { triggerScanBeep } from '../utils/haptics';
+import {
+  censorProfanity,
+  resolveFullRoleLabel,
+  evaluateMessageNotificationTarget,
+  showPWAPushNotification,
+} from '../utils/chatUtils';
 import { 
   loginUser, 
   isSupabaseConfigured, 
@@ -283,6 +289,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         code: savedUser.matricula,
         matricula: savedUser.matricula,
         role: savedUser.cargo,
+        cargoCompleto: savedUser.cargoCompleto,
+        setor_restrito: savedUser.setor,
         store: savedUser.loja_nome || INITIAL_OPERATOR.store,
         loja_id: savedUser.loja_id || INITIAL_OPERATOR.loja_id,
         shift: INITIAL_OPERATOR.shift,
@@ -379,6 +387,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         code: result.user!.matricula,
         matricula: result.user!.matricula,
         role: result.user!.cargo,
+        cargoCompleto: result.user!.cargoCompleto,
         store: result.user!.loja_nome || prev.store,
         loja_id: result.user!.loja_id || prev.loja_id,
         setor_restrito: result.user!.setor,
@@ -971,16 +980,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     conteudo: string;
     is_anonimo: boolean;
   }) => {
+    const senderMatricula = operator.code || operator.matricula || '';
+    const fullCargo = resolveFullRoleLabel(
+      operator.cargoCompleto || operator.role,
+      senderMatricula,
+      employees
+    );
+    const filteredContent = censorProfanity(msgData.conteudo.trim());
+
     const res = await sendChatMessageToSupabase({
       loja_id: operator.loja_id || '',
       canal_tipo: msgData.canal_tipo,
       destinatario_id: msgData.destinatario_id,
       destinatario_nome: msgData.destinatario_nome,
-      remetente_matricula: operator.code || operator.matricula || '',
+      remetente_matricula: senderMatricula,
       remetente_nome: msgData.is_anonimo ? 'Operador Anônimo' : (operator.name || 'Operador'),
-      remetente_cargo: msgData.is_anonimo ? 'Sigilo Operacional' : operator.role,
+      remetente_cargo: msgData.is_anonimo ? 'Sigilo Operacional' : fullCargo,
       is_anonimo: msgData.is_anonimo,
-      conteudo: msgData.conteudo.trim(),
+      conteudo: filteredContent,
     });
 
     if (res.data) {
@@ -1004,6 +1021,37 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   useEffect(() => {
     chatOwnerRef.current = operator.code || operator.matricula || '';
   }, [operator.code, operator.matricula]);
+
+  const operatorRef = useRef(operator);
+  useEffect(() => {
+    operatorRef.current = operator;
+  }, [operator]);
+
+  const employeesRef = useRef(employees);
+  useEffect(() => {
+    employeesRef.current = employees;
+  }, [employees]);
+
+  // Abre o chat automaticamente ao clicar em uma notificação PWA
+  useEffect(() => {
+    const onOpenChatEvent = () => setIsChatOpen(true);
+    const onSwMessage = (event: MessageEvent) => {
+      if (event.data?.type === 'OPEN_CHAT_FROM_NOTIFICATION') {
+        setIsChatOpen(true);
+        setUnreadChatCount(0);
+      }
+    };
+    window.addEventListener('superpwa:open-chat', onOpenChatEvent);
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.addEventListener('message', onSwMessage);
+    }
+    return () => {
+      window.removeEventListener('superpwa:open-chat', onOpenChatEvent);
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.removeEventListener('message', onSwMessage);
+      }
+    };
+  }, []);
 
   // Carregar mensagens do chat e registrar canal em tempo real
   useEffect(() => {
@@ -1032,6 +1080,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const isFromMe = newMsg.remetente_matricula === myMatricula;
 
       if (!isFromMe) {
+        const targetEval = evaluateMessageNotificationTarget(
+          newMsg,
+          {
+            matricula: myMatricula,
+            name: operatorRef.current.name,
+            sector: operatorRef.current.setor_restrito,
+          },
+          employeesRef.current
+        );
+
+        // Quando há menção direcionada (@setor ou @usuario) ou canal privado,
+        // apenas os usuários-alvo recebem alerta/notificação push
+        if (!targetEval.shouldNotify) {
+          return;
+        }
+
         if (!isChatOpenRef.current) {
           setUnreadChatCount(c => c + 1);
         }
@@ -1042,35 +1106,40 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           triggerScanBeep(true);
         }
 
+        const mentionPrefix = targetEval.isDirectMentionToMe
+          ? '🔔 Menção direta'
+          : targetEval.isSectorMentionToMe
+          ? `🏷️ Setor ${targetEval.mentionedSectors.join(', ')}`
+          : null;
+
+        const notifTitle =
+          newMsg.canal_tipo === 'direto_lider'
+            ? `🔒 Falar com Líderes (${newMsg.remetente_nome})`
+            : mentionPrefix
+            ? `${mentionPrefix} • ${newMsg.remetente_nome}`
+            : `💬 Grupo (${newMsg.remetente_nome})`;
+
+        const cleanBody = censorProfanity(newMsg.conteudo);
+
         // Adiciona notificação formal na central de notificações
         setNotifications(prev => [
           {
             id: `notif-chat-${newMsg.id}-${Date.now()}`,
-            title: newMsg.canal_tipo === 'grupo'
-              ? `💬 Mensagem no Grupo (${newMsg.remetente_nome})`
-              : `🔒 Mensagem Direta (${newMsg.remetente_nome})`,
-            message: newMsg.conteudo,
-            type: 'info',
+            title: notifTitle,
+            message: cleanBody,
+            type: targetEval.isDirectMentionToMe || targetEval.isSectorMentionToMe ? 'urgent' : 'info',
             timestamp: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
             read: false,
           },
           ...prev,
         ]);
 
-        // Dispara notificação nativa do sistema operacional / PWA se permitido
-        if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
-          try {
-            new Notification(
-              newMsg.canal_tipo === 'grupo' ? `Grupo: ${newMsg.remetente_nome}` : `Mensagem de ${newMsg.remetente_nome}`,
-              {
-                body: newMsg.conteudo,
-                icon: '/pwa-192x192.png',
-              }
-            );
-          } catch (e) {
-            console.warn('Falha ao disparar notification nativa:', e);
-          }
-        }
+        // Dispara Notificação Push PWA via Service Worker (mobile + desktop)
+        showPWAPushNotification(notifTitle, {
+          body: cleanBody,
+          tag: `chat-${newMsg.canal_tipo}-${newMsg.id}`,
+          data: { messageId: newMsg.id, canal: newMsg.canal_tipo },
+        });
       }
     });
 

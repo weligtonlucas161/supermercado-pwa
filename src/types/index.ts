@@ -135,6 +135,7 @@ export interface AuthUser {
   matricula: string;
   nome: string;
   cargo: 'saas_admin' | 'gerente' | 'adm' | 'master' | 'operador';
+  cargoCompleto?: string;
   setor?: string;
   loja_id: string;
   loja_nome?: string;
@@ -212,6 +213,7 @@ export interface Operator {
   code: string;         // Matrícula
   matricula?: string;
   role: 'saas_admin' | 'gerente' | 'adm' | 'master' | 'operador';
+  cargoCompleto?: string;
   store: string;
   loja_id: string;      // ID da loja vinculada
   shift: string;
