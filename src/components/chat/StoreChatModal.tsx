@@ -14,6 +14,7 @@ import {
   Tag,
   UserCheck,
   ShieldCheck,
+  UserPlus,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { SETORES_DISPONIVEIS } from '../../types';
@@ -45,9 +46,18 @@ export const StoreChatModal: React.FC = () => {
   } = useApp();
 
   const [activeChannel, setActiveChannel] = useState<'grupo' | 'direto_lider'>('grupo');
-  const [inputText, setInputText] = useState('');
+  const [publicDraft, setPublicDraft] = useState('');
+  const [anonDraft, setAnonDraft] = useState('');
   const [isAnonimo, setIsAnonimo] = useState(false);
   const [selectedLeaderMatricula, setSelectedLeaderMatricula] = useState<string>('');
+  const inputText = activeChannel === 'direto_lider' && isAnonimo ? anonDraft : publicDraft;
+  const setInputText = (val: string | ((prev: string) => string)) => {
+    if (activeChannel === 'direto_lider' && isAnonimo) {
+      setAnonDraft(val);
+    } else {
+      setPublicDraft(val);
+    }
+  };
   const [notifPermission, setNotifPermission] = useState<NotificationPermission | 'unsupported'>(() => {
     if (typeof window === 'undefined' || !('Notification' in window)) return 'unsupported';
     return Notification.permission;
@@ -91,12 +101,12 @@ export const StoreChatModal: React.FC = () => {
     }
   }, [isChatOpen]);
 
-  // Rola até o final ao receber mensagens
+  // Rola até o final ao receber mensagens ou trocar contexto de perfil
   useEffect(() => {
     if (isChatOpen) {
       messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }
-  }, [chatMessages, activeChannel, selectedLeaderMatricula, isChatOpen]);
+  }, [chatMessages, activeChannel, selectedLeaderMatricula, isAnonimo, isChatOpen]);
 
   // Opções de autocomplete para @setor e @usuario
   const mentionOptions = useMemo<MentionOption[]>(() => {
@@ -148,19 +158,21 @@ export const StoreChatModal: React.FC = () => {
     storeLeaders.find(l => l.matricula === selectedLeaderMatricula) || storeLeaders[0];
   const userMatricula = operator.code || operator.matricula || '';
 
-  // Filtra as mensagens pelo canal ativo
+  // Filtra as mensagens pelo canal ativo e isola estritamente Perfil Anônimo vs Perfil Público
   const filteredMessages = chatMessages.filter(m => {
     if (activeChannel === 'grupo') {
-      return m.canal_tipo === 'grupo';
+      return m.canal_tipo === 'grupo' && !m.is_anonimo;
     } else {
       if (m.canal_tipo !== 'direto_lider') return false;
+      if (Boolean(m.is_anonimo) !== isAnonimo) return false;
+      const isViewingOwnInbox = selectedLeaderMatricula === userMatricula;
       const isSenderToLeader =
         m.remetente_matricula === userMatricula && m.destinatario_id === selectedLeaderMatricula;
       const isLeaderToSender =
         m.remetente_matricula === selectedLeaderMatricula && m.destinatario_id === userMatricula;
       const isDirectedToUser =
         m.destinatario_id === userMatricula &&
-        (!selectedLeaderMatricula || m.remetente_matricula === selectedLeaderMatricula);
+        (isViewingOwnInbox || !selectedLeaderMatricula || m.remetente_matricula === selectedLeaderMatricula);
       return isSenderToLeader || isLeaderToSender || isDirectedToUser;
     }
   });
@@ -328,7 +340,10 @@ export const StoreChatModal: React.FC = () => {
         <div className="p-2 border-b border-slate-100 dark:border-slate-800 bg-white dark:bg-slate-900 flex items-center gap-2 shrink-0">
           <button
             type="button"
-            onClick={() => setActiveChannel('grupo')}
+            onClick={() => {
+              setActiveChannel('grupo');
+              setMentionQuery(null);
+            }}
             className={`flex-1 py-2 px-3 rounded-2xl text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer ${
               activeChannel === 'grupo'
                 ? 'bg-emerald-600 text-white shadow-sm'
@@ -341,7 +356,10 @@ export const StoreChatModal: React.FC = () => {
 
           <button
             type="button"
-            onClick={() => setActiveChannel('direto_lider')}
+            onClick={() => {
+              setActiveChannel('direto_lider');
+              setMentionQuery(null);
+            }}
             className={`flex-1 py-2 px-3 rounded-2xl text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer ${
               activeChannel === 'direto_lider'
                 ? 'bg-emerald-600 text-white shadow-sm'
@@ -383,29 +401,41 @@ export const StoreChatModal: React.FC = () => {
                 </div>
               </div>
 
-              {/* Botão Modo Anônimo com Sigilo */}
-              <button
-                type="button"
-                onClick={() => setIsAnonimo(prev => !prev)}
-                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer border shrink-0 ${
-                  isAnonimo
-                    ? 'bg-rose-600 text-white border-rose-500 shadow-xs'
-                    : 'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:border-emerald-500/40'
-                }`}
-                title="Ativar/desativar envio anônimo para relatar ocorrências sigilosas"
-              >
-                {isAnonimo ? (
-                  <>
-                    <EyeOff className="w-3.5 h-3.5 text-white" />
-                    <span>Modo Anônimo Ativo</span>
-                  </>
-                ) : (
-                  <>
-                    <Eye className="w-3.5 h-3.5 text-slate-500 dark:text-slate-400" />
-                    <span>Modo Anônimo</span>
-                  </>
-                )}
-              </button>
+              {/* Seletor Isolado de Perfil (Público vs Anônimo) */}
+              <div className="inline-flex items-center p-0.5 rounded-xl bg-slate-200/80 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsAnonimo(false);
+                    setMentionQuery(null);
+                  }}
+                  className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition flex items-center gap-1 cursor-pointer ${
+                    !isAnonimo
+                      ? 'bg-emerald-600 text-white shadow-xs'
+                      : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+                  }`}
+                  title="Conversa identificada (Perfil Público isolado)"
+                >
+                  <Eye className="w-3 h-3" />
+                  <span>Perfil Público</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsAnonimo(true);
+                    setMentionQuery(null);
+                  }}
+                  className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition flex items-center gap-1 cursor-pointer ${
+                    isAnonimo
+                      ? 'bg-rose-600 text-white shadow-xs'
+                      : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+                  }`}
+                  title="Conversa sigilosa (Perfil Anônimo isolado)"
+                >
+                  <EyeOff className="w-3 h-3" />
+                  <span>Perfil Anônimo</span>
+                </button>
+              </div>
             </div>
 
             {isAnonimo ? (
@@ -443,16 +473,34 @@ export const StoreChatModal: React.FC = () => {
               <p className="font-bold text-xs text-slate-700 dark:text-slate-200">
                 {activeChannel === 'grupo'
                   ? 'Nenhuma mensagem no grupo ainda'
-                  : 'Canal direto com a liderança pronto'}
+                  : isAnonimo
+                  ? 'Nenhuma mensagem no Perfil Anônimo'
+                  : 'Nenhuma mensagem no Perfil Público'}
               </p>
               <p className="text-[11px] mt-1 max-w-xs text-slate-400">
                 {activeChannel === 'grupo'
                   ? 'Envie alertas operacionais ou mencione @setor / @usuario para notificar membros específicos.'
-                  : 'Envie orientações, solicitações ou relatos confidenciais diretamente para o líder selecionado.'}
+                  : isAnonimo
+                  ? 'Contexto sigiloso isolado. Mensagens do Perfil Público nunca aparecem aqui.'
+                  : 'Conversa identificada isolada. Mensagens do Perfil Anônimo nunca aparecem aqui.'}
               </p>
             </div>
           ) : (
             filteredMessages.map(msg => {
+              if (msg.remetente_matricula === 'SISTEMA') {
+                return (
+                  <div key={msg.id} className="flex justify-center my-1.5">
+                    <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-emerald-500/10 dark:bg-emerald-500/15 border border-emerald-500/25 text-[11px] font-semibold text-emerald-800 dark:text-emerald-200 shadow-2xs max-w-[92%] text-center">
+                      <UserPlus className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                      <span>{msg.conteudo}</span>
+                      <span className="text-[10px] text-emerald-600/75 dark:text-emerald-400/75 shrink-0">
+                        • {formatTime(msg.timestamp)}
+                      </span>
+                    </div>
+                  </div>
+                );
+              }
+
               const isMe = msg.remetente_matricula === userMatricula;
               const userColor = getUserAccentColor(msg.remetente_matricula || msg.remetente_nome);
               const fullRole = msg.is_anonimo

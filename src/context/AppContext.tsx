@@ -59,6 +59,7 @@ import {
   sendChatMessageToSupabase,
   subscribeToChatRealtime,
   getStoredChatMessages,
+  clearObsoleteChatCache,
   getStoredAvarias,
   saveAvariaInDatabase,
   fetchAvariasFromDatabase,
@@ -344,6 +345,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const res = await saveStoreEmployee(emp);
     if (res.success) {
       await refreshEmployees(isSaasAdmin ? 'todas' : emp.loja_id);
+      if (emp.loja_id && emp.loja_id === (operator.loja_id || '')) {
+        const latestMsgs = await fetchChatMessagesFromSupabase(emp.loja_id);
+        if (latestMsgs !== null) {
+          setChatMessages(latestMsgs);
+        }
+      }
     }
     return res;
   };
@@ -956,6 +963,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // SISTEMA DE CHAT OPERACIONAL (GRUPO DA LOJA E CONVERSAS COM LÍDERES)
   // =========================================================================
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>(() => {
+    if (isSupabaseConfigured()) {
+      clearObsoleteChatCache();
+      return [];
+    }
     return getStoredChatMessages(operator.loja_id);
   });
   const [isChatOpen, setIsChatOpen] = useState(false);
@@ -966,6 +977,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setDirectLeaderMatricula(targetLeaderMatricula);
     setIsChatOpen(true);
     setUnreadChatCount(0);
+    const lojaId = operator.loja_id || '';
+    if (lojaId) {
+      fetchChatMessagesFromSupabase(lojaId).then((msgs) => {
+        if (msgs !== null) setChatMessages(msgs);
+      });
+    }
   };
 
   const closeChat = () => {
@@ -1058,100 +1075,119 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!isAuthenticated) return;
     const lojaId = operator.loja_id || '';
 
-    const mergeIncoming = (msgs: ChatMessage[]) => {
-      if (!msgs || msgs.length === 0) return;
-      setChatMessages(prev => {
-        const known = new Set(prev.map(m => m.id));
-        const incoming = msgs.filter(m => !known.has(m.id));
-        return incoming.length > 0 ? [...prev, ...incoming] : prev;
-      });
+    const syncFromDatabase = (msgs: ChatMessage[] | null) => {
+      if (msgs === null) return;
+      setChatMessages(msgs);
     };
 
-    fetchChatMessagesFromSupabase(lojaId).then(mergeIncoming);
+    fetchChatMessagesFromSupabase(lojaId).then(syncFromDatabase);
 
-    const unsubscribe = subscribeToChatRealtime(lojaId, (newMsg) => {
-      setChatMessages(prev => {
-        const exists = prev.some(m => m.id === newMsg.id);
-        if (exists) return prev;
-        return [...prev, newMsg];
-      });
+    const unsubscribe = subscribeToChatRealtime(
+      lojaId,
+      (newMsg) => {
+        setChatMessages(prev => {
+          const idx = prev.findIndex(m => m.id === newMsg.id);
+          if (idx !== -1) {
+            const copy = [...prev];
+            copy[idx] = newMsg;
+            return copy;
+          }
+          return [...prev, newMsg];
+        });
 
-      const myMatricula = chatOwnerRef.current;
-      const isFromMe = newMsg.remetente_matricula === myMatricula;
-
-      if (!isFromMe) {
-        const targetEval = evaluateMessageNotificationTarget(
-          newMsg,
-          {
-            matricula: myMatricula,
-            name: operatorRef.current.name,
-            sector: operatorRef.current.setor_restrito,
-          },
-          employeesRef.current
-        );
-
-        // Quando há menção direcionada (@setor ou @usuario) ou canal privado,
-        // apenas os usuários-alvo recebem alerta/notificação push
-        if (!targetEval.shouldNotify) {
+        if (newMsg.remetente_matricula === 'SISTEMA') {
+          if (!isChatOpenRef.current) {
+            setUnreadChatCount(c => c + 1);
+          }
           return;
         }
 
-        if (!isChatOpenRef.current) {
-          setUnreadChatCount(c => c + 1);
+        const myMatricula = chatOwnerRef.current;
+        const isFromMe = newMsg.remetente_matricula === myMatricula;
+
+        if (!isFromMe) {
+          const targetEval = evaluateMessageNotificationTarget(
+            newMsg,
+            {
+              matricula: myMatricula,
+              name: operatorRef.current.name,
+              sector: operatorRef.current.setor_restrito,
+            },
+            employeesRef.current
+          );
+
+          // Quando há menção direcionada (@setor ou @usuario) ou canal privado,
+          // apenas os usuários-alvo recebem alerta/notificação push
+          if (!targetEval.shouldNotify) {
+            return;
+          }
+
+          if (!isChatOpenRef.current) {
+            setUnreadChatCount(c => c + 1);
+          }
+
+          // Toca o alerta sonoro de mensagem
+          const isSoundEnabled = localStorage.getItem('superpwa_sound_enabled') !== 'false';
+          if (isSoundEnabled) {
+            triggerScanBeep(true);
+          }
+
+          const mentionPrefix = targetEval.isDirectMentionToMe
+            ? '🔔 Menção direta'
+            : targetEval.isSectorMentionToMe
+            ? `🏷️ Setor ${targetEval.mentionedSectors.join(', ')}`
+            : null;
+
+          const notifTitle =
+            newMsg.canal_tipo === 'direto_lider'
+              ? `🔒 Falar com Líderes (${newMsg.remetente_nome})`
+              : mentionPrefix
+              ? `${mentionPrefix} • ${newMsg.remetente_nome}`
+              : `💬 Grupo (${newMsg.remetente_nome})`;
+
+          const cleanBody = censorProfanity(newMsg.conteudo);
+
+          // Adiciona notificação formal na central de notificações
+          setNotifications(prev => [
+            {
+              id: `notif-chat-${newMsg.id}-${Date.now()}`,
+              title: notifTitle,
+              message: cleanBody,
+              type: targetEval.isDirectMentionToMe || targetEval.isSectorMentionToMe ? 'urgent' : 'info',
+              timestamp: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
+              read: false,
+            },
+            ...prev,
+          ]);
+
+          // Dispara Notificação Push PWA via Service Worker (mobile + desktop)
+          showPWAPushNotification(notifTitle, {
+            body: cleanBody,
+            tag: `chat-${newMsg.canal_tipo}-${newMsg.id}`,
+            data: { messageId: newMsg.id, canal: newMsg.canal_tipo },
+          });
         }
-
-        // Toca o alerta sonoro de mensagem
-        const isSoundEnabled = localStorage.getItem('superpwa_sound_enabled') !== 'false';
-        if (isSoundEnabled) {
-          triggerScanBeep(true);
-        }
-
-        const mentionPrefix = targetEval.isDirectMentionToMe
-          ? '🔔 Menção direta'
-          : targetEval.isSectorMentionToMe
-          ? `🏷️ Setor ${targetEval.mentionedSectors.join(', ')}`
-          : null;
-
-        const notifTitle =
-          newMsg.canal_tipo === 'direto_lider'
-            ? `🔒 Falar com Líderes (${newMsg.remetente_nome})`
-            : mentionPrefix
-            ? `${mentionPrefix} • ${newMsg.remetente_nome}`
-            : `💬 Grupo (${newMsg.remetente_nome})`;
-
-        const cleanBody = censorProfanity(newMsg.conteudo);
-
-        // Adiciona notificação formal na central de notificações
-        setNotifications(prev => [
-          {
-            id: `notif-chat-${newMsg.id}-${Date.now()}`,
-            title: notifTitle,
-            message: cleanBody,
-            type: targetEval.isDirectMentionToMe || targetEval.isSectorMentionToMe ? 'urgent' : 'info',
-            timestamp: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
-            read: false,
-          },
-          ...prev,
-        ]);
-
-        // Dispara Notificação Push PWA via Service Worker (mobile + desktop)
-        showPWAPushNotification(notifTitle, {
-          body: cleanBody,
-          tag: `chat-${newMsg.canal_tipo}-${newMsg.id}`,
-          data: { messageId: newMsg.id, canal: newMsg.canal_tipo },
-        });
+      },
+      (deletedId) => {
+        setChatMessages(prev => prev.filter(m => m.id !== deletedId));
       }
-    });
+    );
+
+    const handleWindowFocus = () => {
+      fetchChatMessagesFromSupabase(lojaId).then(syncFromDatabase);
+    };
+    window.addEventListener('focus', handleWindowFocus);
 
     // Rede de segurança: o Realtime é efêmero (não há replay). Se o app ficou
-    // offline ou o canal caiu, o polling recupera as mensagens perdidas.
+    // offline ou o canal caiu, o polling reconcilia inclusões e exclusões do banco.
     const pollTimer = setInterval(() => {
       if (document.visibilityState === 'hidden') return;
-      fetchChatMessagesFromSupabase(lojaId).then(mergeIncoming);
+      fetchChatMessagesFromSupabase(lojaId).then(syncFromDatabase);
     }, 20000);
 
     return () => {
       clearInterval(pollTimer);
+      window.removeEventListener('focus', handleWindowFocus);
       unsubscribe();
     };
   }, [isAuthenticated, operator.loja_id]);

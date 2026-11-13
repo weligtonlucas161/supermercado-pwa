@@ -814,12 +814,13 @@ export async function fetchStoreEmployees(lojaId?: string): Promise<StoreEmploye
 
 export async function saveStoreEmployee(emp: StoreEmployee): Promise<{ success: boolean; error?: string }> {
   const allEmps = getStoredEmployees();
+  const isNewEmployee = !allEmps.some(e => e.id === emp.id || e.matricula === emp.matricula);
   const updated = [emp, ...allEmps.filter(e => e.id !== emp.id && e.matricula !== emp.matricula)];
   if (typeof window !== 'undefined') {
     localStorage.setItem(LOCAL_STORAGE_EMPLOYEES_KEY, JSON.stringify(updated));
   }
 
-  if (client) {
+  if (client && isSupabaseConfigured()) {
     try {
       await client.from('usuarios').upsert({
         id: emp.id,
@@ -834,6 +835,19 @@ export async function saveStoreEmployee(emp: StoreEmployee): Promise<{ success: 
     } catch (err) {
       console.warn('Erro ao salvar funcionário no banco:', err);
     }
+  } else if (isNewEmployee && emp.ativo && emp.loja_id && emp.cargo !== 'saas_admin') {
+    saveStoredChatMessage({
+      id: `msg_welcome_${emp.id}_${Date.now()}`,
+      loja_id: emp.loja_id,
+      canal_tipo: 'grupo',
+      remetente_matricula: 'SISTEMA',
+      remetente_nome: 'Sistema OpSys',
+      remetente_cargo: 'Boas-Vindas',
+      is_anonimo: false,
+      conteudo: `👋 Boas-vindas! ${emp.nome} entrou na loja e agora faz parte do Chat Operacional.`,
+      timestamp: Date.now(),
+      created_at: new Date().toISOString(),
+    });
   }
 
   return { success: true };
@@ -1720,8 +1734,21 @@ export function subscribeToAuditRealtime(
 
 export const LOCAL_STORAGE_CHAT_KEY = 'superpwa_chat_messages_v1';
 
+export function clearObsoleteChatCache(): void {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.removeItem(LOCAL_STORAGE_CHAT_KEY);
+  } catch {
+    // ignore
+  }
+}
+
 export function getStoredChatMessages(lojaId?: string): ChatMessage[] {
   if (typeof window === 'undefined') return [];
+  if (isSupabaseConfigured()) {
+    clearObsoleteChatCache();
+    return [];
+  }
   try {
     const raw = localStorage.getItem(LOCAL_STORAGE_CHAT_KEY);
     if (!raw) return [];
@@ -1737,7 +1764,7 @@ export function getStoredChatMessages(lojaId?: string): ChatMessage[] {
 }
 
 export function saveStoredChatMessage(message: ChatMessage): void {
-  if (typeof window === 'undefined') return;
+  if (typeof window === 'undefined' || isSupabaseConfigured()) return;
   try {
     const current = getStoredChatMessages();
     const exists = current.some(m => m.id === message.id);
@@ -1751,14 +1778,17 @@ export function saveStoredChatMessage(message: ChatMessage): void {
 }
 
 /**
- * Consulta mensagens de chat da loja com suporte a modo offline e fallback
+ * Consulta mensagens de chat diretamente no banco de dados (fonte única de verdade).
+ * Retorna `null` somente em caso de falha de rede/consulta; quando retorna `[]`,
+ * significa que o banco está vazio e a interface deve refletir isso imediatamente.
  */
-export async function fetchChatMessagesFromSupabase(lojaId: string): Promise<ChatMessage[]> {
-  const localList = getStoredChatMessages(lojaId);
-
+export async function fetchChatMessagesFromSupabase(lojaId: string): Promise<ChatMessage[] | null> {
   if (!client || !isSupabaseConfigured()) {
-    return localList;
+    return getStoredChatMessages(lojaId);
   }
+
+  // Elimina qualquer cache local obsoleto para evitar ressuscitar mensagens excluídas
+  clearObsoleteChatCache();
 
   try {
     const { data, error } = await client
@@ -1769,49 +1799,29 @@ export async function fetchChatMessagesFromSupabase(lojaId: string): Promise<Cha
       .limit(200);
 
     if (error) {
-      console.warn('[Chat] Erro na consulta do Supabase, usando local:', error.message);
-      return localList;
+      console.warn('[Chat] Erro na consulta do Supabase:', error.message);
+      return null;
     }
 
-    if (data && data.length > 0) {
-      const mapped: ChatMessage[] = data.map(row => ({
-        id: String(row.id),
-        loja_id: String(row.loja_id),
-        canal_tipo: (row.canal_tipo as 'grupo' | 'direto_lider') || 'grupo',
-        destinatario_id: row.destinatario_id ? String(row.destinatario_id) : undefined,
-        destinatario_nome: row.destinatario_nome ? String(row.destinatario_nome) : undefined,
-        remetente_matricula: String(row.remetente_matricula),
-        remetente_nome: String(row.remetente_nome),
-        remetente_cargo: row.remetente_cargo ? String(row.remetente_cargo) : undefined,
-        is_anonimo: Boolean(row.is_anonimo),
-        conteudo: String(row.conteudo || ''),
-        timestamp: Number(row.timestamp) || Date.now(),
-        created_at: row.created_at ? String(row.created_at) : undefined,
-      }));
+    const mapped: ChatMessage[] = (data || []).map(row => ({
+      id: String(row.id),
+      loja_id: String(row.loja_id),
+      canal_tipo: (row.canal_tipo as 'grupo' | 'direto_lider') || 'grupo',
+      destinatario_id: row.destinatario_id ? String(row.destinatario_id) : undefined,
+      destinatario_nome: row.destinatario_nome ? String(row.destinatario_nome) : undefined,
+      remetente_matricula: String(row.remetente_matricula),
+      remetente_nome: String(row.remetente_nome),
+      remetente_cargo: row.remetente_cargo ? String(row.remetente_cargo) : undefined,
+      is_anonimo: Boolean(row.is_anonimo),
+      conteudo: String(row.conteudo || ''),
+      timestamp: Number(row.timestamp) || Date.now(),
+      created_at: row.created_at ? String(row.created_at) : undefined,
+    }));
 
-      // Sincroniza local SEM apagar o que já existe:
-      // sobrescrever apagava o histórico de outras lojas e as mensagens
-      // locais que ainda não foram sincronizadas.
-      try {
-        const current = getStoredChatMessages();
-        const merged = [
-          ...current.filter(c => !mapped.some(m => m.id === c.id)),
-          ...mapped,
-        ]
-          .sort((a, b) => a.timestamp - b.timestamp)
-          .slice(-200);
-        localStorage.setItem(LOCAL_STORAGE_CHAT_KEY, JSON.stringify(merged));
-      } catch {
-        // ignore
-      }
-
-      return mapped;
-    }
-
-    return localList;
+    return mapped;
   } catch (err) {
     console.warn('[Chat] Erro ao carregar mensagens:', err);
-    return localList;
+    return null;
   }
 }
 
@@ -1852,6 +1862,7 @@ function mapChatRow(row: Record<string, unknown>): ChatMessage {
 interface ChatChannelEntry {
   channel: RealtimeChannel;
   listeners: Set<(msg: ChatMessage) => void>;
+  deleteListeners: Set<(deletedId: string) => void>;
   ready: Promise<void>;
 }
 
@@ -1866,6 +1877,7 @@ function getOrCreateChatChannel(lojaId: string): ChatChannelEntry {
     config: { broadcast: { self: false } },
   });
   const listeners = new Set<(msg: ChatMessage) => void>();
+  const deleteListeners = new Set<(deletedId: string) => void>();
 
   // Canal 1: BROADCAST — entrega instantânea e NÃO depende da tabela estar
   // publicada em `supabase_realtime`. É o caminho que garante latência baixa.
@@ -1881,8 +1893,13 @@ function getOrCreateChatChannel(lojaId: string): ChatChannelEntry {
     }
   });
 
-  // Canal 2: POSTGRES CHANGES — entrega via tabela (funciona quando a tabela
-  // está na publicação `supabase_realtime`). Serve como reforço/redundância.
+  channel.on('broadcast', { event: 'delete_message' }, (payload: { payload?: unknown }) => {
+    const data = payload?.payload as { id?: string } | undefined;
+    if (!data?.id) return;
+    deleteListeners.forEach((listener) => listener(String(data.id)));
+  });
+
+  // Canal 2: POSTGRES CHANGES — entrega INSERT, UPDATE e DELETE via tabela
   channel.on(
     'postgres_changes',
     {
@@ -1896,6 +1913,37 @@ function getOrCreateChatChannel(lojaId: string): ChatChannelEntry {
       const msg = mapChatRow(payload.new as Record<string, unknown>);
       saveStoredChatMessage(msg);
       listeners.forEach((listener) => listener(msg));
+    }
+  );
+
+  channel.on(
+    'postgres_changes',
+    {
+      event: 'UPDATE',
+      schema: 'public',
+      table: 'chat_mensagens',
+      filter: `loja_id=eq.${lojaId}`,
+    },
+    (payload) => {
+      if (!payload.new) return;
+      const msg = mapChatRow(payload.new as Record<string, unknown>);
+      listeners.forEach((listener) => listener(msg));
+    }
+  );
+
+  channel.on(
+    'postgres_changes',
+    {
+      event: 'DELETE',
+      schema: 'public',
+      table: 'chat_mensagens',
+      filter: `loja_id=eq.${lojaId}`,
+    },
+    (payload) => {
+      const oldRow = payload.old as Record<string, unknown> | undefined;
+      const deletedId = oldRow?.id ? String(oldRow.id) : '';
+      if (!deletedId) return;
+      deleteListeners.forEach((listener) => listener(deletedId));
     }
   );
 
@@ -1919,7 +1967,7 @@ function getOrCreateChatChannel(lojaId: string): ChatChannelEntry {
     });
   });
 
-  const entry: ChatChannelEntry = { channel, listeners, ready };
+  const entry: ChatChannelEntry = { channel, listeners, deleteListeners, ready };
   chatChannelRegistry.set(name, entry);
   return entry;
 }
@@ -1985,10 +2033,7 @@ export async function sendChatMessageToSupabase(
 
     if (error) {
       console.warn('[Chat] insert falhou:', error.message);
-      // A mensagem continua visível em tempo real para quem está online e
-      // fica na fila offline para ser gravada quando a conexão voltar.
-      await broadcastChatMessage(newMsg);
-      return { success: true, data: newMsg, error: error.message };
+      return { success: false, error: error.message };
     }
 
     // Broadcast instantâneo para os demais dispositivos da loja.
@@ -1999,7 +2044,7 @@ export async function sendChatMessageToSupabase(
   } catch (err: unknown) {
     const msgErr = err instanceof Error ? err.message : String(err);
     console.error('[Chat] Erro no envio:', msgErr);
-    return { success: true, data: newMsg, error: msgErr };
+    return { success: false, error: msgErr };
   }
 }
 
@@ -2012,7 +2057,8 @@ export async function sendChatMessageToSupabase(
  */
 export function subscribeToChatRealtime(
   lojaId: string,
-  onNewMessage: (msg: ChatMessage) => void
+  onNewMessage: (msg: ChatMessage) => void,
+  onDeleteMessage?: (deletedId: string) => void
 ): () => void {
   if (!client || !isSupabaseConfigured()) return () => {};
   const supabaseClient = client;
@@ -2020,10 +2066,16 @@ export function subscribeToChatRealtime(
   try {
     const entry = getOrCreateChatChannel(lojaId);
     entry.listeners.add(onNewMessage);
+    if (onDeleteMessage) {
+      entry.deleteListeners.add(onDeleteMessage);
+    }
 
     return () => {
       entry.listeners.delete(onNewMessage);
-      if (entry.listeners.size === 0) {
+      if (onDeleteMessage) {
+        entry.deleteListeners.delete(onDeleteMessage);
+      }
+      if (entry.listeners.size === 0 && entry.deleteListeners.size === 0) {
         try {
           supabaseClient.removeChannel(entry.channel);
         } catch {
