@@ -40,6 +40,7 @@ export interface Product {
   isLockedForEdit?: boolean; // Bloqueado para edição concorrente
   lockedBy?: string; // Nome e matrícula do operador que está editando
   lockedAt?: string; // Timestamp do bloqueio
+  rebaixaStatus?: 'pending' | 'confirmed'; // Estado do gesto de rebaixa no estoque
 }
 
 export interface SpreadsheetProductItem {

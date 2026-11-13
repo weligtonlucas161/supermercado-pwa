@@ -15,12 +15,26 @@ import {
   Lock, 
   Unlock,
   KeyRound,
-  Edit2
+  Edit2,
+  Palette,
+  Save,
+  Sun
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { StoreEmployee, StoreRole, SETORES_DISPONIVEIS, SetorLoja } from '../../types';
 import { triggerScanBeep } from '../../utils/haptics';
 import { EmployeeDetailModal } from '../modals/EmployeeDetailModal';
+
+const STORE_PALETTE_PRESETS = [
+  { name: 'Esmeralda', hex: '#059669' },
+  { name: 'Azul Royal', hex: '#2563eb' },
+  { name: 'Petróleo', hex: '#0d9488' },
+  { name: 'Índigo', hex: '#4f46e5' },
+  { name: 'Violeta', hex: '#7c3aed' },
+  { name: 'Rubi', hex: '#e11d48' },
+  { name: 'Âmbar', hex: '#d97706' },
+  { name: 'Grafite', hex: '#334155' },
+];
 
 export const LojaTab: React.FC = () => {
   const { 
@@ -30,13 +44,19 @@ export const LojaTab: React.FC = () => {
     addOrUpdateEmployee, 
     toggleEmployeeStatus, 
     roles, 
-    addOrUpdateRole, 
+    addOrUpdateRole,
+    storeName,
+    storeColor,
+    updateStoreSettings,
     darkMode,
     isDesktop 
   } = useApp();
 
-  const [activeSubTab, setActiveSubTab] = useState<'funcionarios' | 'cargos'>('funcionarios');
+  const [activeSubTab, setActiveSubTab] = useState<'funcionarios' | 'cargos' | 'identidade'>('funcionarios');
   const [searchTerm, setSearchTerm] = useState('');
+  const [editStoreName, setEditStoreName] = useState(storeName);
+  const [editStoreColor, setEditStoreColor] = useState(storeColor);
+  const [isSavingStoreSettings, setIsSavingStoreSettings] = useState(false);
 
   // Modais
   const [selectedEmployeeForDetail, setSelectedEmployeeForDetail] = useState<StoreEmployee | null>(null);
@@ -174,26 +194,58 @@ export const LojaTab: React.FC = () => {
     setIsRoleModalOpen(true);
   };
 
+  const handleSaveStoreIdentity = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editStoreName.trim()) {
+      setNotice({ type: 'error', text: 'Informe o nome da loja.' });
+      return;
+    }
+    setIsSavingStoreSettings(true);
+    const res = await updateStoreSettings({
+      nome_loja: editStoreName.trim(),
+      cor_primaria: editStoreColor,
+    });
+    setIsSavingStoreSettings(false);
+    triggerScanBeep(true);
+    setNotice({
+      type: res.success ? 'success' : 'warning',
+      text: res.success
+        ? `Identidade da loja "${editStoreName.trim()}" salva com sucesso!`
+        : `Identidade aplicada localmente (${res.error || 'sem sincronização remota'}).`,
+    });
+  };
+
   return (
     <div className="space-y-5 animate-in fade-in duration-150">
       
       {/* Header Gestão de Loja */}
-      <div className="p-4 sm:p-5 rounded-3xl bg-white dark:bg-slate-800/90 border border-slate-200/80 dark:border-slate-700 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
+      <div
+        className="p-4 sm:p-5 rounded-3xl bg-white border border-slate-200/80 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4 relative overflow-hidden"
+        style={{ borderColor: `${storeColor}35` }}
+      >
+        <div
+          className="absolute top-0 left-0 right-0 h-1"
+          style={{ backgroundColor: storeColor, opacity: 0.8 }}
+          aria-hidden="true"
+        />
         <div className="flex items-center gap-3">
-          <div className="p-3 rounded-2xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
+          <div
+            className="p-3 rounded-2xl text-white shadow-sm"
+            style={{ backgroundColor: storeColor }}
+          >
             <Building2 className="w-6 h-6" />
           </div>
           <div>
-            <div className="flex items-center gap-2">
-              <h2 className="text-base sm:text-lg font-black text-slate-900 dark:text-white">
-                Gestão da Unidade: {currentStore.nome_loja}
+            <div className="flex items-center gap-2 flex-wrap">
+              <h2 className="text-base sm:text-lg font-black text-slate-900">
+                Gestão da Unidade: {storeName}
               </h2>
-              <span className="text-[10px] font-black uppercase px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400">
+              <span className="text-[10px] font-black uppercase px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-600">
                 Painel do Gerente
               </span>
             </div>
             <p className="text-xs text-slate-400">
-              Gerenciamento de funcionários, cargos operacionais e restrições por setor
+              Gerenciamento de funcionários, cargos operacionais, identidade e tema da loja
             </p>
           </div>
         </div>
@@ -237,14 +289,14 @@ export const LojaTab: React.FC = () => {
       )}
 
       {/* Navegação entre Sub-Abas da Loja */}
-      <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-2">
-        <div className="flex gap-2">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 pb-2">
+        <div className="flex flex-wrap gap-2">
           <button
             onClick={() => setActiveSubTab('funcionarios')}
             className={`py-2 px-3.5 rounded-2xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
               activeSubTab === 'funcionarios'
                 ? 'bg-emerald-600 text-white shadow-md'
-                : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700'
+                : 'bg-white text-slate-600 border border-slate-200'
             }`}
           >
             <Users className="w-4 h-4" />
@@ -256,15 +308,31 @@ export const LojaTab: React.FC = () => {
             className={`py-2 px-3.5 rounded-2xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
               activeSubTab === 'cargos'
                 ? 'bg-emerald-600 text-white shadow-md'
-                : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700'
+                : 'bg-white text-slate-600 border border-slate-200'
             }`}
           >
             <Briefcase className="w-4 h-4" />
             <span>Cargos e Permissões ({roles.length})</span>
           </button>
+
+          <button
+            onClick={() => {
+              setEditStoreName(storeName);
+              setEditStoreColor(storeColor);
+              setActiveSubTab('identidade');
+            }}
+            className={`py-2 px-3.5 rounded-2xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
+              activeSubTab === 'identidade'
+                ? 'bg-emerald-600 text-white shadow-md'
+                : 'bg-white text-slate-600 border border-slate-200'
+            }`}
+          >
+            <Palette className="w-4 h-4" />
+            <span>Identidade & Tema</span>
+          </button>
         </div>
 
-        {activeSubTab === 'funcionarios' ? (
+        {activeSubTab === 'funcionarios' && (
           <button
             onClick={() => {
               if (isLimitReached) {
@@ -282,7 +350,8 @@ export const LojaTab: React.FC = () => {
             <UserPlus className="w-4 h-4" />
             <span>Adicionar Funcionário</span>
           </button>
-        ) : (
+        )}
+        {activeSubTab === 'cargos' && (
           <button
             onClick={() => {
               setEditingRole(null);
@@ -461,6 +530,119 @@ export const LojaTab: React.FC = () => {
             ))}
           </div>
         </div>
+      )}
+
+      {/* =================================================================== */}
+      {/* SUB-ABA 3: IDENTIDADE DA LOJA & PALETA DE CORES (MODO CLARO FIXO) */}
+      {/* =================================================================== */}
+      {activeSubTab === 'identidade' && (
+        <form
+          onSubmit={handleSaveStoreIdentity}
+          className="p-5 rounded-3xl bg-white border border-slate-200/90 shadow-sm space-y-5 max-w-2xl"
+        >
+          <div className="flex items-start justify-between gap-3 pb-3 border-b border-slate-100">
+            <div className="flex items-center gap-2.5">
+              <div
+                className="p-2.5 rounded-2xl text-white shadow-xs"
+                style={{ backgroundColor: editStoreColor }}
+              >
+                <Palette className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-sm font-black text-slate-900">
+                  Identidade Visual da Loja
+                </h3>
+                <p className="text-[11px] text-slate-400">
+                  Personalize o nome exibido na barra superior e a cor decorativa da unidade.
+                </p>
+              </div>
+            </div>
+
+            <span className="text-[10px] font-bold px-2.5 py-1 rounded-full bg-amber-500/10 text-amber-700 border border-amber-500/25 flex items-center gap-1 shrink-0">
+              <Sun className="w-3.5 h-3.5" /> Modo Claro Fixo
+            </span>
+          </div>
+
+          <div className="space-y-1.5 text-xs">
+            <label className="font-bold text-slate-700 uppercase tracking-wider text-[10px] block">
+              Nome da Loja *
+            </label>
+            <input
+              type="text"
+              required
+              value={editStoreName}
+              onChange={(e) => setEditStoreName(e.target.value)}
+              placeholder="Ex: Supermercado Central - Filial 01"
+              className="w-full p-2.5 rounded-xl border border-slate-200 bg-slate-50 text-slate-900 font-bold text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500"
+            />
+          </div>
+
+          <div className="space-y-2.5 text-xs">
+            <div className="flex items-center justify-between">
+              <label className="font-bold text-slate-700 uppercase tracking-wider text-[10px]">
+                Paleta de Cores da Loja (Detalhes Decorativos)
+              </label>
+              <span className="text-[11px] font-mono font-bold text-slate-500">
+                {editStoreColor.toUpperCase()}
+              </span>
+            </div>
+
+            <div className="grid grid-cols-4 sm:grid-cols-8 gap-2">
+              {STORE_PALETTE_PRESETS.map((preset) => {
+                const selected = editStoreColor.toLowerCase() === preset.hex.toLowerCase();
+                return (
+                  <button
+                    key={preset.hex}
+                    type="button"
+                    onClick={() => setEditStoreColor(preset.hex)}
+                    className={`p-2 rounded-2xl border flex flex-col items-center gap-1 transition cursor-pointer ${
+                      selected
+                        ? 'border-slate-900 bg-slate-50 shadow-xs scale-[1.03]'
+                        : 'border-slate-200 hover:border-slate-300 bg-white'
+                    }`}
+                    title={preset.name}
+                  >
+                    <span
+                      className="w-6 h-6 rounded-full border border-black/10 flex items-center justify-center text-white"
+                      style={{ backgroundColor: preset.hex }}
+                    >
+                      {selected && <Check className="w-3.5 h-3.5" />}
+                    </span>
+                    <span className="text-[9px] font-bold text-slate-600 truncate w-full text-center">
+                      {preset.name}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="flex items-center gap-3 pt-1">
+              <label className="text-[11px] font-semibold text-slate-600 flex items-center gap-2 cursor-pointer">
+                <span>Cor personalizada:</span>
+                <input
+                  type="color"
+                  value={editStoreColor}
+                  onChange={(e) => setEditStoreColor(e.target.value)}
+                  className="w-9 h-7 rounded-lg border border-slate-200 cursor-pointer bg-white p-0.5"
+                />
+              </label>
+              <span className="text-[10px] text-slate-400">
+                Aplicada sutilmente apenas em detalhes visuais não funcionais.
+              </span>
+            </div>
+          </div>
+
+          <div className="flex items-center justify-end pt-2 border-t border-slate-100">
+            <button
+              type="submit"
+              disabled={isSavingStoreSettings}
+              className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-black text-xs shadow-md shadow-emerald-600/20 flex items-center gap-1.5 transition cursor-pointer"
+            >
+              <Save className="w-4 h-4" />
+              <span>{isSavingStoreSettings ? 'Salvando...' : 'Salvar Identidade da Loja'}</span>
+            </button>
+          </div>
+        </form>
       )}
 
       {/* Modal Adicionar Funcionário */}

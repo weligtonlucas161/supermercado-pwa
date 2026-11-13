@@ -35,7 +35,9 @@ export const ConfiguracoesTab: React.FC = () => {
     updateUserPassword, 
     resetAllData, 
     logout, 
-    darkMode 
+    darkMode,
+    storeName,
+    storeColor
   } = useApp();
 
   // Estados de Alteração de Senha
@@ -154,7 +156,12 @@ export const ConfiguracoesTab: React.FC = () => {
     <div className="space-y-5 animate-in fade-in duration-300">
       {/* Cabeçalho */}
       <div>
-        <h2 className="text-xl font-black text-slate-900 dark:text-white tracking-tight">
+        <h2 className="text-xl font-black text-slate-900 dark:text-white tracking-tight flex items-center gap-2">
+          <span
+            className="w-2.5 h-2.5 rounded-full shrink-0"
+            style={{ backgroundColor: storeColor }}
+            aria-hidden="true"
+          />
           Ajustes & Preferências
         </h2>
         <p className="text-xs text-slate-500 dark:text-slate-400">
@@ -408,7 +415,7 @@ export const ConfiguracoesTab: React.FC = () => {
 
           <div className="flex items-center gap-2">
             <span className="text-[11px] font-bold text-slate-500 dark:text-slate-400 hidden sm:inline">
-              {operator.store}
+              {storeName}
             </span>
             <button
               onClick={logout}

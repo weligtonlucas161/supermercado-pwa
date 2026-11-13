@@ -29,7 +29,8 @@ function AppContent() {
     isAuthenticated, 
     isSaasAdmin, 
     currentUser, 
-    updateUserPassword 
+    updateUserPassword,
+    storeColor
   } = useApp();
 
   // Modal de Alteração de Senha no Primeiro Login com opção de fechar
@@ -77,6 +78,13 @@ function AppContent() {
           <span>MODO OFFLINE ATIVO — Alterações serão salvas localmente e sincronizadas quando restabelecido.</span>
         </div>
       )}
+
+      {/* Faixa decorativa sutil da identidade visual da loja */}
+      <div
+        className="h-1 w-full shrink-0"
+        style={{ backgroundColor: storeColor, opacity: 0.75 }}
+        aria-hidden="true"
+      />
 
       {/* Top Header com navegação desktop integrada */}
       <Header />

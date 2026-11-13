@@ -3,7 +3,6 @@ import {
   Wifi, 
   WifiOff, 
   Bell, 
-  Barcode, 
   RefreshCw, 
   CheckCircle2, 
   AlertTriangle,
@@ -21,10 +20,11 @@ export const Header: React.FC = () => {
     notifications, 
     unreadCount, 
     markAllNotificationsAsRead,
-    openScanner,
     openChat,
     unreadChatCount,
     operator,
+    storeName,
+    storeColor,
     logout
   } = useApp();
 
@@ -32,40 +32,40 @@ export const Header: React.FC = () => {
 
   return (
     <>
-      <header className="sticky top-0 z-30 px-4 py-3 flex items-center justify-between border-b border-slate-200/80 dark:border-slate-800 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md transition-colors">
+      <header
+        className="sticky top-0 z-30 px-4 py-3 flex items-center justify-between border-b border-slate-200/80 bg-white/95 backdrop-blur-md transition-colors"
+        style={{ borderBottomColor: `${storeColor}30` }}
+      >
         {/* Brand identity */}
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-emerald-600 via-teal-500 to-emerald-400 flex items-center justify-center text-white font-black text-xl shadow-md shadow-emerald-500/20 ring-2 ring-emerald-500/20">
-            S
+        <div className="flex items-center gap-3 min-w-0">
+          <div
+            className="w-10 h-10 rounded-2xl flex items-center justify-center text-white font-black text-xl shadow-md shrink-0"
+            style={{
+              backgroundColor: storeColor,
+              boxShadow: `0 6px 14px -4px ${storeColor}45`,
+            }}
+          >
+            {(storeName || 'L').charAt(0).toUpperCase()}
           </div>
-          <div>
+          <div className="min-w-0">
             <div className="flex items-center gap-2">
-              <h1 className="font-extrabold text-base leading-tight tracking-tight text-slate-900 dark:text-white">
-                SuperPWA
+              <h1 className="font-extrabold text-base leading-tight tracking-tight text-slate-900 truncate max-w-[160px] sm:max-w-xs">
+                {storeName}
               </h1>
-              <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 uppercase tracking-wider">
-                OpSys
-              </span>
+              <span
+                className="w-2 h-2 rounded-full shrink-0"
+                style={{ backgroundColor: storeColor, opacity: 0.7 }}
+                aria-hidden="true"
+              />
             </div>
-            <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate max-w-[150px] sm:max-w-none">
-              {operator.store} • {operator.name.split(' ')[0]} {operator.role ? `(${operator.role})` : ''}
+            <p className="text-[11px] text-slate-500 truncate max-w-[160px] sm:max-w-none">
+              {operator.name.split(' ')[0]} {operator.role ? `(${operator.role})` : ''}
             </p>
           </div>
         </div>
 
-
-
         {/* Right action controls */}
         <div className="flex items-center gap-2">
-          {/* Quick Barcode Scanner trigger */}
-          <button
-            onClick={() => openScanner()}
-            className="p-2 rounded-xl text-slate-700 dark:text-slate-200 bg-slate-100 dark:bg-slate-800 hover:bg-emerald-50 hover:text-emerald-600 dark:hover:bg-slate-750 transition flex items-center gap-1.5 text-xs font-semibold cursor-pointer"
-            title="Abrir Scanner / Bipar"
-          >
-            <Barcode className="w-4 h-4 text-emerald-500" />
-            <span className="hidden md:inline">Bipar</span>
-          </button>
 
           {/* Real Online / Offline status badge (sem simulação) */}
           <div

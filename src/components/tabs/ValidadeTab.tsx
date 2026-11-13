@@ -4,7 +4,7 @@ import { useApp } from '../../context/AppContext';
 import { NewValidityModal } from '../modals/NewValidityModal';
 
 export const ValidadeTab: React.FC = () => {
-  const { validities, darkMode, applyDiscount } = useApp();
+  const { validities, darkMode, applyDiscount, storeColor } = useApp();
   const [searchTerm, setSearchTerm] = useState('');
   const [filter, setFilter] = useState<'all' | 'urgent' | 'warning' | 'ok'>('all');
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -24,7 +24,12 @@ export const ValidadeTab: React.FC = () => {
       {/* Top Header */}
       <div className="flex justify-between items-center">
         <div>
-          <h2 className="text-xl font-black text-slate-900 dark:text-white tracking-tight">
+          <h2 className="text-xl font-black text-slate-900 dark:text-white tracking-tight flex items-center gap-2">
+            <span
+              className="w-2.5 h-2.5 rounded-full shrink-0"
+              style={{ backgroundColor: storeColor }}
+              aria-hidden="true"
+            />
             Controle de Validades
           </h2>
           <p className="text-xs text-slate-500 dark:text-slate-400">

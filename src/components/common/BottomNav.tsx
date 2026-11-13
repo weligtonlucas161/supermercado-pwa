@@ -35,7 +35,7 @@ const NavItem: React.FC<NavItemProps> = ({ icon, label, active, onClick, badge }
 };
 
 export const BottomNav: React.FC = () => {
-  const { activeTab, setActiveTab, validities, products, isGerente, currentUser } = useApp();
+  const { activeTab, setActiveTab, validities, products, isGerente, currentUser, storeColor } = useApp();
 
   const urgentValiditiesCount = validities.filter(v => v.status === 'urgent').length;
   const lowStockCount = products.filter(p => p.stock <= p.minStock).length;
@@ -43,7 +43,10 @@ export const BottomNav: React.FC = () => {
 
   return (
     <div className="fixed bottom-3 sm:bottom-4 left-3 right-3 sm:left-4 sm:right-4 z-40 max-w-xl mx-auto pointer-events-none">
-      <nav className="pointer-events-auto rounded-3xl border border-slate-200/90 dark:border-slate-800/90 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl px-2 py-1.5 shadow-2xl shadow-slate-900/15 dark:shadow-black/50 transition-all flex justify-around items-center ring-1 ring-black/5 dark:ring-white/10">
+      <nav
+        className="pointer-events-auto rounded-3xl border border-slate-200/90 bg-white/95 backdrop-blur-xl px-2 py-1.5 shadow-2xl shadow-slate-900/15 transition-all flex justify-around items-center ring-1 ring-black/5"
+        style={{ borderColor: `${storeColor}35` }}
+      >
         <NavItem
           icon={<Home className="w-5 h-5" />}
           label="Início"

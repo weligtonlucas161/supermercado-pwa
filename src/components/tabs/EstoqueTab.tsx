@@ -13,7 +13,9 @@ import {
   X,
   AlertCircle,
   RefreshCw,
-  PackageX
+  PackageX,
+  Tag,
+  CheckCircle2
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { Product } from '../../types';
@@ -27,6 +29,7 @@ interface ProductCardProps {
   product: Product;
   darkMode: boolean;
   onUpdateStock: (id: string, update: { delta?: number }) => void;
+  onToggleRebaixa: (id: string) => void;
   onRequestDelete: (product: Product) => void;
   onSelectProduct: (product: Product) => void;
 }
@@ -35,6 +38,7 @@ const ProductCard: React.FC<ProductCardProps> = ({
   product,
   darkMode,
   onUpdateStock,
+  onToggleRebaixa,
   onRequestDelete,
   onSelectProduct,
 }) => {
@@ -44,6 +48,7 @@ const ProductCard: React.FC<ProductCardProps> = ({
 
   const startXRef = useRef(0);
   const currentXRef = useRef(0);
+  const dragOffsetRef = useRef(0);
   const longPressTimerRef = useRef<NodeJS.Timeout | null>(null);
   const movedRef = useRef(false);
 
@@ -52,6 +57,7 @@ const ProductCard: React.FC<ProductCardProps> = ({
     movedRef.current = false;
     startXRef.current = clientX;
     currentXRef.current = clientX;
+    dragOffsetRef.current = 0;
 
     longPressTimerRef.current = setTimeout(() => {
       if (!movedRef.current) {
@@ -64,6 +70,14 @@ const ProductCard: React.FC<ProductCardProps> = ({
     if (longPressTimerRef.current) {
       clearTimeout(longPressTimerRef.current);
       longPressTimerRef.current = null;
+    }
+  };
+
+  const applySwipeAction = (offset: number) => {
+    if (offset >= 65) {
+      onToggleRebaixa(product.id);
+    } else if (offset <= -65) {
+      onRequestDelete(product);
     }
   };
 
@@ -82,8 +96,8 @@ const ProductCard: React.FC<ProductCardProps> = ({
       movedRef.current = true;
       cancelLongPress();
       setIsDragging(true);
-      // Limita o arrasto entre -120px e 120px
       const clamped = Math.max(-130, Math.min(130, diff));
+      dragOffsetRef.current = clamped;
       setDragOffset(clamped);
     }
   };
@@ -91,17 +105,14 @@ const ProductCard: React.FC<ProductCardProps> = ({
   const handleTouchEnd = () => {
     cancelLongPress();
     setIsDragging(false);
-
-    // Se arrastou para o lado mais de 65px, ativa a solicitação de remoção
-    if (Math.abs(dragOffset) >= 65) {
-      onRequestDelete(product);
-    }
+    applySwipeAction(dragOffsetRef.current);
+    dragOffsetRef.current = 0;
     setDragOffset(0);
+    startXRef.current = 0;
   };
 
   // Mouse drag handlers (para desktop/mouse)
   const handleMouseDown = (e: React.MouseEvent) => {
-    // Não ativa se clicou diretamente nos botões + / -
     if ((e.target as HTMLElement).closest('button')) return;
     startLongPress(e.clientX);
   };
@@ -114,16 +125,18 @@ const ProductCard: React.FC<ProductCardProps> = ({
       cancelLongPress();
       setIsDragging(true);
       const clamped = Math.max(-130, Math.min(130, diff));
+      dragOffsetRef.current = clamped;
       setDragOffset(clamped);
     }
   };
 
   const handleMouseUp = () => {
     cancelLongPress();
-    if (isDragging && Math.abs(dragOffset) >= 65) {
-      onRequestDelete(product);
+    if (startXRef.current !== 0 && isDragging) {
+      applySwipeAction(dragOffsetRef.current);
     }
     setIsDragging(false);
+    dragOffsetRef.current = 0;
     setDragOffset(0);
     startXRef.current = 0;
   };
@@ -135,19 +148,25 @@ const ProductCard: React.FC<ProductCardProps> = ({
   };
 
   const isLow = product.stock <= product.minStock;
+  const isRebaixaPending = product.rebaixaStatus === 'pending';
+  const isRebaixaConfirmed = product.rebaixaStatus === 'confirmed';
 
   return (
     <div className="relative overflow-hidden rounded-2xl select-none group">
-      {/* Fundo Revelado no Arrastar para o Lado com Lixeira */}
-      <div 
-        onClick={() => onRequestDelete(product)}
-        className="absolute inset-0 bg-rose-600 rounded-2xl flex items-center justify-between px-6 text-white font-black text-xs cursor-pointer shadow-inner"
+      {/* Fundo Revelado no Arrastar: Esquerda->Direita (Rebaixa) | Direita->Esquerda (Excluir) */}
+      <div
+        className={`absolute inset-0 rounded-2xl flex items-center justify-between px-6 font-black text-xs shadow-inner ${
+          dragOffset >= 0 ? 'bg-amber-400 text-amber-950' : 'bg-rose-600 text-white'
+        }`}
       >
         <div className="flex items-center gap-2">
-          <Trash2 className="w-5 h-5 animate-bounce" />
-          <span>Remover Produto</span>
+          <Tag className="w-5 h-5" />
+          <span>{isRebaixaPending ? 'Confirmar Rebaixa' : 'Marcar Rebaixa'}</span>
         </div>
-        <div className="flex items-center gap-2">
+        <div
+          onClick={() => onRequestDelete(product)}
+          className="flex items-center gap-2 cursor-pointer"
+        >
           <span>Remover Produto</span>
           <Trash2 className="w-5 h-5 animate-bounce" />
         </div>
@@ -211,12 +230,28 @@ const ProductCard: React.FC<ProductCardProps> = ({
             }
           }}
           className={`relative p-4 rounded-2xl border flex flex-col sm:flex-row sm:items-center justify-between gap-3 transition-colors cursor-pointer ${
-            darkMode ? 'bg-slate-800/90 border-slate-700' : 'bg-white border-slate-200'
+            isRebaixaPending
+              ? 'animate-rebaixa-blink border-amber-400'
+              : isRebaixaConfirmed
+              ? 'bg-amber-50/70 border-amber-300'
+              : darkMode
+              ? 'bg-slate-800/90 border-slate-700'
+              : 'bg-white border-slate-200'
           } shadow-xs hover:border-emerald-500/50 hover:shadow-md transition-all active:scale-[0.99]`}
         >
           <div className="space-y-1">
             <div className="flex items-center gap-2 flex-wrap">
               <h4 className="text-xs font-bold text-slate-900 dark:text-white">{product.name}</h4>
+              {isRebaixaPending && (
+                <span className="bg-amber-400 text-amber-950 text-[10px] px-2 py-0.5 rounded-md font-black uppercase tracking-wide border border-amber-500 flex items-center gap-1 animate-pulse">
+                  <Tag className="w-3 h-3" /> rebaixa
+                </span>
+              )}
+              {isRebaixaConfirmed && (
+                <span className="bg-amber-500/15 text-amber-800 text-[10px] px-2 py-0.5 rounded-md font-black uppercase tracking-wide border border-amber-500/30 flex items-center gap-1">
+                  <CheckCircle2 className="w-3 h-3 text-amber-600" /> rebaixa confirmada
+                </span>
+              )}
               {product.isLockedForEdit && (
                 <span className="bg-amber-500/15 text-amber-700 dark:text-amber-400 text-[10px] px-2 py-0.5 rounded-md font-bold border border-amber-500/30 flex items-center gap-1">
                   <Lock className="w-3 h-3 text-amber-500" /> Em edição ({product.lockedBy || 'outro operador'})
@@ -298,8 +333,10 @@ export const EstoqueTab: React.FC = () => {
   const {
     products,
     updateProductStock,
+    toggleProductRebaixa,
     removeProduct,
     darkMode,
+    storeColor,
     openScanner,
     refreshProductsFromDatabase,
     isSyncingWithDatabase,
@@ -376,6 +413,11 @@ export const EstoqueTab: React.FC = () => {
       <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-3">
         <div>
           <div className="flex items-center gap-2">
+            <span
+              className="w-2.5 h-2.5 rounded-full shrink-0"
+              style={{ backgroundColor: storeColor }}
+              aria-hidden="true"
+            />
             <h2 className="text-xl font-black text-slate-900 dark:text-white tracking-tight">
               {mainTab === 'estoque' && 'Consulta de Estoque'}
               {mainTab === 'avarias' && 'Avarias do Estoque'}
@@ -504,7 +546,7 @@ export const EstoqueTab: React.FC = () => {
         <>
       {/* Dica de Uso de Gestos */}
       <div className="px-3.5 py-2 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/80 dark:border-slate-700 text-[11px] text-slate-500 dark:text-slate-400 flex items-center justify-between">
-        <span>💡 Dica: <strong>Pressione um produto</strong> para mudar para vermelho com lixeira, ou <strong>arraste para o lado</strong> para remover.</span>
+        <span>💡 Gestos: <strong>arraste para a direita</strong> para marcar/confirmar rebaixa, ou <strong>arraste para a esquerda</strong> (ou pressione) para remover.</span>
       </div>
 
       {/* Busca, Filtro de Ordenação e Scanner Trigger */}
@@ -594,6 +636,7 @@ export const EstoqueTab: React.FC = () => {
                   product={product}
                   darkMode={darkMode}
                   onUpdateStock={updateProductStock}
+                  onToggleRebaixa={toggleProductRebaixa}
                   onRequestDelete={(p) => setProductToDelete(p)}
                   onSelectProduct={(p) => setSelectedProductForDetail(p)}
                 />

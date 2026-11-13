@@ -593,6 +593,47 @@ export async function createStoreInDatabase(store: Store): Promise<{ success: bo
 }
 
 /**
+ * Atualiza o nome e a cor de identidade visual da loja no banco e localmente
+ */
+export async function updateStoreSettingsInDatabase(
+  storeId: string,
+  updates: { nome_loja?: string; cor_primaria?: string }
+): Promise<{ success: boolean; error?: string }> {
+  const localStores = getStoredStores();
+  const index = localStores.findIndex(s => s.id === storeId);
+  if (index !== -1) {
+    if (updates.nome_loja !== undefined) localStores[index].nome_loja = updates.nome_loja;
+    if (updates.cor_primaria !== undefined) localStores[index].cor_primaria = updates.cor_primaria;
+    if (typeof window !== 'undefined') {
+      localStorage.setItem(LOCAL_STORAGE_STORES_KEY, JSON.stringify(localStores));
+    }
+  }
+
+  if (client && storeId) {
+    try {
+      const payload: Record<string, unknown> = {};
+      if (updates.nome_loja !== undefined) payload.nome_loja = updates.nome_loja;
+      if (updates.cor_primaria !== undefined) payload.cor_borda = updates.cor_primaria;
+
+      const { error } = await client
+        .from('lojas')
+        .update(payload)
+        .eq('id', storeId);
+
+      if (error) {
+        console.warn('Erro ao atualizar configurações da loja no banco:', error.message);
+        return { success: false, error: error.message };
+      }
+    } catch (err: any) {
+      console.warn('Erro de conexão ao atualizar loja:', err);
+      return { success: false, error: err?.message || 'Falha de conexão com o banco.' };
+    }
+  }
+
+  return { success: true };
+}
+
+/**
  * Atualiza o limite de usuários de uma loja diretamente no banco e localmente
  */
 export async function updateStoreUserLimitInDatabase(

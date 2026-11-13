@@ -1,5 +1,7 @@
 @import "tailwindcss";
 
+@custom-variant dark (&:where(.dark, .dark *));
+
 @layer base {
   /* Prevent blue tap highlights and pull-to-refresh reload flicker on mobile PWA */
   html, body {
@@ -17,4 +19,21 @@
 .scrollbar-none {
   -ms-overflow-style: none;  /* IE and Edge */
   scrollbar-width: none;  /* Firefox */
+}
+
+@keyframes rebaixaBlink {
+  0%, 100% {
+    background-color: rgb(254 243 199);
+    border-color: rgb(245 158 11);
+    box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.25);
+  }
+  50% {
+    background-color: rgb(253 230 138);
+    border-color: rgb(217 119 6);
+    box-shadow: 0 0 0 4px rgba(245, 158, 11, 0.4);
+  }
+}
+
+.animate-rebaixa-blink {
+  animation: rebaixaBlink 1.1s ease-in-out infinite;
 }

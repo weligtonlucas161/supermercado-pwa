@@ -44,6 +44,7 @@ import {
   fetchStoresFromDatabase,
   createStoreInDatabase,
   updateStoreUserLimitInDatabase,
+  updateStoreSettingsInDatabase,
   fetchStoreEmployees,
   saveStoreEmployee,
   toggleStoreEmployeeActive,
@@ -75,6 +76,9 @@ interface AppContextType {
   setActiveTab: (tab: TabId) => void;
   darkMode: boolean;
   isDesktop: boolean;
+  storeName: string;
+  storeColor: string;
+  updateStoreSettings: (updates: { nome_loja?: string; cor_primaria?: string }) => Promise<{ success: boolean; error?: string }>;
 
   // Connectivity & Real Sync
   isOnline: boolean;
@@ -118,6 +122,7 @@ interface AppContextType {
   addProduct: (product: Omit<Product, 'id'>) => Product;
   importProductsBatch: (items: SpreadsheetProductItem[], targetSetor: SetorLoja, lojaId: string) => void;
   updateProductStock: (id: string, options: { delta?: number; exact?: number }) => void;
+  toggleProductRebaixa: (id: string) => void;
   removeProduct: (id: string) => void;
   lockProductForEdit: (productId: string, lockedByName: string) => boolean;
   unlockProductForEdit: (productId: string) => void;
@@ -185,45 +190,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   // =========================================================================
-  // 1. DETECÇÃO AUTOMÁTICA DO TEMA DO DISPOSITIVO (SEM ESCOLHA MANUAL)
+  // 1. MODO CLARO PADRÃO FIXO (SEM OPÇÃO DE MODO ESCURO)
   // =========================================================================
-  const [darkMode, setDarkMode] = useState<boolean>(() => {
-    if (typeof window !== 'undefined' && window.matchMedia) {
-      return window.matchMedia('(prefers-color-scheme: dark)').matches;
-    }
-    return false;
-  });
+  const darkMode = false;
 
   useEffect(() => {
-    if (typeof window === 'undefined' || !window.matchMedia) return;
-    const media = window.matchMedia('(prefers-color-scheme: dark)');
-    
-    // Atualiza estado inicial
-    setDarkMode(media.matches);
-
-    // Ouve alterações de preferência de tema no sistema operacional do aparelho
-    const handleThemeChange = (e: MediaQueryListEvent) => {
-      setDarkMode(e.matches);
-    };
-
-    try {
-      media.addEventListener('change', handleThemeChange);
-      return () => media.removeEventListener('change', handleThemeChange);
-    } catch {
-      // Fallback para navegadores legados
-      media.addListener(handleThemeChange);
-      return () => media.removeListener(handleThemeChange);
-    }
+    document.documentElement.classList.remove('dark');
   }, []);
-
-  // Sincroniza a classe 'dark' no elemento raiz do documento
-  useEffect(() => {
-    if (darkMode) {
-      document.documentElement.classList.add('dark');
-    } else {
-      document.documentElement.classList.remove('dark');
-    }
-  }, [darkMode]);
 
   // =========================================================================
   // 2. DETECÇÃO AUTOMÁTICA DE AMBIENTE: DESKTOP VS MOBILE
@@ -338,6 +311,62 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (res.success) {
       await refreshStores();
     }
+    return res;
+  };
+
+  const activeLojaId = operator.loja_id || currentUser?.loja_id || stores[0]?.id || '';
+  const currentStoreObj = stores.find(s => s.id === activeLojaId) || stores[0];
+  const storeName = currentStoreObj?.nome_loja || operator.store || currentUser?.loja_nome || 'Minha Loja';
+  const storeColor = currentStoreObj?.cor_primaria || '#059669';
+
+  useEffect(() => {
+    if (typeof document !== 'undefined') {
+      document.documentElement.style.setProperty('--store-color', storeColor);
+    }
+  }, [storeColor]);
+
+  const updateStoreSettings = async (updates: { nome_loja?: string; cor_primaria?: string }) => {
+    const targetId = activeLojaId;
+    if (!targetId) {
+      return { success: false, error: 'Loja atual não identificada.' };
+    }
+
+    const res = await updateStoreSettingsInDatabase(targetId, updates);
+
+    setStores(prev => {
+      const exists = prev.some(s => s.id === targetId);
+      if (!exists) {
+        return [
+          {
+            id: targetId,
+            nome_loja: updates.nome_loja ?? storeName,
+            cor_primaria: updates.cor_primaria ?? storeColor,
+            limite_usuarios: 15,
+            ativa: true,
+          },
+          ...prev,
+        ];
+      }
+      return prev.map(s =>
+        s.id === targetId
+          ? {
+              ...s,
+              ...(updates.nome_loja !== undefined ? { nome_loja: updates.nome_loja } : {}),
+              ...(updates.cor_primaria !== undefined ? { cor_primaria: updates.cor_primaria } : {}),
+            }
+          : s
+      );
+    });
+
+    if (updates.nome_loja !== undefined) {
+      setOperator(prev => ({ ...prev, store: updates.nome_loja! }));
+      if (currentUser) {
+        const updatedUser = { ...currentUser, loja_nome: updates.nome_loja };
+        setCurrentUser(updatedUser);
+        saveStoredData(STORAGE_KEYS.AUTH_USER, updatedUser);
+      }
+    }
+
     return res;
   };
 
@@ -808,6 +837,41 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
+  const toggleProductRebaixa = (id: string) => {
+    const target = products.find(p => p.id === id);
+    if (!target) return;
+
+    const nextStatus: 'pending' | 'confirmed' =
+      target.rebaixaStatus === 'pending' ? 'confirmed' : target.rebaixaStatus === 'confirmed' ? 'confirmed' : 'pending';
+
+    setProducts(prev =>
+      prev.map(p =>
+        p.id === id
+          ? {
+              ...p,
+              rebaixaStatus: nextStatus,
+              lastUpdated: new Date().toISOString(),
+            }
+          : p
+      )
+    );
+
+    triggerScanBeep(true);
+    if (nextStatus === 'confirmed') {
+      setNotifications(prev => [
+        {
+          id: `notif-rebaixa-${id}-${Date.now()}`,
+          title: 'Rebaixa Confirmada',
+          message: `Rebaixa confirmada para "${target.name}".`,
+          type: 'warning',
+          timestamp: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
+          read: false,
+        },
+        ...prev,
+      ]);
+    }
+  };
+
   const removeProduct = (id: string) => {
     setProducts(prev => prev.filter(p => p.id !== id));
   };
@@ -1199,6 +1263,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setActiveTab,
         darkMode,
         isDesktop,
+        storeName,
+        storeColor,
+        updateStoreSettings,
 
         isOnline: browserOnline,
         effectiveOnline,
@@ -1237,6 +1304,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         addProduct,
         importProductsBatch,
         updateProductStock,
+        toggleProductRebaixa,
         removeProduct,
         lockProductForEdit,
         unlockProductForEdit,

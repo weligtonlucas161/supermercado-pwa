@@ -1,17 +1,20 @@
 import React, { useMemo, useState } from 'react';
 import {
+  AlertCircle,
   AlertTriangle,
   ArrowDownUp,
   Barcode,
   Boxes,
+  CheckCircle2,
   Package,
+  PackageCheck,
   PackageX,
-  Plus,
   TrendingDown,
   Zap,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { Product } from '../../types';
+import { triggerScanBeep } from '../../utils/haptics';
 
 type Severidade = 'zerado' | 'critico' | 'atencao';
 
@@ -22,11 +25,12 @@ type Severidade = 'zerado' | 'critico' | 'atencao';
  * gôndola ou acabou?" — quem está zerado e quem está no limite de segurança.
  */
 export const EstoqueRupturasTab: React.FC = () => {
-  const { products, updateProductStock, openScanner, darkMode } = useApp();
+  const { products, updateProductStock, addAvaria, operator, openScanner, darkMode } = useApp();
 
   const [busca, setBusca] = useState('');
   const [setorFiltro, setSetorFiltro] = useState('all');
   const [ordenarPor, setOrdenarPor] = useState<'criticidade' | 'quantidade' | 'nome'>('criticidade');
+  const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   // ---------------------------------------------------------------------
   // Classificação por severidade
@@ -87,6 +91,53 @@ export const EstoqueRupturasTab: React.FC = () => {
   const biparProduto = () => {
     openScanner((codigo) => {
       setBusca(codigo);
+    });
+  };
+
+  const confirmarViaBip = (product: Product, acao: 'avaria' | 'nao_ruptura') => {
+    setFeedback(null);
+    openScanner(async (codigoBipado) => {
+      const limpo = codigoBipado.replace(/[^0-9A-Za-z]/g, '').trim().toLowerCase();
+      const corresponde =
+        limpo !== '' &&
+        (product.ean.toLowerCase() === limpo ||
+          (product.secondaryEan ? product.secondaryEan.toLowerCase() === limpo : false) ||
+          (product.reducedCode ? product.reducedCode.toLowerCase() === limpo : false));
+
+      if (!corresponde) {
+        triggerScanBeep(false);
+        setFeedback({
+          type: 'error',
+          text: `Bip inválido para "${product.name}". Código esperado: ${product.ean}. Confirmação cancelada.`,
+        });
+        return;
+      }
+
+      if (acao === 'avaria') {
+        await addAvaria({
+          loja_id: operator.loja_id || product.loja_id || '',
+          codigo_barras: product.ean,
+          codigo_reduzido: product.reducedCode || undefined,
+          produto_nome: product.name,
+          quantidade: 1,
+          tipo_avaria: 'Outro',
+          para_troca: true,
+          setor: product.category || 'Estoque',
+          registrado_por_nome: operator.name || 'Operador',
+          registrado_por_matricula: operator.code || '',
+        });
+        setFeedback({
+          type: 'success',
+          text: `Avaria confirmada via bip para "${product.name}".`,
+        });
+      } else {
+        updateProductStock(product.id, { exact: Math.max(product.stock, product.minStock + 1) });
+        triggerScanBeep(true);
+        setFeedback({
+          type: 'success',
+          text: `"${product.name}" confirmado via bip como Não é ruptura.`,
+        });
+      }
     });
   };
 
@@ -254,6 +305,24 @@ export const EstoqueRupturasTab: React.FC = () => {
         </div>
       )}
 
+      {/* ============================ FEEDBACK DE BIP ============================ */}
+      {feedback && (
+        <div
+          className={`p-3.5 rounded-2xl border text-xs flex items-center gap-2 animate-in fade-in ${
+            feedback.type === 'success'
+              ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-800'
+              : 'bg-rose-500/10 border-rose-500/30 text-rose-800'
+          }`}
+        >
+          {feedback.type === 'success' ? (
+            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+          ) : (
+            <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+          )}
+          <span className="font-semibold">{feedback.text}</span>
+        </div>
+      )}
+
       {/* ============================ LISTA ============================ */}
       <div className="space-y-2.5">
         {rupturaProducts.length === 0 ? (
@@ -275,7 +344,8 @@ export const EstoqueRupturasTab: React.FC = () => {
               product={product}
               severidade={classificar(product)}
               darkMode={darkMode}
-              onRepor={(delta) => updateProductStock(product.id, { delta })}
+              onConfirmAvaria={() => confirmarViaBip(product, 'avaria')}
+              onConfirmNaoRuptura={() => confirmarViaBip(product, 'nao_ruptura')}
             />
           ))
         )}
@@ -285,16 +355,15 @@ export const EstoqueRupturasTab: React.FC = () => {
 };
 
 /**
- * Cartão de produto em ruptura, com barra de nível de estoque e reposição rápida.
+ * Cartão de produto em ruptura, com confirmação obrigatória via bip para Avaria ou Não é ruptura.
  */
 const RupturaCard: React.FC<{
   product: Product;
   severidade: Severidade;
   darkMode: boolean;
-  onRepor: (delta: number) => void;
-}> = ({ product, severidade, darkMode, onRepor }) => {
-  const [reposicao, setReposicao] = useState(1);
-
+  onConfirmAvaria: () => void;
+  onConfirmNaoRuptura: () => void;
+}> = ({ product, severidade, darkMode, onConfirmAvaria, onConfirmNaoRuptura }) => {
   const falta = Math.max(0, product.minStock - product.stock);
   const pct = product.minStock > 0 ? Math.min(100, Math.round((product.stock / product.minStock) * 100)) : 0;
 
@@ -372,47 +441,30 @@ const RupturaCard: React.FC<{
           </div>
         </div>
 
-        {/* Reposição rápida */}
-        <div className="flex items-center gap-2 pt-1 border-t border-slate-100 dark:border-slate-700/60 flex-wrap">
-          <button
-            type="button"
-            onClick={() => setReposicao(r => Math.max(1, r - 1))}
-            className="w-7 h-7 rounded-lg bg-slate-100 dark:bg-slate-750 flex items-center justify-center text-slate-600 dark:text-slate-300 hover:bg-slate-200 transition text-xs font-black cursor-pointer"
-            title="Diminuir a quantidade de reposição"
-          >
-            −
-          </button>
-          <div className="px-2.5 py-1 rounded-lg bg-orange-500/15 text-orange-700 dark:text-orange-400 font-black text-[11px] min-w-[54px] text-center">
-            +{reposicao} un
-          </div>
-          <button
-            type="button"
-            onClick={() => setReposicao(r => r + 1)}
-            className="w-7 h-7 rounded-lg bg-slate-100 dark:bg-slate-750 flex items-center justify-center text-slate-600 dark:text-slate-300 hover:bg-slate-200 transition text-xs font-black cursor-pointer"
-            title="Aumentar a quantidade de reposição"
-          >
-            +
-          </button>
-
-          <button
-            type="button"
-            onClick={() => onRepor(reposicao)}
-            className="px-3 py-1.5 rounded-xl bg-orange-500 hover:bg-orange-600 text-white font-bold text-[11px] transition shadow-xs flex items-center gap-1 cursor-pointer"
-          >
-            <Plus className="w-3.5 h-3.5" />
-            Repor
-          </button>
-
-          {falta > 0 && (
+        {/* Ações de Ruptura (confirmação obrigatória via bip) */}
+        <div className="flex items-center justify-between gap-2 pt-2 border-t border-slate-100 dark:border-slate-700/60 flex-wrap">
+          <span className="text-[10px] font-semibold text-slate-400 flex items-center gap-1">
+            <Barcode className="w-3.5 h-3.5 text-orange-500" />
+            Bip obrigatório para confirmar
+          </span>
+          <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={() => onRepor(falta)}
-              className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[11px] transition shadow-xs cursor-pointer"
-              title={`Repor as ${falta} unidades faltantes para atingir o estoque mínimo`}
+              onClick={onConfirmAvaria}
+              className="px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-[11px] transition shadow-xs flex items-center gap-1.5 cursor-pointer"
             >
-              Completar mínimo ({falta})
+              <PackageX className="w-3.5 h-3.5" />
+              Avaria
             </button>
-          )}
+            <button
+              type="button"
+              onClick={onConfirmNaoRuptura}
+              className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[11px] transition shadow-xs flex items-center gap-1.5 cursor-pointer"
+            >
+              <PackageCheck className="w-3.5 h-3.5" />
+              Não é ruptura
+            </button>
+          </div>
         </div>
       </div>
     </div>

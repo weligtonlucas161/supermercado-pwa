@@ -1106,7 +1106,12 @@ export const AuditoriaTab: React.FC = () => {
 
       <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-3">
         <div>
-          <h2 className="text-xl font-black text-slate-900 dark:text-white tracking-tight">
+          <h2 className="text-xl font-black text-slate-900 dark:text-white tracking-tight flex items-center gap-2">
+            <span
+              className="w-2.5 h-2.5 rounded-full shrink-0"
+              style={{ backgroundColor: 'var(--store-color, #059669)' }}
+              aria-hidden="true"
+            />
             Módulos de Auditoria
           </h2>
           <p className="text-xs text-slate-500 dark:text-slate-400">
