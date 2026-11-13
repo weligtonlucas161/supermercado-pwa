@@ -20,13 +20,14 @@ import { triggerScanBeep } from '../../utils/haptics';
 import { useBarcodeDetector } from '../../hooks/useBarcodeDetector';
 
 export const BarcodeModal: React.FC = () => {
-  const { isScannerOpen, closeScanner, scannerCallback, products, setActiveTab } = useApp();
+  const { isScannerOpen, closeScanner, scannerCallback, scannerCameraOnly, products, setActiveTab } = useApp();
   const [manualCode, setManualCode] = useState('');
   const [matchedProduct, setMatchedProduct] = useState<(typeof products)[0] | null>(null);
   const [scanNotice, setScanNotice] = useState<string | null>(null);
   const [tapFocusPulse, setTapFocusPulse] = useState<{ x: number; y: number } | null>(null);
 
   const videoElementRef = useRef<HTMLVideoElement | null>(null);
+  const cameraAutoConfirmedRef = useRef(false);
 
   // Hook nativo da Barcode Detector API (Google Play Services / Chromium) + ZXing tryHarder + Zoom & Focus
   const {
@@ -50,6 +51,12 @@ export const BarcodeModal: React.FC = () => {
   });
 
   const handleBarcodeRead = (code: string, format?: string) => {
+    if (scannerCameraOnly) {
+      if (cameraAutoConfirmedRef.current) return;
+      cameraAutoConfirmedRef.current = true;
+      handleConfirmSelection(code);
+      return;
+    }
     setManualCode(code);
     const found = products.find(p => p.ean.includes(code.trim()) || code.trim().includes(p.ean));
     setMatchedProduct(found || null);
@@ -70,6 +77,7 @@ export const BarcodeModal: React.FC = () => {
   // Iniciar ou parar a câmera ao abrir/fechar modal
   useEffect(() => {
     if (isScannerOpen) {
+      cameraAutoConfirmedRef.current = false;
       setManualCode('');
       setMatchedProduct(null);
       setScanNotice(null);
@@ -314,7 +322,12 @@ export const BarcodeModal: React.FC = () => {
           </div>
         )}
 
-        {/* Entrada Manual & Atalhos */}
+        {/* Entrada Manual & Atalhos (oculta em modo exclusivo por câmera) */}
+        {scannerCameraOnly ? (
+          <div className="px-4 py-3 bg-emerald-500/10 border-t border-emerald-500/20 text-center text-xs text-emerald-700 dark:text-emerald-300 font-semibold">
+            Modo exclusivo de leitura: aponte a câmera para o código de barras para confirmar o item.
+          </div>
+        ) : (
         <div className="p-4 space-y-3.5 overflow-y-auto">
           {/* Matched Preview */}
           {matchedProduct ? (
@@ -363,6 +376,7 @@ export const BarcodeModal: React.FC = () => {
             </div>
           </div>
         </div>
+        )}
       </div>
     </div>
   );

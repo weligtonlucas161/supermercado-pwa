@@ -136,7 +136,8 @@ interface AppContextType {
 
   // Barcode Scanner Modal Global State
   isScannerOpen: boolean;
-  openScanner: (callback?: (barcode: string) => void) => void;
+  scannerCameraOnly: boolean;
+  openScanner: (callback?: (barcode: string) => void, options?: { cameraOnly?: boolean }) => void;
   closeScanner: () => void;
   scannerCallback: ((barcode: string) => void) | null;
 
@@ -924,19 +925,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Scanner modal global state
   const [isScannerOpen, setIsScannerOpen] = useState(false);
   const [scannerCallback, setScannerCallback] = useState<((barcode: string) => void) | null>(null);
+  const [scannerCameraOnly, setScannerCameraOnly] = useState(false);
 
-  const openScanner = (cb?: (barcode: string) => void) => {
+  const openScanner = (cb?: (barcode: string) => void, options?: { cameraOnly?: boolean }) => {
     if (cb) {
       setScannerCallback(() => cb);
     } else {
       setScannerCallback(null);
     }
+    setScannerCameraOnly(Boolean(options?.cameraOnly));
     setIsScannerOpen(true);
   };
 
   const closeScanner = () => {
     setIsScannerOpen(false);
     setScannerCallback(null);
+    setScannerCameraOnly(false);
   };
 
   // =========================================================================
@@ -1148,6 +1152,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         markAllNotificationsAsRead,
 
         isScannerOpen,
+        scannerCameraOnly,
         openScanner,
         closeScanner,
         scannerCallback,

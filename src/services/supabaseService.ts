@@ -1291,11 +1291,16 @@ export interface DbAuditBip {
 
 const LOCAL_ACTIVE_SESSIONS_KEY = 'superpwa_active_audit_sessions';
 const LOCAL_AUDIT_BIPS_KEY = 'superpwa_audit_bips_';
+export const AUDIT_SESSION_MAX_INACTIVITY_MS = 5 * 60 * 60 * 1000; // 5 horas
 
 /**
  * Consulta sessões ativas de auditoria (para notificar todos do setor)
+ * Sessões com mais de 5h são encerradas automaticamente por expiração.
  */
 export async function fetchActiveAuditSessions(lojaId: string): Promise<DbActiveAuditSession[]> {
+  const now = Date.now();
+  const isNotExpired = (s: DbActiveAuditSession) => (now - Number(s.timestamp || 0)) < AUDIT_SESSION_MAX_INACTIVITY_MS;
+
   if (client && isSupabaseConfigured()) {
     try {
       const { data, error } = await client
@@ -1306,10 +1311,20 @@ export async function fetchActiveAuditSessions(lojaId: string): Promise<DbActive
         .order('timestamp', { ascending: false });
 
       if (!error && data) {
-        if (typeof window !== 'undefined') {
-          localStorage.setItem(LOCAL_ACTIVE_SESSIONS_KEY, JSON.stringify(data));
+        const sessions = data as DbActiveAuditSession[];
+        const expiredIds = sessions.filter(s => !isNotExpired(s)).map(s => s.id);
+        if (expiredIds.length > 0) {
+          client
+            .from('auditoria_presenca_sessoes')
+            .update({ status: 'CONCLUIDA' })
+            .in('id', expiredIds)
+            .then(() => {});
         }
-        return data as DbActiveAuditSession[];
+        const active = sessions.filter(isNotExpired);
+        if (typeof window !== 'undefined') {
+          localStorage.setItem(LOCAL_ACTIVE_SESSIONS_KEY, JSON.stringify(active));
+        }
+        return active;
       }
     } catch (err) {
       console.debug('Aviso ao consultar sessões ativas no banco:', err);
@@ -1320,7 +1335,10 @@ export async function fetchActiveAuditSessions(lojaId: string): Promise<DbActive
   if (typeof window !== 'undefined') {
     try {
       const raw = localStorage.getItem(LOCAL_ACTIVE_SESSIONS_KEY);
-      if (raw) return JSON.parse(raw);
+      if (raw) {
+        const parsed: DbActiveAuditSession[] = JSON.parse(raw);
+        return parsed.filter(isNotExpired);
+      }
     } catch {
       // ignore
     }
@@ -1558,26 +1576,63 @@ export async function finalizeAuditSessionInDatabase(data: {
   return { success: true };
 }
 
+let activeAuditChannelRef: { lojaId: string; channel: ReturnType<NonNullable<typeof client>['channel']>; ready: Promise<void> } | null = null;
+
 /**
- * Assina as alterações em tempo real de auditoria (sessões e bips) para sincronizar
+ * Notifica via Broadcast que um operador entrou em uma sessão de auditoria ativa
+ */
+export async function notifySessionJoinRealtime(data: {
+  lojaId: string;
+  sessaoId: string;
+  nome: string;
+  matricula: string;
+}): Promise<boolean> {
+  if (!client || !isSupabaseConfigured()) return false;
+  try {
+    if (activeAuditChannelRef && activeAuditChannelRef.lojaId === data.lojaId) {
+      await activeAuditChannelRef.ready;
+      const res = await activeAuditChannelRef.channel.send({
+        type: 'broadcast',
+        event: 'session_user_joined',
+        payload: data,
+      });
+      return res === 'ok';
+    }
+    return false;
+  } catch (err) {
+    console.warn('Aviso ao notificar entrada na sessão:', err);
+    return false;
+  }
+}
+
 /**
  * Assina as alterações em tempo real de auditoria (sessões e bips) e presença de operadores
- * para sincronizar instantaneamente todos os participantes do setor e alertar desconexões.
+ * para sincronizar instantaneamente todos os participantes do setor e alertar desconexões/entradas.
  */
 export function subscribeToAuditRealtime(
   lojaId: string,
   onEvent: () => void,
   onNewBip?: (bip: DbAuditBip) => void,
   operatorPresence?: { matricula: string; nome: string },
-  onUserOffline?: (userName: string) => void
+  onUserOffline?: (userName: string) => void,
+  onUserJoinedSession?: (userName: string, sessaoId: string, matricula?: string) => void
 ): () => void {
   if (!client || !isSupabaseConfigured()) return () => {};
 
   try {
     const channelName = `realtime_auditoria_${lojaId}`;
     const channel = client.channel(channelName, {
-      config: operatorPresence ? { presence: { key: operatorPresence.matricula } } : {},
+      config: {
+        broadcast: { self: false },
+        ...(operatorPresence ? { presence: { key: operatorPresence.matricula } } : {}),
+      },
     });
+
+    let resolveReady: () => void = () => {};
+    const ready = new Promise<void>((res) => {
+      resolveReady = res;
+    });
+    activeAuditChannelRef = { lojaId, channel, ready };
 
     channel
       .on(
@@ -1603,7 +1658,15 @@ export function subscribeToAuditRealtime(
         () => {
           onEvent();
         }
-      );
+      )
+      .on('broadcast', { event: 'session_user_joined' }, ({ payload }) => {
+        if (payload && onUserJoinedSession) {
+          const p = payload as { nome?: string; sessaoId?: string; matricula?: string };
+          if (p.nome && p.sessaoId) {
+            onUserJoinedSession(p.nome, p.sessaoId, p.matricula);
+          }
+        }
+      });
 
     if (operatorPresence && onUserOffline) {
       channel.on('presence', { event: 'leave' }, ({ leftPresences }) => {
@@ -1620,20 +1683,26 @@ export function subscribeToAuditRealtime(
     }
 
     channel.subscribe(async (status) => {
-      if (status === 'SUBSCRIBED' && operatorPresence) {
-        try {
-          await channel.track({
-            matricula: operatorPresence.matricula,
-            nome: operatorPresence.nome,
-            online_at: Date.now(),
-          });
-        } catch (e) {
-          console.warn('[Presence] Erro ao registrar presença:', e);
+      if (status === 'SUBSCRIBED') {
+        resolveReady();
+        if (operatorPresence) {
+          try {
+            await channel.track({
+              matricula: operatorPresence.matricula,
+              nome: operatorPresence.nome,
+              online_at: Date.now(),
+            });
+          } catch (e) {
+            console.warn('[Presence] Erro ao registrar presença:', e);
+          }
         }
       }
     });
 
     return () => {
+      if (activeAuditChannelRef?.channel === channel) {
+        activeAuditChannelRef = null;
+      }
       client?.removeChannel(channel);
     };
   } catch (err) {

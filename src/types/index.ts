@@ -173,11 +173,19 @@ export interface AuditItem {
   confirmedItems?: number;
   pendingItems?: number;
   presenceRate?: string;
+  startedBy?: string;
+  participants?: string[];
+  startedAtMs?: number;
+  finishedAtMs?: number;
+  durationLabel?: string;
+  cameraScansCount?: number;
+  manualScansCount?: number;
   confirmedList?: Array<{ 
     name: string; 
     ean: string; 
     scannedAt: string; 
     scannedBy?: string;
+    scanMethod?: 'camera' | 'manual';
     reducedCode?: string;
     supplierCode?: string;
   }>;
