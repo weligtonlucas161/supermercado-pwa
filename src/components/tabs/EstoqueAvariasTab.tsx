@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { AvariaItem, TIPOS_AVARIA, TipoAvaria } from '../../types';
+import { sanitizeBarcode, sanitizeIdentifier, sanitizeText, validateEnum, validatePositiveInt } from '../../utils/security';
 
 /**
  * INTERFACE DE AVARIAS (PERDAS, QUEBRAS E TROCAS)
@@ -95,34 +96,35 @@ export const EstoqueAvariasTab: React.FC = () => {
     setErro('');
     setSucesso('');
 
-    const codigo = codigoBarras.replace(/[^0-9A-Za-z]/g, '').trim();
-    const qtd = Number(quantidade);
+    const codigo = sanitizeBarcode(codigoBarras, 32);
+    const qtd = validatePositiveInt(quantidade, 0);
+    const cleanNome = sanitizeText(produtoNome, 200);
 
     if (!codigo) {
-      setErro('Informe ou bipe o código de barras do produto avariado.');
+      setErro('Informe ou bipe o código de barras válido do produto avariado.');
       return;
     }
     if (!qtd || qtd <= 0) {
       setErro('A quantidade avariada deve ser maior que zero.');
       return;
     }
-    if (!produtoNome.trim()) {
+    if (!cleanNome) {
       setErro('Informe o nome do produto avariado.');
       return;
     }
 
     setEnviando(true);
     const res = await addAvaria({
-      loja_id: operator.loja_id || '',
+      loja_id: sanitizeIdentifier(operator.loja_id || '', 64),
       codigo_barras: codigo,
-      codigo_reduzido: codigoReduzido.trim() || undefined,
-      produto_nome: produtoNome.trim(),
+      codigo_reduzido: codigoReduzido.trim() ? sanitizeIdentifier(codigoReduzido, 32) : undefined,
+      produto_nome: cleanNome,
       quantidade: qtd,
-      tipo_avaria: tipoAvaria,
-      para_troca: paraTroca,
-      setor: operator.setor_restrito && operator.setor_restrito !== 'TODOS' ? operator.setor_restrito : 'Estoque',
-      registrado_por_nome: operator.name || 'Operador',
-      registrado_por_matricula: operator.code || '',
+      tipo_avaria: validateEnum(tipoAvaria, TIPOS_AVARIA, 'Outro'),
+      para_troca: Boolean(paraTroca),
+      setor: operator.setor_restrito && operator.setor_restrito !== 'TODOS' ? sanitizeText(operator.setor_restrito, 64) : 'Estoque',
+      registrado_por_nome: sanitizeText(operator.name || 'Operador', 120),
+      registrado_por_matricula: sanitizeIdentifier(operator.code || '', 64),
     });
     setEnviando(false);
 

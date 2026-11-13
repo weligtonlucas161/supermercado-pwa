@@ -32,6 +32,7 @@ import {
 } from '../../services/supabaseService';
 import { encryptProductList } from '../../utils/crypto';
 import { triggerScanBeep } from '../../utils/haptics';
+import { sanitizeSpreadsheetCell, sanitizeIdentifier, sanitizeBarcode, validatePositiveInt } from '../../utils/security';
 
 interface ImportSpreadsheetModalProps {
   isOpen: boolean;
@@ -242,17 +243,17 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
     const targetSlice = matrix.slice(startIdx, endIdx);
 
     const items: SpreadsheetProductItem[] = targetSlice.map((row) => {
-      // 1. Descrição do produto
-      const name = currentColMap.name >= 0 ? String(row[currentColMap.name] ?? '').trim() : '';
+      // 1. Descrição do produto (sanitizada contra XSS, SQLi e Formula Injection)
+      const name = currentColMap.name >= 0 ? sanitizeSpreadsheetCell(row[currentColMap.name], 200) : '';
       // 2. Código de fornecedor
-      const supplierCode = currentColMap.supplierCode >= 0 ? String(row[currentColMap.supplierCode] ?? '').trim() : '';
+      const supplierCode = currentColMap.supplierCode >= 0 ? sanitizeIdentifier(row[currentColMap.supplierCode], 32) : '';
       // 3. Código reduzido
-      const reducedCode = currentColMap.reducedCode >= 0 ? String(row[currentColMap.reducedCode] ?? '').trim() : '';
+      const reducedCode = currentColMap.reducedCode >= 0 ? sanitizeIdentifier(row[currentColMap.reducedCode], 32) : '';
       // 4. Código EAN
-      const ean = currentColMap.ean >= 0 ? String(row[currentColMap.ean] ?? '').trim() : '';
+      const ean = currentColMap.ean >= 0 ? sanitizeBarcode(row[currentColMap.ean], 32) : '';
       // 5. Quantidade
       const quantityRaw = currentColMap.quantity >= 0 ? row[currentColMap.quantity] : 0;
-      const quantity = Math.max(0, parseInt(String(quantityRaw ?? 0).replace(/[^0-9]/g, ''), 10) || 0);
+      const quantity = validatePositiveInt(String(quantityRaw ?? 0).replace(/[^0-9]/g, ''), 0);
 
       const errors: string[] = [];
       if (!name) errors.push('Descrição ausente');

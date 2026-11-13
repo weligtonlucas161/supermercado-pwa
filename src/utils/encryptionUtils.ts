@@ -11,6 +11,7 @@
  */
 
 import CryptoJS from 'crypto-js';
+import { sanitizeText } from './security';
 
 // Chave mestra de criptografia AES-256
 // Em produção: process.env.REACT_APP_ENCRYPTION_KEY ou import.meta.env.VITE_ENCRYPTION_KEY
@@ -71,19 +72,24 @@ export function isEncrypted(value: unknown): boolean {
 /**
  * Descriptografa um campo individual em memória RAM usando AES-256
  */
-export function decryptSingleField(cipherText: string | null | undefined, secretKey = MASTER_KEY): string {
+export function decryptSingleField(
+  cipherText: string | null | undefined,
+  secretKey = MASTER_KEY,
+  options?: { skipSanitize?: boolean }
+): string {
   if (!cipherText || typeof cipherText !== 'string') return '';
   const trimmed = cipherText.trim();
-  
-  // Se não estiver criptografado, retorna o texto original
+
+  // Se não estiver criptografado, retorna o texto original sanitizado
   if (!isEncrypted(trimmed)) {
-    return trimmed;
+    return options?.skipSanitize ? trimmed : sanitizeText(trimmed, 2000);
   }
 
   try {
     const bytes = CryptoJS.AES.decrypt(trimmed, secretKey);
     const decrypted = bytes.toString(CryptoJS.enc.Utf8);
-    return decrypted || trimmed;
+    if (!decrypted) return '[DADO PROTEGIDO]';
+    return options?.skipSanitize ? decrypted : sanitizeText(decrypted, 2000);
   } catch (error) {
     console.warn('Erro pontual ao descriptografar campo AES:', error);
     return '[DADO PROTEGIDO]';
@@ -93,11 +99,18 @@ export function decryptSingleField(cipherText: string | null | undefined, secret
 /**
  * Criptografa um campo individual usando AES-256 antes de enviar ao Supabase
  */
-export function encryptSingleField(plainText: string | null | undefined, secretKey = MASTER_KEY): string {
+export function encryptSingleField(
+  plainText: string | null | undefined,
+  secretKey = MASTER_KEY,
+  options?: { skipSanitize?: boolean }
+): string {
   if (!plainText || typeof plainText !== 'string') return '';
   const trimmed = plainText.trim();
   if (!trimmed) return '';
-  return CryptoJS.AES.encrypt(trimmed, secretKey).toString();
+  if (isEncrypted(trimmed)) return trimmed;
+  const safeValue = options?.skipSanitize ? trimmed : sanitizeText(trimmed, 2000);
+  if (!safeValue) return '';
+  return CryptoJS.AES.encrypt(safeValue, secretKey).toString();
 }
 
 /**

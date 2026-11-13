@@ -19,6 +19,7 @@ import {
 import { Product, SETORES_DISPONIVEIS, SetorLoja } from '../../types';
 import { useApp } from '../../context/AppContext';
 import { triggerScanBeep } from '../../utils/haptics';
+import { sanitizeText, sanitizeBarcode, sanitizeIdentifier, validatePositiveInt } from '../../utils/security';
 
 interface ProductDetailModalProps {
   product: Product | null;
@@ -132,22 +133,28 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
   // Salvar Alterações e Desbloquear
   const handleSaveProduct = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!editName.trim() || !editEan.trim()) {
-      setLockErrorMessage('Nome e Código de Barras Principal são obrigatórios.');
+    const cleanName = sanitizeText(editName, 200);
+    const cleanEan = sanitizeBarcode(editEan, 32);
+    if (!cleanName || !cleanEan) {
+      setLockErrorMessage('Nome e Código de Barras Principal válidos são obrigatórios.');
       return;
     }
 
     setIsSaving(true);
+    const cleanCategory = sanitizeText(editCategory, 64) || 'MERCEARIA';
+    const cleanSecEan = sanitizeBarcode(editSecondaryEan, 32);
+    const cleanReduced = sanitizeIdentifier(editReducedCode, 32);
+    const cleanSupplier = sanitizeIdentifier(editSupplierCode, 32);
     const updates: Partial<Product> = {
-      name: editName.trim(),
-      ean: editEan.trim(),
-      secondaryEan: editSecondaryEan.trim() || undefined,
-      reducedCode: editReducedCode.trim() || undefined,
-      supplierCode: editSupplierCode.trim() || undefined,
-      stock: Math.max(0, editStock),
-      minStock: Math.max(0, editMinStock),
-      category: editCategory,
-      location: editLocation.trim() || `Gôndola - ${editCategory}`,
+      name: cleanName,
+      ean: cleanEan,
+      secondaryEan: cleanSecEan || undefined,
+      reducedCode: cleanReduced || undefined,
+      supplierCode: cleanSupplier || undefined,
+      stock: validatePositiveInt(editStock, 0),
+      minStock: validatePositiveInt(editMinStock, 10),
+      category: cleanCategory,
+      location: sanitizeText(editLocation, 120) || `Gôndola - ${cleanCategory}`,
     };
 
     const res = await updateProductDetails(product.id, updates);

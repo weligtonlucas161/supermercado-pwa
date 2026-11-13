@@ -26,6 +26,7 @@ import {
   requestPWANotificationPermission,
   resolveFullRoleLabel,
 } from '../../utils/chatUtils';
+import { sanitizeText } from '../../utils/security';
 
 interface MentionOption {
   type: 'setor' | 'usuario';
@@ -212,9 +213,9 @@ export const StoreChatModal: React.FC = () => {
 
   const handleSend = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    if (!inputText.trim()) return;
+    const textToSend = sanitizeText(inputText, 1000);
+    if (!textToSend) return;
 
-    const textToSend = inputText.trim();
     setInputText('');
     setMentionQuery(null);
 

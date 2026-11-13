@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { X, Package, Plus, Barcode } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
+import { sanitizeText, sanitizeBarcode, sanitizeIdentifier, validatePositiveInt, validateNonNegativeNumber } from '../../utils/security';
 
 interface NewProductModalProps {
   isOpen: boolean;
@@ -24,18 +25,20 @@ export const NewProductModal: React.FC<NewProductModalProps> = ({ isOpen, onClos
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name || !ean) return;
+    const cleanName = sanitizeText(name, 200);
+    const cleanEan = sanitizeBarcode(ean, 32);
+    if (!cleanName || !cleanEan) return;
 
     addProduct({
-      name,
-      ean: ean.trim(),
-      supplierCode: supplierCode.trim(),
-      reducedCode: reducedCode.trim(),
-      category,
-      stock: Number(stock) || 0,
-      minStock: Number(minStock) || 10,
-      price: Number(price) || 0,
-      location,
+      name: cleanName,
+      ean: cleanEan,
+      supplierCode: sanitizeIdentifier(supplierCode, 32),
+      reducedCode: sanitizeIdentifier(reducedCode, 32),
+      category: sanitizeText(category, 64),
+      stock: validatePositiveInt(stock, 0),
+      minStock: validatePositiveInt(minStock, 10),
+      price: validateNonNegativeNumber(price, 0),
+      location: sanitizeText(location, 120),
     });
 
     onClose();

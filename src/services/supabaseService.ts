@@ -11,9 +11,20 @@ import {
   StoreEmployee,
   StoreRole,
   ChatMessage,
-  AvariaItem
+  AvariaItem,
+  SETORES_DISPONIVEIS,
+  TIPOS_AVARIA
 } from '../types';
-import { decryptSingleField, isEncrypted } from '../utils/encryptionUtils';
+import { decryptSingleField, encryptSingleField, isEncrypted } from '../utils/encryptionUtils';
+import {
+  sanitizeText,
+  sanitizeIdentifier,
+  sanitizeBarcode,
+  validatePositiveInt,
+  validateEnum,
+  validateHexColor,
+  validateSafeHttpUrl,
+} from '../utils/security';
 
 export const SUPABASE_STORAGE_KEYS = {
   URL: 'superpwa_supabase_url',
@@ -85,16 +96,18 @@ export function getSupabaseConfigInfo() {
  * Permite configurar o Supabase dinamicamente via interface (armazenado em localStorage)
  */
 export function setCustomSupabaseConfig(url: string, key: string): { success: boolean; message: string } {
-  const cleanUrl = url.trim();
-  const cleanKey = key.trim();
+  const safeUrl = validateSafeHttpUrl(url);
+  const cleanKey = sanitizeText(key, 512);
 
-  if (!cleanUrl.startsWith('http://') && !cleanUrl.startsWith('https://')) {
-    return { success: false, message: 'A URL do Supabase deve iniciar com https:// ou http://' };
+  if (!safeUrl) {
+    return { success: false, message: 'A URL do Supabase deve iniciar com https:// ou http:// válida.' };
   }
 
   if (!cleanKey || cleanKey.length < 20) {
     return { success: false, message: 'A chave anônima (anon key) do Supabase é inválida.' };
   }
+
+  const cleanUrl = safeUrl;
 
   try {
     const testClient = createClient(cleanUrl, cleanKey);
@@ -200,19 +213,24 @@ export async function changeUserPassword(
   matricula: string,
   newPassword: string
 ): Promise<{ success: boolean; message?: string }> {
-  const cleanMatricula = matricula.trim();
-  const cleanPassword = newPassword.trim();
+  const cleanMatricula = sanitizeIdentifier(matricula, 64);
+  const cleanPassword = typeof newPassword === 'string' ? newPassword.trim() : '';
 
-  if (cleanPassword.length < 7) {
-    return { success: false, message: 'A nova senha deve ter no mínimo 7 caracteres.' };
+  if (!cleanMatricula) {
+    return { success: false, message: 'Matrícula inválida.' };
   }
+  if (cleanPassword.length < 7 || cleanPassword.length > 128) {
+    return { success: false, message: 'A nova senha deve ter entre 7 e 128 caracteres.' };
+  }
+
+  const encryptedPassword = encryptSingleField(cleanPassword, undefined, { skipSanitize: true });
 
   // Funcionários e Gerentes de Loja
   const emps = getStoredEmployees();
   const idx = emps.findIndex(e => e.matricula.toLowerCase() === cleanMatricula.toLowerCase());
 
   if (idx >= 0) {
-    emps[idx].senha = cleanPassword;
+    emps[idx].senha = encryptedPassword;
     emps[idx].primeiro_login = false;
     if (typeof window !== 'undefined') {
       localStorage.setItem(LOCAL_STORAGE_EMPLOYEES_KEY, JSON.stringify(emps));
@@ -223,7 +241,7 @@ export async function changeUserPassword(
     if (client) {
       const { error } = await client.rpc('rpc_alterar_senha', {
         p_matricula: cleanMatricula,
-        p_nova_senha: cleanPassword,
+        p_nova_senha: encryptedPassword,
       });
       if (error) {
         console.warn('Erro ao sincronizar senha no Supabase:', error.message);
@@ -247,7 +265,7 @@ export async function changeUserPassword(
       if (!findError && remoteUser) {
         const { data: rpcData, error: rpcError } = await client.rpc('rpc_alterar_senha', {
           p_matricula: cleanMatricula,
-          p_nova_senha: cleanPassword,
+          p_nova_senha: encryptedPassword,
         });
 
         if (rpcError) {
@@ -273,8 +291,8 @@ export async function changeUserPassword(
         cached.unshift({
           id: String(remoteUser.id),
           matricula: String(remoteUser.matricula),
-          nome: String(remoteUser.nome),
-          senha: cleanPassword,
+          nome: decryptSingleField(String(remoteUser.nome || '')),
+          senha: encryptedPassword,
           cargo: String(remoteUser.cargo || 'Operador'),
           setor_restrito: remoteUser.setor ? String(remoteUser.setor) : 'TODOS',
           loja_id: String(remoteUser.loja_id || ''),
@@ -300,7 +318,7 @@ export async function changeUserPassword(
  * Validação de Segurança Ativa: Verifica se o usuário ainda existe e está ativo no servidor
  */
 export function verifyUserStillActive(matricula: string, lojaId?: string): { active: boolean; companyName?: string } {
-  const cleanMatricula = matricula.trim();
+  const cleanMatricula = sanitizeIdentifier(matricula, 64);
 
   const emps = getStoredEmployees();
   const emp = emps.find(e => e.matricula.toLowerCase() === cleanMatricula.toLowerCase());
@@ -326,7 +344,8 @@ export async function verifyUserStillActiveRemote(
   matricula: string,
   lojaId?: string
 ): Promise<{ active: boolean; companyName?: string }> {
-  const cleanMatricula = matricula.trim();
+  const cleanMatricula = sanitizeIdentifier(matricula, 64);
+  if (!cleanMatricula) return { active: false, companyName: 'Sua Loja' };
 
   // 1. Consulta remota no Supabase se cliente conectado
   if (client && isSupabaseConfigured()) {
@@ -380,7 +399,8 @@ export function subscribeToUserStatusRealtime(
   if (!client || !isSupabaseConfigured()) return () => {};
 
   try {
-    const cleanMatricula = matricula.trim().toLowerCase();
+    const cleanMatricula = sanitizeIdentifier(matricula, 64).toLowerCase();
+    if (!cleanMatricula) return () => {};
     const channel = client
       .channel(`realtime_watchdog_user_${cleanMatricula}`)
       .on(
@@ -416,13 +436,20 @@ export function subscribeToUserStatusRealtime(
  * Autenticação Segura por Matrícula e Senha (Script 03 & SaaS Admin)
  */
 export async function loginUser(matricula: string, senha: string): Promise<LoginResult> {
-  const cleanMatricula = matricula.trim();
-  const cleanSenha = senha.trim();
+  const cleanMatricula = sanitizeIdentifier(matricula, 64);
+  const cleanSenha = typeof senha === 'string' ? senha.trim() : '';
+
+  if (!cleanMatricula || !cleanSenha) {
+    return { success: false, message: 'Matrícula ou senha inválida.' };
+  }
 
   // 1. Checagem em funcionários/gerentes cadastrados localmente (offline)
   const localEmployees = getStoredEmployees();
   const matchedEmp = localEmployees.find(
-    e => e.matricula.toLowerCase() === cleanMatricula.toLowerCase() && !!e.senha && e.senha === cleanSenha
+    e =>
+      e.matricula.toLowerCase() === cleanMatricula.toLowerCase() &&
+      !!e.senha &&
+      decryptSingleField(e.senha, undefined, { skipSanitize: true }) === cleanSenha
   );
   if (matchedEmp) {
     if (!matchedEmp.ativo) {
@@ -438,10 +465,10 @@ export async function loginUser(matricula: string, senha: string): Promise<Login
       user: {
         id: matchedEmp.id,
         matricula: matchedEmp.matricula,
-        nome: matchedEmp.nome,
+        nome: decryptSingleField(matchedEmp.nome),
         cargo: isGerente ? 'gerente' : 'operador',
-        cargoCompleto: matchedEmp.cargo || 'Operador de Loja',
-        setor: matchedEmp.setor_restrito === 'TODOS' ? 'Geral' : (matchedEmp.setor_restrito || 'Geral'),
+        cargoCompleto: sanitizeText(matchedEmp.cargo || 'Operador de Loja', 64),
+        setor: matchedEmp.setor_restrito === 'TODOS' ? 'Geral' : sanitizeText(matchedEmp.setor_restrito || 'Geral', 64),
         loja_id: matchedEmp.loja_id,
         loja_nome: matchedStore ? matchedStore.nome_loja : '',
         primeiro_login: matchedEmp.primeiro_login ?? true,
@@ -467,18 +494,18 @@ export async function loginUser(matricula: string, senha: string): Promise<Login
           user: {
             id: data.user.id,
             matricula: data.user.matricula,
-            nome: data.user.nome,
+            nome: decryptSingleField(String(data.user.nome || '')),
             cargo: mappedCargo,
-            cargoCompleto: String(data.user.cargo || 'Operador de Loja'),
-            setor: data.user.setor,
+            cargoCompleto: sanitizeText(data.user.cargo || 'Operador de Loja', 64),
+            setor: sanitizeText(data.user.setor || 'Geral', 64),
             loja_id: data.user.loja_id || '',
-            loja_nome: data.user.loja_nome || '',
+            loja_nome: sanitizeText(data.user.loja_nome || '', 120),
             primeiro_login: data.user.primeiro_login ?? true,
           },
         };
       }
 
-      // Consulta direta na tabela 'usuarios'
+      // Consulta direta na tabela 'usuarios' (suporta senhas criptografadas ponta a ponta)
       const { data: userData, error: userError } = await client
         .from('usuarios')
         .select('*')
@@ -487,7 +514,8 @@ export async function loginUser(matricula: string, senha: string): Promise<Login
         .single();
 
       if (!userError && userData) {
-        if (userData.senha === cleanSenha) {
+        const decryptedDbPass = decryptSingleField(String(userData.senha || ''), undefined, { skipSanitize: true });
+        if (decryptedDbPass === cleanSenha) {
           const dbCargo = String(userData.cargo || 'operador').toLowerCase();
           const mappedCargo = dbCargo.includes('saas') ? 'saas_admin' : dbCargo.includes('gerente') ? 'gerente' : 'operador';
 
@@ -497,12 +525,13 @@ export async function loginUser(matricula: string, senha: string): Promise<Login
             user: {
               id: userData.id,
               matricula: userData.matricula,
-              nome: userData.nome,
+              nome: decryptSingleField(String(userData.nome || '')),
               cargo: mappedCargo,
-              cargoCompleto: String(userData.cargo || 'Operador de Loja'),
-              setor: userData.setor || 'Geral',
+              cargoCompleto: sanitizeText(userData.cargo || 'Operador de Loja', 64),
+              setor: sanitizeText(userData.setor || 'Geral', 64),
               loja_id: userData.loja_id || '',
               loja_nome: '',
+              primeiro_login: userData.primeiro_login ?? true,
             },
           };
         } else {
@@ -538,14 +567,14 @@ export async function fetchStoresFromDatabase(): Promise<Store[]> {
 
     if (!error && data && data.length > 0) {
       const mapped: Store[] = data.map((d: Record<string, unknown>) => ({
-        id: String(d.id),
-        nome_loja: String(d.nome_loja || 'Loja'),
-        cnpj: d.cnpj ? String(d.cnpj) : undefined,
-        endereco: d.endereco ? String(d.endereco) : undefined,
-        telefone: d.telefone ? String(d.telefone) : undefined,
-        limite_usuarios: Number(d.limite_usuarios || 15),
+        id: sanitizeIdentifier(d.id),
+        nome_loja: sanitizeText(d.nome_loja || 'Loja', 120),
+        cnpj: d.cnpj ? decryptSingleField(String(d.cnpj)) : undefined,
+        endereco: d.endereco ? decryptSingleField(String(d.endereco)) : undefined,
+        telefone: d.telefone ? decryptSingleField(String(d.telefone)) : undefined,
+        limite_usuarios: validatePositiveInt(d.limite_usuarios, 15, 10000),
         ativa: Boolean(d.ativa ?? true),
-        cor_primaria: String(d.cor_borda || d.cor_primaria || '#059669'),
+        cor_primaria: validateHexColor(d.cor_borda || d.cor_primaria, '#059669'),
         created_at: String(d.created_at || new Date().toISOString()),
       }));
       if (typeof window !== 'undefined') {
@@ -561,8 +590,24 @@ export async function fetchStoresFromDatabase(): Promise<Store[]> {
 }
 
 export async function createStoreInDatabase(store: Store): Promise<{ success: boolean; error?: string }> {
+  const cleanStore: Store = {
+    ...store,
+    id: sanitizeIdentifier(store.id, 64),
+    nome_loja: sanitizeText(store.nome_loja, 120),
+    cnpj: store.cnpj ? sanitizeText(store.cnpj, 32) : undefined,
+    endereco: store.endereco ? sanitizeText(store.endereco, 200) : undefined,
+    telefone: store.telefone ? sanitizeText(store.telefone, 32) : undefined,
+    limite_usuarios: validatePositiveInt(store.limite_usuarios, 15, 10000),
+    ativa: Boolean(store.ativa),
+    cor_primaria: validateHexColor(store.cor_primaria, '#059669'),
+  };
+
+  if (!cleanStore.id || !cleanStore.nome_loja) {
+    return { success: false, error: 'Dados da loja inválidos.' };
+  }
+
   const localStores = getStoredStores();
-  const updated = [store, ...localStores.filter(s => s.id !== store.id)];
+  const updated = [cleanStore, ...localStores.filter(s => s.id !== cleanStore.id)];
   if (typeof window !== 'undefined') {
     localStorage.setItem(LOCAL_STORAGE_STORES_KEY, JSON.stringify(updated));
   }
@@ -570,14 +615,14 @@ export async function createStoreInDatabase(store: Store): Promise<{ success: bo
   if (client) {
     try {
       const { error } = await client.from('lojas').upsert({
-        id: store.id,
-        nome_loja: store.nome_loja,
-        cnpj: store.cnpj || null,
-        endereco: store.endereco || null,
-        telefone: store.telefone || null,
-        limite_usuarios: store.limite_usuarios,
-        ativa: store.ativa,
-        cor_borda: store.cor_primaria || '#059669',
+        id: cleanStore.id,
+        nome_loja: cleanStore.nome_loja,
+        cnpj: cleanStore.cnpj ? encryptSingleField(cleanStore.cnpj) : null,
+        endereco: cleanStore.endereco ? encryptSingleField(cleanStore.endereco) : null,
+        telefone: cleanStore.telefone ? encryptSingleField(cleanStore.telefone) : null,
+        limite_usuarios: cleanStore.limite_usuarios,
+        ativa: cleanStore.ativa,
+        cor_borda: cleanStore.cor_primaria || '#059669',
       });
       if (error) {
         console.warn('Aviso upsert loja:', error.message);
@@ -599,26 +644,32 @@ export async function updateStoreSettingsInDatabase(
   storeId: string,
   updates: { nome_loja?: string; cor_primaria?: string }
 ): Promise<{ success: boolean; error?: string }> {
+  const cleanStoreId = sanitizeIdentifier(storeId, 64);
+  if (!cleanStoreId) return { success: false, error: 'Loja inválida.' };
+
+  const safeNome = updates.nome_loja !== undefined ? sanitizeText(updates.nome_loja, 120) : undefined;
+  const safeColor = updates.cor_primaria !== undefined ? validateHexColor(updates.cor_primaria, '#059669') : undefined;
+
   const localStores = getStoredStores();
-  const index = localStores.findIndex(s => s.id === storeId);
+  const index = localStores.findIndex(s => s.id === cleanStoreId);
   if (index !== -1) {
-    if (updates.nome_loja !== undefined) localStores[index].nome_loja = updates.nome_loja;
-    if (updates.cor_primaria !== undefined) localStores[index].cor_primaria = updates.cor_primaria;
+    if (safeNome !== undefined) localStores[index].nome_loja = safeNome;
+    if (safeColor !== undefined) localStores[index].cor_primaria = safeColor;
     if (typeof window !== 'undefined') {
       localStorage.setItem(LOCAL_STORAGE_STORES_KEY, JSON.stringify(localStores));
     }
   }
 
-  if (client && storeId) {
+  if (client && cleanStoreId) {
     try {
       const payload: Record<string, unknown> = {};
-      if (updates.nome_loja !== undefined) payload.nome_loja = updates.nome_loja;
-      if (updates.cor_primaria !== undefined) payload.cor_borda = updates.cor_primaria;
+      if (safeNome !== undefined) payload.nome_loja = safeNome;
+      if (safeColor !== undefined) payload.cor_borda = safeColor;
 
       const { error } = await client
         .from('lojas')
         .update(payload)
-        .eq('id', storeId);
+        .eq('id', cleanStoreId);
 
       if (error) {
         console.warn('Erro ao atualizar configurações da loja no banco:', error.message);
@@ -640,10 +691,14 @@ export async function updateStoreUserLimitInDatabase(
   storeId: string, 
   newLimit: number
 ): Promise<{ success: boolean; error?: string }> {
+  const cleanStoreId = sanitizeIdentifier(storeId, 64);
+  const safeLimit = validatePositiveInt(newLimit, 15, 10000);
+  if (!cleanStoreId) return { success: false, error: 'Loja inválida.' };
+
   const localStores = getStoredStores();
-  const index = localStores.findIndex(s => s.id === storeId);
+  const index = localStores.findIndex(s => s.id === cleanStoreId);
   if (index !== -1) {
-    localStores[index].limite_usuarios = newLimit;
+    localStores[index].limite_usuarios = safeLimit;
     if (typeof window !== 'undefined') {
       localStorage.setItem(LOCAL_STORAGE_STORES_KEY, JSON.stringify(localStores));
     }
@@ -653,8 +708,8 @@ export async function updateStoreUserLimitInDatabase(
     try {
       const { error } = await client
         .from('lojas')
-        .update({ limite_usuarios: newLimit })
-        .eq('id', storeId);
+        .update({ limite_usuarios: safeLimit })
+        .eq('id', cleanStoreId);
 
       if (error) {
         console.error('Erro ao atualizar limite de usuários na loja:', error.message);
@@ -789,19 +844,23 @@ export async function fetchStoreActiveSessions(lojaId?: string): Promise<ActiveS
   if (!client) return [];
 
   try {
+    const cleanLojaId = lojaId && lojaId !== 'todas' ? sanitizeIdentifier(lojaId, 64) : '';
     let query = client
       .from('sessoes_ativas')
       .select('matricula, usuario_nome, loja_id, timestamp, last_seen, status, updated_at')
       .eq('status', 'ATIVA')
       .order('last_seen', { ascending: false });
 
-    if (lojaId && lojaId !== 'todas') {
-      query = query.eq('loja_id', lojaId);
+    if (cleanLojaId) {
+      query = query.eq('loja_id', cleanLojaId);
     }
 
     const { data, error } = await query;
     if (!error && data) {
-      return data as ActiveSession[];
+      return (data as ActiveSession[]).map(s => ({
+        ...s,
+        usuario_nome: s.usuario_nome ? decryptSingleField(s.usuario_nome) : undefined,
+      }));
     }
   } catch (err) {
     console.debug('Aviso ao consultar sessões ativas no Supabase:', err);
@@ -814,8 +873,13 @@ export async function fetchStoreActiveSessions(lojaId?: string): Promise<ActiveS
  * Operações do Gerente de Loja: Gestão de Funcionários & Permissões de Setor
  */
 export async function fetchStoreEmployees(lojaId?: string): Promise<StoreEmployee[]> {
-  const allEmps = getStoredEmployees();
-  const filtered = allEmps.filter(e => !lojaId || e.loja_id === lojaId || lojaId === 'todas');
+  const cleanLojaId = lojaId && lojaId !== 'todas' ? sanitizeIdentifier(lojaId, 64) : lojaId;
+  const allEmps = getStoredEmployees().map(e => ({
+    ...e,
+    nome: decryptSingleField(e.nome),
+    senha: e.senha ? decryptSingleField(e.senha, undefined, { skipSanitize: true }) : '',
+  }));
+  const filtered = allEmps.filter(e => !cleanLojaId || e.loja_id === cleanLojaId || cleanLojaId === 'todas');
 
   if (!client) return filtered;
 
@@ -826,21 +890,21 @@ export async function fetchStoreEmployees(lojaId?: string): Promise<StoreEmploye
       .neq('cargo', 'saas_admin')
       .order('nome', { ascending: true });
 
-    if (lojaId && lojaId !== 'todas') {
-      query = query.eq('loja_id', lojaId);
+    if (cleanLojaId && cleanLojaId !== 'todas') {
+      query = query.eq('loja_id', cleanLojaId);
     }
 
     const { data, error } = await query;
 
     if (!error && data) {
       const mapped: StoreEmployee[] = data.map((u: Record<string, unknown>) => ({
-        id: String(u.id),
-        matricula: String(u.matricula),
-        nome: String(u.nome),
-        senha: u.senha ? String(u.senha) : '',
-        cargo: String(u.cargo || 'Operador'),
-        setor_restrito: u.setor ? String(u.setor) : 'TODOS',
-        loja_id: String(u.loja_id || lojaId || ''),
+        id: sanitizeIdentifier(u.id, 64),
+        matricula: sanitizeIdentifier(u.matricula, 64),
+        nome: decryptSingleField(String(u.nome || '')),
+        senha: u.senha ? decryptSingleField(String(u.senha), undefined, { skipSanitize: true }) : '',
+        cargo: sanitizeText(u.cargo || 'Operador', 64),
+        setor_restrito: u.setor ? sanitizeText(u.setor, 64) : 'TODOS',
+        loja_id: sanitizeIdentifier(u.loja_id || cleanLojaId || '', 64),
         ativo: Boolean(u.ativo ?? true),
         created_at: String(u.created_at || new Date().toISOString()),
       }));
@@ -854,9 +918,33 @@ export async function fetchStoreEmployees(lojaId?: string): Promise<StoreEmploye
 }
 
 export async function saveStoreEmployee(emp: StoreEmployee): Promise<{ success: boolean; error?: string }> {
+  const cleanEmp: StoreEmployee = {
+    ...emp,
+    id: sanitizeIdentifier(emp.id, 64),
+    matricula: sanitizeIdentifier(emp.matricula, 64),
+    nome: sanitizeText(emp.nome, 120),
+    senha: typeof emp.senha === 'string' ? emp.senha.trim() : '',
+    cargo: sanitizeText(emp.cargo || 'Operador', 64),
+    setor_restrito: sanitizeText(emp.setor_restrito || 'TODOS', 64),
+    loja_id: sanitizeIdentifier(emp.loja_id, 64),
+    ativo: Boolean(emp.ativo),
+  };
+
+  if (!cleanEmp.id || !cleanEmp.matricula || !cleanEmp.nome) {
+    return { success: false, error: 'Dados do funcionário inválidos.' };
+  }
+
+  const encryptedNome = encryptSingleField(cleanEmp.nome);
+  const encryptedSenha = cleanEmp.senha ? encryptSingleField(cleanEmp.senha, undefined, { skipSanitize: true }) : '';
+
   const allEmps = getStoredEmployees();
-  const isNewEmployee = !allEmps.some(e => e.id === emp.id || e.matricula === emp.matricula);
-  const updated = [emp, ...allEmps.filter(e => e.id !== emp.id && e.matricula !== emp.matricula)];
+  const isNewEmployee = !allEmps.some(e => e.id === cleanEmp.id || e.matricula === cleanEmp.matricula);
+  const storedRecord: StoreEmployee = {
+    ...cleanEmp,
+    nome: encryptedNome,
+    senha: encryptedSenha,
+  };
+  const updated = [storedRecord, ...allEmps.filter(e => e.id !== cleanEmp.id && e.matricula !== cleanEmp.matricula)];
   if (typeof window !== 'undefined') {
     localStorage.setItem(LOCAL_STORAGE_EMPLOYEES_KEY, JSON.stringify(updated));
   }
@@ -864,28 +952,28 @@ export async function saveStoreEmployee(emp: StoreEmployee): Promise<{ success: 
   if (client && isSupabaseConfigured()) {
     try {
       await client.from('usuarios').upsert({
-        id: emp.id,
-        matricula: emp.matricula,
-        nome: emp.nome,
-        senha: emp.senha || '',
-        cargo: emp.cargo,
-        setor: emp.setor_restrito,
-        loja_id: emp.loja_id,
-        ativo: emp.ativo,
+        id: cleanEmp.id,
+        matricula: cleanEmp.matricula,
+        nome: encryptedNome,
+        senha: encryptedSenha,
+        cargo: cleanEmp.cargo,
+        setor: cleanEmp.setor_restrito,
+        loja_id: cleanEmp.loja_id,
+        ativo: cleanEmp.ativo,
       });
     } catch (err) {
       console.warn('Erro ao salvar funcionário no banco:', err);
     }
-  } else if (isNewEmployee && emp.ativo && emp.loja_id && emp.cargo !== 'saas_admin') {
+  } else if (isNewEmployee && cleanEmp.ativo && cleanEmp.loja_id && cleanEmp.cargo !== 'saas_admin') {
     saveStoredChatMessage({
-      id: `msg_welcome_${emp.id}_${Date.now()}`,
-      loja_id: emp.loja_id,
+      id: `msg_welcome_${cleanEmp.id}_${Date.now()}`,
+      loja_id: cleanEmp.loja_id,
       canal_tipo: 'grupo',
       remetente_matricula: 'SISTEMA',
       remetente_nome: 'Sistema OpSys',
       remetente_cargo: 'Boas-Vindas',
       is_anonimo: false,
-      conteudo: `👋 Boas-vindas! ${emp.nome} entrou na loja e agora faz parte do Chat Operacional.`,
+      conteudo: `👋 Boas-vindas! ${cleanEmp.nome} entrou na loja e agora faz parte do Chat Operacional.`,
       timestamp: Date.now(),
       created_at: new Date().toISOString(),
     });
@@ -895,15 +983,18 @@ export async function saveStoreEmployee(emp: StoreEmployee): Promise<{ success: 
 }
 
 export async function toggleStoreEmployeeActive(empId: string, active: boolean): Promise<boolean> {
+  const cleanEmpId = sanitizeIdentifier(empId, 64);
+  if (!cleanEmpId) return false;
+
   const allEmps = getStoredEmployees();
-  const updated = allEmps.map(e => e.id === empId ? { ...e, ativo: active } : e);
+  const updated = allEmps.map(e => e.id === cleanEmpId ? { ...e, ativo: Boolean(active) } : e);
   if (typeof window !== 'undefined') {
     localStorage.setItem(LOCAL_STORAGE_EMPLOYEES_KEY, JSON.stringify(updated));
   }
 
   if (client) {
     try {
-      await client.from('usuarios').update({ ativo: active }).eq('id', empId);
+      await client.from('usuarios').update({ ativo: Boolean(active) }).eq('id', cleanEmpId);
     } catch (err) {
       console.warn('Erro ao alterar status de funcionário:', err);
     }
@@ -1006,9 +1097,9 @@ export async function uploadEncryptedProductsRealtime(
   }
 ): Promise<{ success: boolean; totalUploaded: number; isLocalOnly?: boolean; error?: string }> {
   const total = items.length;
-  const lojaId = options?.lojaId || '';
-  const matricula = options?.operatorMatricula || 'SISTEMA';
-  const nomeOperador = options?.operatorNome || 'Operador';
+  const lojaId = sanitizeIdentifier(options?.lojaId || '', 64);
+  const matricula = sanitizeIdentifier(options?.operatorMatricula || 'SISTEMA', 64);
+  const nomeOperador = sanitizeText(options?.operatorNome || 'Operador', 120);
 
   // Se o Supabase não estiver configurado, NÃO finge que gravou no banco!
   if (!client || !activeConfig.isConfigured) {
@@ -1033,6 +1124,18 @@ export async function uploadEncryptedProductsRealtime(
     // 0. Garante que a loja exista no banco para satisfazer a FK
     await ensureStoreExists(lojaId);
 
+    // Mapeia produtos já existentes na loja descriptografando o EAN em RAM para atualizar sem expor EAN em texto puro
+    const { data: existingStoreRows } = await client
+      .from('produtos')
+      .select('id, codigo_barras')
+      .eq('loja_id', lojaId);
+
+    const existingMap = new Map<string, string>();
+    (existingStoreRows || []).forEach((r: { id: string; codigo_barras: string }) => {
+      const decEan = sanitizeBarcode(decryptSingleField(String(r.codigo_barras || '')));
+      if (decEan) existingMap.set(decEan, r.id);
+    });
+
     const batchSize = 10;
     let uploaded = 0;
     const defaultDueDate = new Date(Date.now() + 60 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
@@ -1040,74 +1143,73 @@ export async function uploadEncryptedProductsRealtime(
     for (let i = 0; i < total; i += batchSize) {
       const chunk = items.slice(i, i + batchSize);
 
-      // 1. Mapeamento para as colunas da tabela 'produtos':
-      const payloadProdutos = chunk.map(c => ({
-        loja_id: lojaId,
-        codigo_barras: c.original.ean.trim(),
-        nome: c.original.name.trim(),
-        plu: c.original.reducedCode ? c.original.reducedCode.trim() : null,
-        codigo_fornecedor: c.original.supplierCode ? c.original.supplierCode.trim() : null,
-        setor: c.original.setor || 'MERCEARIA',
-        quantidade: Math.max(0, c.original.quantity),
-        data_vencimento: defaultDueDate,
-        is_encrypted: true,
-        ciphertext: c.encrypted.ciphertext,
-        iv: c.encrypted.iv,
-        criado_em: Date.now(),
-      }));
+      // 1. Mapeamento sanitizado e totalmente criptografado para a tabela 'produtos':
+      const preparedChunk = chunk.map(c => {
+        const cleanEan = sanitizeBarcode(c.original.ean, 32);
+        const cleanName = sanitizeText(c.original.name, 200);
+        const cleanReduced = c.original.reducedCode ? sanitizeIdentifier(c.original.reducedCode, 32) : '';
+        const cleanSupplier = c.original.supplierCode ? sanitizeIdentifier(c.original.supplierCode, 32) : '';
+        const cleanSetor = validateEnum(c.original.setor || c.original.sector, SETORES_DISPONIVEIS, 'MERCEARIA');
+        const cleanQty = validatePositiveInt(c.original.quantity, 0);
 
-      // Tenta upsert direto (quando há constraint única uq_produtos_loja_ean)
-      let upsertSucceeded = false;
-      const { error: errUpsert } = await client
-        .from('produtos')
-        .upsert(payloadProdutos, { onConflict: 'loja_id, codigo_barras' });
+        return {
+          cleanEan,
+          cleanName,
+          dbRow: {
+            loja_id: lojaId,
+            codigo_barras: encryptSingleField(cleanEan),
+            nome: encryptSingleField(cleanName),
+            plu: cleanReduced ? encryptSingleField(cleanReduced) : null,
+            codigo_fornecedor: cleanSupplier ? encryptSingleField(cleanSupplier) : null,
+            setor: cleanSetor,
+            quantidade: cleanQty,
+            data_vencimento: defaultDueDate,
+            is_encrypted: true,
+            ciphertext: c.encrypted.ciphertext,
+            iv: c.encrypted.iv,
+            criado_em: Date.now(),
+          },
+        };
+      });
 
-      if (!errUpsert) {
-        upsertSucceeded = true;
-      } else {
-        console.warn('Upsert direto retornou aviso, executando verificação de registros existentes:', errUpsert.message);
-      }
-
-      // Fallback infalível se o banco não tiver a constraint de conflito:
-      if (!upsertSucceeded) {
-        const eansInChunk = payloadProdutos.map(p => p.codigo_barras);
-        const { data: existingRows } = await client
-          .from('produtos')
-          .select('id, codigo_barras')
-          .eq('loja_id', lojaId)
-          .in('codigo_barras', eansInChunk);
-
-        const existingMap = new Map((existingRows || []).map(r => [r.codigo_barras, r.id]));
-
-        for (const item of payloadProdutos) {
-          const existingId = existingMap.get(item.codigo_barras);
-          if (existingId) {
-            const { error: updateErr } = await client
-              .from('produtos')
-              .update(item)
-              .eq('id', existingId);
-            if (updateErr) throw updateErr;
-          } else {
-            const { error: insertErr } = await client
-              .from('produtos')
-              .insert(item);
-            if (insertErr) throw insertErr;
+      for (const entry of preparedChunk) {
+        if (!entry.cleanEan || !entry.cleanName) continue;
+        const existingId = existingMap.get(entry.cleanEan);
+        if (existingId) {
+          const { error: updateErr } = await client
+            .from('produtos')
+            .update(entry.dbRow)
+            .eq('id', existingId);
+          if (updateErr) throw updateErr;
+        } else {
+          const { data: insertedRow, error: insertErr } = await client
+            .from('produtos')
+            .insert(entry.dbRow)
+            .select('id')
+            .maybeSingle();
+          if (insertErr) throw insertErr;
+          if (insertedRow?.id) {
+            existingMap.set(entry.cleanEan, String(insertedRow.id));
           }
         }
       }
 
-      // 2. Mapeamento para 'produtos_catalogo_universal' (Script 08)
-      const payloadCatalogoUniversal = chunk.map(c => ({
-        codigo_barras: c.original.ean.trim(),
-        nome: c.original.name.trim(),
-      }));
+      // 2. Mapeamento criptografado para 'produtos_catalogo_universal' (Script 08)
+      const payloadCatalogoUniversal = preparedChunk
+        .filter(e => e.cleanEan && e.cleanName)
+        .map(e => ({
+          codigo_barras: encryptSingleField(e.cleanEan),
+          nome: encryptSingleField(e.cleanName),
+        }));
 
-      try {
-        await client
-          .from('produtos_catalogo_universal')
-          .upsert(payloadCatalogoUniversal, { onConflict: 'codigo_barras' });
-      } catch (catErr) {
-        console.debug('Aviso catálogo universal:', catErr);
+      if (payloadCatalogoUniversal.length > 0) {
+        try {
+          await client
+            .from('produtos_catalogo_universal')
+            .insert(payloadCatalogoUniversal);
+        } catch (catErr) {
+          console.debug('Aviso catálogo universal:', catErr);
+        }
       }
 
       uploaded += chunk.length;
@@ -1117,14 +1219,14 @@ export async function uploadEncryptedProductsRealtime(
       }
     }
 
-    // 3. Registrar auditoria em 'app_logs' (Script 06)
+    // 3. Registrar auditoria criptografada em 'app_logs' (Script 06)
     try {
       await client.from('app_logs').insert({
         usuario_matricula: matricula,
-        usuario_nome: nomeOperador,
+        usuario_nome: encryptSingleField(nomeOperador),
         loja_id: lojaId,
         acao: 'IMPORTACAO_PLANILHA_ESTOQUE',
-        detalhes: `Importação de ${total} produtos com 5 colunas estritas gravados no banco com sucesso.`,
+        detalhes: encryptSingleField(`Importação de ${total} produtos criptografados gravados no banco com sucesso.`),
         timestamp: Date.now(),
       });
     } catch (logErr) {
@@ -1149,14 +1251,15 @@ export async function fetchProductsFromSupabase(lojaId?: string): Promise<Produc
   if (!client) return [];
 
   try {
+    const cleanLojaId = lojaId ? sanitizeIdentifier(lojaId, 64) : '';
     let data: Record<string, unknown>[] | null = null;
 
     // 1. Tenta buscar pela loja específica se informada
-    if (lojaId) {
+    if (cleanLojaId) {
       const res = await client
         .from('produtos')
         .select('*')
-        .eq('loja_id', lojaId)
+        .eq('loja_id', cleanLojaId)
         .order('criado_em', { ascending: false });
       if (res.data && res.data.length > 0) {
         data = res.data;
@@ -1187,15 +1290,15 @@ export async function fetchProductsFromSupabase(lojaId?: string): Promise<Produc
           const rawNome = String(row.nome || '');
           const rawEan = String(row.codigo_barras || '');
           return {
-            id: `cat-${idx}-${rawEan}`,
-            ean: decryptSingleField(rawEan),
+            id: `cat-${idx}-${sanitizeBarcode(decryptSingleField(rawEan))}`,
+            ean: sanitizeBarcode(decryptSingleField(rawEan)),
             name: decryptSingleField(rawNome) || 'Produto Universal',
             category: 'MERCEARIA',
             stock: 0,
             minStock: 10,
             price: 0,
             location: 'Gôndola - Catálogo',
-            loja_id: lojaId || '',
+            loja_id: cleanLojaId,
             isEncryptedInStorage: isEncrypted(rawNome),
           };
         });
@@ -1213,21 +1316,21 @@ export async function fetchProductsFromSupabase(lojaId?: string): Promise<Produc
       const isEnc = Boolean(row.is_encrypted || isEncrypted(rawNome) || isEncrypted(rawEan));
 
       return {
-        id: String(row.id || `prod-${Math.random().toString(36).substring(2, 9)}`),
-        ean: decryptSingleField(rawEan),
-        secondaryEan: row.codigo_barras_secundario ? decryptSingleField(String(row.codigo_barras_secundario)) : undefined,
+        id: sanitizeIdentifier(row.id || `prod-${Math.random().toString(36).substring(2, 9)}`, 64),
+        ean: sanitizeBarcode(decryptSingleField(rawEan)),
+        secondaryEan: row.codigo_barras_secundario ? sanitizeBarcode(decryptSingleField(String(row.codigo_barras_secundario))) : undefined,
         name: decryptSingleField(rawNome) || 'Produto Cadastrado',
         supplierCode: decryptSingleField(rawForn),
         reducedCode: decryptSingleField(rawPlu),
-        category: String(row.setor || 'MERCEARIA'),
-        stock: Math.max(0, Number(row.quantidade ?? 0)),
+        category: sanitizeText(row.setor || 'MERCEARIA', 64),
+        stock: validatePositiveInt(row.quantidade, 0),
         minStock: 10,
         price: 0,
-        location: `Gôndola - ${row.setor || 'Estoque'}`,
-        loja_id: String(row.loja_id || lojaId || ''),
-        data_vencimento: String(row.data_vencimento || ''),
+        location: `Gôndola - ${sanitizeText(row.setor || 'Estoque', 64)}`,
+        loja_id: sanitizeIdentifier(row.loja_id || cleanLojaId || '', 64),
+        data_vencimento: sanitizeText(row.data_vencimento || '', 20),
         isLockedForEdit: Boolean(row.is_locked_for_edit),
-        lockedBy: row.locked_by ? String(row.locked_by) : undefined,
+        lockedBy: row.locked_by ? decryptSingleField(String(row.locked_by)) : undefined,
         lockedAt: row.locked_at ? String(row.locked_at) : undefined,
         isEncryptedInStorage: isEnc,
         encryptedPayload: row.ciphertext
@@ -1284,27 +1387,41 @@ export async function syncOfflineQueueToSupabase(
     return { success: true, syncedCount: 0 };
   }
 
+  const cleanLojaId = sanitizeIdentifier(lojaId, 64);
   let synced = 0;
   try {
     for (const action of actions) {
       if (action.type === 'UPDATE_STOCK') {
         const payload = action.payload as { id: string; exact?: number; delta?: number };
-        if (typeof payload.exact === 'number') {
-          await client.from('produtos').update({ quantidade: payload.exact, updated_at: new Date().toISOString() }).eq('id', payload.id);
+        const cleanId = sanitizeIdentifier(payload.id, 64);
+        if (cleanId && typeof payload.exact === 'number') {
+          await client
+            .from('produtos')
+            .update({
+              quantidade: validatePositiveInt(payload.exact, 0),
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', cleanId);
         }
         synced++;
       } else if (action.type === 'ADD_PRODUCT') {
         const p = action.payload as Product;
-        await client.from('produtos').upsert({
-          loja_id: p.loja_id || lojaId,
-          codigo_barras: p.ean,
-          nome: p.name,
-          setor: p.category || 'MERCEARIA',
-          quantidade: p.stock,
-          is_encrypted: Boolean(p.isEncryptedInStorage),
-          ciphertext: p.encryptedPayload?.ciphertext || null,
-          iv: p.encryptedPayload?.iv || null,
-        }, { onConflict: 'loja_id, codigo_barras' });
+        const cleanEan = sanitizeBarcode(p.ean, 32);
+        const cleanName = sanitizeText(p.name, 200);
+        if (cleanEan && cleanName) {
+          await client.from('produtos').insert({
+            loja_id: sanitizeIdentifier(p.loja_id || cleanLojaId, 64),
+            codigo_barras: encryptSingleField(cleanEan),
+            nome: encryptSingleField(cleanName),
+            plu: p.reducedCode ? encryptSingleField(sanitizeIdentifier(p.reducedCode, 32)) : null,
+            codigo_fornecedor: p.supplierCode ? encryptSingleField(sanitizeIdentifier(p.supplierCode, 32)) : null,
+            setor: sanitizeText(p.category || 'MERCEARIA', 64),
+            quantidade: validatePositiveInt(p.stock, 0),
+            is_encrypted: true,
+            ciphertext: p.encryptedPayload?.ciphertext || null,
+            iv: p.encryptedPayload?.iv || null,
+          });
+        }
         synced++;
       }
     }
@@ -1376,7 +1493,8 @@ export const AUDIT_SESSION_MAX_INACTIVITY_MS = 5 * 60 * 60 * 1000; // 5 horas
  * Consulta sessões ativas de auditoria (isoladas por loja, ordenadas cronologicamente)
  */
 export async function fetchActiveAuditSessions(lojaId: string): Promise<DbActiveAuditSession[]> {
-  if (!lojaId) return [];
+  const cleanLojaId = sanitizeIdentifier(lojaId, 64);
+  if (!cleanLojaId) return [];
   const now = Date.now();
   const isNotExpired = (s: DbActiveAuditSession) => (now - Number(s.timestamp || 0)) < AUDIT_SESSION_MAX_INACTIVITY_MS;
 
@@ -1385,14 +1503,17 @@ export async function fetchActiveAuditSessions(lojaId: string): Promise<DbActive
       const { data, error } = await client
         .from('auditoria_presenca_sessoes')
         .select('*')
-        .eq('loja_id', lojaId)
+        .eq('loja_id', cleanLojaId)
         .eq('status', 'ATIVA')
         .order('data_auditoria', { ascending: false })
         .order('hora_auditoria', { ascending: false })
         .order('timestamp', { ascending: false });
 
       if (!error && data) {
-        const sessions = data as DbActiveAuditSession[];
+        const sessions = (data as DbActiveAuditSession[]).map(s => ({
+          ...s,
+          iniciada_por_nome: decryptSingleField(s.iniciada_por_nome),
+        }));
         const expiredIds = sessions.filter(s => !isNotExpired(s)).map(s => s.id);
         if (expiredIds.length > 0) {
           client
@@ -1417,7 +1538,7 @@ export async function fetchActiveAuditSessions(lojaId: string): Promise<DbActive
       const raw = localStorage.getItem(LOCAL_ACTIVE_SESSIONS_KEY);
       if (raw) {
         const parsed: DbActiveAuditSession[] = JSON.parse(raw);
-        return parsed.filter(s => s.loja_id === lojaId && isNotExpired(s));
+        return parsed.filter(s => s.loja_id === cleanLojaId && isNotExpired(s));
       }
     } catch {
       // ignore
@@ -1433,13 +1554,15 @@ export async function checkAuditSessionStatus(
   sessaoId: string,
   lojaId: string
 ): Promise<'ATIVA' | 'PAUSADA' | 'CONCLUIDA' | null> {
-  if (!client || !isSupabaseConfigured() || !sessaoId || !lojaId) return null;
+  const cleanSessaoId = sanitizeIdentifier(sessaoId, 128);
+  const cleanLojaId = sanitizeIdentifier(lojaId, 64);
+  if (!client || !isSupabaseConfigured() || !cleanSessaoId || !cleanLojaId) return null;
   try {
     const { data, error } = await client
       .from('auditoria_presenca_sessoes')
       .select('status')
-      .eq('id', sessaoId)
-      .eq('loja_id', lojaId)
+      .eq('id', cleanSessaoId)
+      .eq('loja_id', cleanLojaId)
       .maybeSingle();
     if (error || !data) return null;
     return (data.status as 'ATIVA' | 'PAUSADA' | 'CONCLUIDA') || null;
@@ -1458,18 +1581,22 @@ export async function startAuditSessionInDatabase(data: {
   matricula: string;
   nome: string;
 }): Promise<{ success: boolean; session?: DbActiveAuditSession; error?: string }> {
+  const cleanLojaId = sanitizeIdentifier(data.lojaId, 64);
+  const cleanSetor = sanitizeText(data.setor || 'GERAL', 64);
+  const cleanMatricula = sanitizeIdentifier(data.matricula, 64);
+  const cleanNome = sanitizeText(data.nome, 120);
   const nowMs = Date.now();
-  const tipo: AuditSessionTipo = data.tipo || 'PRESENCA';
-  const { dataAuditoria, horaAuditoria, chaveAuditoria } = buildAuditCompositeParts(data.lojaId, data.setor, nowMs);
+  const tipo: AuditSessionTipo = validateEnum(data.tipo, ['PRESENCA', 'INVENTARIO', 'VALIDADE'] as const, 'PRESENCA');
+  const { dataAuditoria, horaAuditoria, chaveAuditoria } = buildAuditCompositeParts(cleanLojaId, cleanSetor, nowMs);
   const sessaoId = `${chaveAuditoria}__${tipo.toLowerCase()}_${Math.random().toString(36).substring(2, 6)}`;
 
   const newSession: DbActiveAuditSession = {
     id: sessaoId,
-    loja_id: data.lojaId,
-    setor: data.setor,
+    loja_id: cleanLojaId,
+    setor: cleanSetor,
     tipo,
-    iniciada_por_nome: data.nome,
-    iniciada_por_matricula: data.matricula,
+    iniciada_por_nome: cleanNome,
+    iniciada_por_matricula: cleanMatricula,
     status: 'ATIVA',
     data_auditoria: dataAuditoria,
     hora_auditoria: horaAuditoria,
@@ -1480,13 +1607,13 @@ export async function startAuditSessionInDatabase(data: {
 
   if (client && isSupabaseConfigured()) {
     try {
-      await ensureStoreExists(data.lojaId);
+      await ensureStoreExists(cleanLojaId);
       const { error } = await client.from('auditoria_presenca_sessoes').insert({
         id: newSession.id,
         loja_id: newSession.loja_id,
         setor: newSession.setor,
         tipo: newSession.tipo,
-        iniciada_por_nome: newSession.iniciada_por_nome,
+        iniciada_por_nome: encryptSingleField(cleanNome),
         iniciada_por_matricula: newSession.iniciada_por_matricula,
         status: newSession.status,
         data_auditoria: newSession.data_auditoria,
@@ -1504,7 +1631,7 @@ export async function startAuditSessionInDatabase(data: {
   }
 
   if (typeof window !== 'undefined') {
-    const active = await fetchActiveAuditSessions(data.lojaId);
+    const active = await fetchActiveAuditSessions(cleanLojaId);
     const updated = [newSession, ...active.filter(s => s.id !== newSession.id)];
     localStorage.setItem(LOCAL_ACTIVE_SESSIONS_KEY, JSON.stringify(updated));
   }
@@ -1516,19 +1643,28 @@ export async function startAuditSessionInDatabase(data: {
  * Consulta todos os bips em tempo real de uma sessão ativa
  */
 export async function fetchSessionBipsFromDatabase(sessaoId: string): Promise<DbAuditBip[]> {
+  const cleanSessaoId = sanitizeIdentifier(sessaoId, 128);
+  if (!cleanSessaoId) return [];
+
   if (client && isSupabaseConfigured()) {
     try {
       const { data, error } = await client
         .from('auditoria_presenca_bips')
         .select('*')
-        .eq('sessao_id', sessaoId)
+        .eq('sessao_id', cleanSessaoId)
         .order('timestamp', { ascending: false });
 
       if (!error && data) {
+        const decrypted = (data as DbAuditBip[]).map(b => ({
+          ...b,
+          codigo_barras: sanitizeBarcode(decryptSingleField(b.codigo_barras)),
+          produto_nome: decryptSingleField(b.produto_nome),
+          operador_nome: decryptSingleField(b.operador_nome),
+        }));
         if (typeof window !== 'undefined') {
-          localStorage.setItem(LOCAL_AUDIT_BIPS_KEY + sessaoId, JSON.stringify(data));
+          localStorage.setItem(LOCAL_AUDIT_BIPS_KEY + cleanSessaoId, JSON.stringify(decrypted));
         }
-        return data as DbAuditBip[];
+        return decrypted;
       }
     } catch (err) {
       console.debug('Aviso ao consultar bips no banco:', err);
@@ -1537,7 +1673,7 @@ export async function fetchSessionBipsFromDatabase(sessaoId: string): Promise<Db
 
   if (typeof window !== 'undefined') {
     try {
-      const raw = localStorage.getItem(LOCAL_AUDIT_BIPS_KEY + sessaoId);
+      const raw = localStorage.getItem(LOCAL_AUDIT_BIPS_KEY + cleanSessaoId);
       if (raw) return JSON.parse(raw);
     } catch {
       // ignore
@@ -1550,13 +1686,33 @@ export async function fetchSessionBipsFromDatabase(sessaoId: string): Promise<Db
  * Grava um bip no banco Supabase em tempo real (com chave composta loja/setor/data/hora)
  */
 export async function insertAuditBipInDatabase(bip: DbAuditBip): Promise<{ success: boolean; error?: string }> {
+  const cleanLojaId = sanitizeIdentifier(bip.loja_id, 64);
+  const cleanSessaoId = sanitizeIdentifier(bip.sessao_id, 128);
+  const cleanSetor = sanitizeText(bip.setor, 64);
+  const cleanEan = sanitizeBarcode(bip.codigo_barras, 32);
+  const cleanProdName = sanitizeText(bip.produto_nome, 200);
+  const cleanOpName = sanitizeText(bip.operador_nome, 120);
+  const cleanOpMatricula = sanitizeIdentifier(bip.operador_matricula, 64);
+
   const { dataAuditoria, horaAuditoria, chaveAuditoria } = buildAuditCompositeParts(
-    bip.loja_id,
-    bip.setor,
+    cleanLojaId,
+    cleanSetor,
     bip.timestamp || Date.now()
   );
   const enrichedBip: DbAuditBip = {
     ...bip,
+    id: sanitizeIdentifier(bip.id, 160),
+    sessao_id: cleanSessaoId,
+    loja_id: cleanLojaId,
+    produto_id: sanitizeIdentifier(bip.produto_id, 64),
+    codigo_barras: cleanEan,
+    produto_nome: cleanProdName,
+    setor: cleanSetor,
+    quantidade_fisica: bip.quantidade_fisica !== undefined && bip.quantidade_fisica !== null
+      ? validatePositiveInt(bip.quantidade_fisica, 0)
+      : null,
+    operador_matricula: cleanOpMatricula,
+    operador_nome: cleanOpName,
     data_auditoria: bip.data_auditoria || dataAuditoria,
     hora_auditoria: bip.hora_auditoria || horaAuditoria,
     chave_auditoria: bip.chave_auditoria || chaveAuditoria,
@@ -1570,12 +1726,12 @@ export async function insertAuditBipInDatabase(bip: DbAuditBip): Promise<{ succe
         sessao_id: enrichedBip.sessao_id,
         loja_id: enrichedBip.loja_id,
         produto_id: enrichedBip.produto_id,
-        codigo_barras: enrichedBip.codigo_barras,
-        produto_nome: enrichedBip.produto_nome,
+        codigo_barras: encryptSingleField(enrichedBip.codigo_barras),
+        produto_nome: encryptSingleField(enrichedBip.produto_nome),
         setor: enrichedBip.setor,
         quantidade_fisica: enrichedBip.quantidade_fisica ?? null,
         operador_matricula: enrichedBip.operador_matricula,
-        operador_nome: enrichedBip.operador_nome,
+        operador_nome: encryptSingleField(enrichedBip.operador_nome),
         data_auditoria: enrichedBip.data_auditoria,
         hora_auditoria: enrichedBip.hora_auditoria,
         chave_auditoria: enrichedBip.chave_auditoria,
@@ -1685,49 +1841,58 @@ export async function finalizeAuditSessionInDatabase(data: {
 
       // 2. Grava na tabela auditorias_finalizadas (fonte única de verdade — sem armazenamento local)
       await client.from('auditorias_finalizadas').upsert({
-        id: data.sessaoId,
-        loja_id: data.lojaId,
-        setor: data.setor,
+        id: sanitizeIdentifier(data.sessaoId, 128),
+        loja_id: sanitizeIdentifier(data.lojaId, 64),
+        setor: sanitizeText(data.setor, 64),
         tipo,
-        iniciada_por_nome: data.iniciadaPorNome,
-        iniciada_por_matricula: data.iniciadaPorMatricula,
-        finalizada_por_nome: data.finalizadaPorNome,
-        finalizada_por_matricula: data.finalizadaPorMatricula,
-        total_esperado: data.totalEsperado,
-        total_auditado: data.totalAuditado,
-        total_divergentes: data.totalDivergentes,
+        iniciada_por_nome: encryptSingleField(sanitizeText(data.iniciadaPorNome, 120)),
+        iniciada_por_matricula: sanitizeIdentifier(data.iniciadaPorMatricula, 64),
+        finalizada_por_nome: encryptSingleField(sanitizeText(data.finalizadaPorNome, 120)),
+        finalizada_por_matricula: sanitizeIdentifier(data.finalizadaPorMatricula, 64),
+        total_esperado: validatePositiveInt(data.totalEsperado, 0),
+        total_auditado: validatePositiveInt(data.totalAuditado, 0),
+        total_divergentes: validatePositiveInt(data.totalDivergentes, 0),
         iniciada_em: data.iniciadaEm,
         finalizada_em: data.finalizadaEm,
         data_auditoria: dataAuditoria,
         hora_auditoria: horaAuditoria,
         chave_auditoria: chaveAuditoria,
-        participantes: data.participants || [],
-        duracao_label: data.durationLabel || null,
-        camera_scans_count: data.cameraScansCount ?? data.confirmedItems.length,
+        participantes: (data.participants || []).map(p => sanitizeText(p, 120)),
+        duracao_label: data.durationLabel ? sanitizeText(data.durationLabel, 64) : null,
+        camera_scans_count: validatePositiveInt(data.cameraScansCount ?? data.confirmedItems.length, 0),
         status: 'CONCLUIDA',
       });
 
       // 3. Grava itens individuais em auditoria_produtos com isolamento direto por loja_id + chave composta
+      const cleanSessaoId = sanitizeIdentifier(data.sessaoId, 128);
+      const cleanLojaId = sanitizeIdentifier(data.lojaId, 64);
+      const cleanSetor = sanitizeText(data.setor, 64);
+      const cleanFinNome = sanitizeText(data.finalizadaPorNome, 120);
+      const cleanFinMat = sanitizeIdentifier(data.finalizadaPorMatricula, 64);
+
       const produtosPayload = [
         ...data.confirmedItems.map(c => {
-          const qtdSistema = c.systemQuantity ?? 0;
-          const qtdFisica = tipo === 'INVENTARIO' ? (c.physicalQuantity ?? 0) : null;
+          const cleanEan = sanitizeBarcode(c.ean, 32);
+          const cleanName = sanitizeText(c.name, 200);
+          const cleanPlu = c.reducedCode ? sanitizeIdentifier(c.reducedCode, 32) : '';
+          const qtdSistema = validatePositiveInt(c.systemQuantity ?? 0, 0);
+          const qtdFisica = tipo === 'INVENTARIO' ? validatePositiveInt(c.physicalQuantity ?? 0, 0) : null;
           const divergencia = tipo === 'INVENTARIO' && qtdFisica !== null ? qtdFisica - qtdSistema : null;
           return {
-            id: `${chaveAuditoria}_${c.ean}`,
-            sessao_id: data.sessaoId,
-            loja_id: data.lojaId,
-            produto_id: c.ean,
-            codigo_barras: c.ean,
-            plu: c.reducedCode || null,
-            nome: c.name,
-            setor: data.setor,
+            id: `${chaveAuditoria}_${cleanEan}`,
+            sessao_id: cleanSessaoId,
+            loja_id: cleanLojaId,
+            produto_id: cleanEan,
+            codigo_barras: encryptSingleField(cleanEan),
+            plu: cleanPlu ? encryptSingleField(cleanPlu) : null,
+            nome: encryptSingleField(cleanName),
+            setor: cleanSetor,
             quantidade_sistema: qtdSistema,
             quantidade_fisica: qtdFisica,
             divergencia,
             status_presenca: 'CONFIRMADO',
-            operador_nome: c.scannedBy || data.finalizadaPorNome,
-            operador_matricula: data.finalizadaPorMatricula,
+            operador_nome: encryptSingleField(sanitizeText(c.scannedBy || cleanFinNome, 120)),
+            operador_matricula: cleanFinMat,
             data_auditoria: dataAuditoria,
             hora_auditoria: horaAuditoria,
             chave_auditoria: chaveAuditoria,
@@ -1735,18 +1900,21 @@ export async function finalizeAuditSessionInDatabase(data: {
           };
         }),
         ...data.pendingItems.map(p => {
-          const qtdSistema = p.stock ?? 0;
+          const cleanEan = sanitizeBarcode(p.ean, 32);
+          const cleanName = sanitizeText(p.name, 200);
+          const cleanPlu = p.reducedCode ? sanitizeIdentifier(p.reducedCode, 32) : '';
+          const qtdSistema = validatePositiveInt(p.stock ?? 0, 0);
           const qtdFisica = tipo === 'INVENTARIO' ? 0 : null;
           const divergencia = tipo === 'INVENTARIO' ? -qtdSistema : null;
           return {
-            id: `${chaveAuditoria}_${p.ean}`,
-            sessao_id: data.sessaoId,
-            loja_id: data.lojaId,
-            produto_id: p.ean,
-            codigo_barras: p.ean,
-            plu: p.reducedCode || null,
-            nome: p.name,
-            setor: data.setor,
+            id: `${chaveAuditoria}_${cleanEan}`,
+            sessao_id: cleanSessaoId,
+            loja_id: cleanLojaId,
+            produto_id: cleanEan,
+            codigo_barras: encryptSingleField(cleanEan),
+            plu: cleanPlu ? encryptSingleField(cleanPlu) : null,
+            nome: encryptSingleField(cleanName),
+            setor: cleanSetor,
             quantidade_sistema: qtdSistema,
             quantidade_fisica: qtdFisica,
             divergencia,
@@ -1794,19 +1962,20 @@ export async function fetchAuditReportsFromDatabase(
   lojaId: string,
   options: { isManager: boolean; userSector?: string }
 ): Promise<AuditItem[] | null> {
-  if (!client || !isSupabaseConfigured() || !lojaId) return null;
+  const cleanLojaId = sanitizeIdentifier(lojaId, 64);
+  if (!client || !isSupabaseConfigured() || !cleanLojaId) return null;
 
   try {
     let query = client
       .from('auditorias_finalizadas')
       .select('*')
-      .eq('loja_id', lojaId)
+      .eq('loja_id', cleanLojaId)
       .order('data_auditoria', { ascending: false })
       .order('hora_auditoria', { ascending: false })
       .order('finalizada_em', { ascending: false })
       .limit(100);
 
-    const sectorFilter = options.userSector?.trim();
+    const sectorFilter = sanitizeText(options.userSector || '', 64);
     if (
       !options.isManager &&
       sectorFilter &&
@@ -1828,7 +1997,7 @@ export async function fetchAuditReportsFromDatabase(
     const { data: prodRows } = await client
       .from('auditoria_produtos')
       .select('*')
-      .eq('loja_id', lojaId)
+      .eq('loja_id', cleanLojaId)
       .in('sessao_id', sessionIds);
 
     const prodsBySession = new Map<string, Array<Record<string, unknown>>>();
@@ -1841,20 +2010,20 @@ export async function fetchAuditReportsFromDatabase(
 
     return rows.map((row: Record<string, unknown>) => {
       const sid = String(row.id);
-      const setor = String(row.setor || 'GERAL');
+      const setor = sanitizeText(row.setor || 'GERAL', 64);
       const tipo = ((row.tipo as string) || 'PRESENCA') as 'PRESENCA' | 'INVENTARIO' | 'VALIDADE';
       const items = prodsBySession.get(sid) || [];
 
       const confirmedList = items
         .filter(it => String(it.status_presenca) === 'CONFIRMADO')
         .map(it => ({
-          name: String(it.nome || ''),
-          ean: String(it.codigo_barras || ''),
-          reducedCode: it.plu ? String(it.plu) : undefined,
+          name: decryptSingleField(String(it.nome || '')),
+          ean: sanitizeBarcode(decryptSingleField(String(it.codigo_barras || ''))),
+          reducedCode: it.plu ? decryptSingleField(String(it.plu)) : undefined,
           scannedAt: it.auditado_em
             ? new Date(Number(it.auditado_em)).toLocaleTimeString('pt-BR')
             : String(row.hora_auditoria || ''),
-          scannedBy: it.operador_nome ? String(it.operador_nome) : undefined,
+          scannedBy: it.operador_nome ? decryptSingleField(String(it.operador_nome)) : undefined,
           scanMethod: 'camera' as const,
           physicalQuantity: it.quantidade_fisica !== null && it.quantidade_fisica !== undefined ? Number(it.quantidade_fisica) : undefined,
           systemQuantity: it.quantidade_sistema !== null && it.quantidade_sistema !== undefined ? Number(it.quantidade_sistema) : undefined,
@@ -1864,9 +2033,9 @@ export async function fetchAuditReportsFromDatabase(
       const pendingList = items
         .filter(it => String(it.status_presenca) !== 'CONFIRMADO')
         .map(it => ({
-          name: String(it.nome || ''),
-          ean: String(it.codigo_barras || ''),
-          reducedCode: it.plu ? String(it.plu) : undefined,
+          name: decryptSingleField(String(it.nome || '')),
+          ean: sanitizeBarcode(decryptSingleField(String(it.codigo_barras || ''))),
+          reducedCode: it.plu ? decryptSingleField(String(it.plu)) : undefined,
           stock: it.quantidade_sistema !== null && it.quantidade_sistema !== undefined ? Number(it.quantidade_sistema) : undefined,
           systemQuantity: it.quantidade_sistema !== null && it.quantidade_sistema !== undefined ? Number(it.quantidade_sistema) : undefined,
           physicalQuantity: it.quantidade_fisica !== null && it.quantidade_fisica !== undefined ? Number(it.quantidade_fisica) : undefined,
@@ -1883,6 +2052,8 @@ export async function fetchAuditReportsFromDatabase(
       const horaAuditoria = row.hora_auditoria ? String(row.hora_auditoria) : new Date(startedMs).toTimeString().slice(0, 8);
 
       const titlePrefix = tipo === 'INVENTARIO' ? 'Inventário Cego' : 'Auditoria de Presença';
+      const decFinalizadaPor = decryptSingleField(String(row.finalizada_por_nome || 'Operador'));
+      const decIniciadaPor = decryptSingleField(String(row.iniciada_por_nome || ''));
 
       return {
         id: sid,
@@ -1895,8 +2066,8 @@ export async function fetchAuditReportsFromDatabase(
         itemsCount: totalAuditado,
         status: 'Concluída',
         auditor: row.finalizada_por_matricula
-          ? `${row.finalizada_por_nome} (${row.finalizada_por_matricula})`
-          : String(row.finalizada_por_nome || 'Operador'),
+          ? `${decFinalizadaPor} (${row.finalizada_por_matricula})`
+          : decFinalizadaPor,
         department: setor,
         type: tipo,
         totalItems: totalEsperado,
@@ -1904,8 +2075,8 @@ export async function fetchAuditReportsFromDatabase(
         pendingItems: totalDivergentes,
         presenceRate: rate,
         startedBy: row.iniciada_por_matricula
-          ? `${row.iniciada_por_nome} (${row.iniciada_por_matricula})`
-          : String(row.iniciada_por_nome || ''),
+          ? `${decIniciadaPor} (${row.iniciada_por_matricula})`
+          : decIniciadaPor,
         participants: Array.isArray(row.participantes) ? (row.participantes as string[]) : [],
         startedAtMs: startedMs,
         finishedAtMs: finishedMs,
@@ -1935,29 +2106,32 @@ export async function confirmMissingAuditProductInDatabase(data: {
   newPendingCount: number;
   newCameraScansCount: number;
 }): Promise<void> {
-  if (!client || !isSupabaseConfigured() || !data.lojaId) return;
+  const cleanLojaId = sanitizeIdentifier(data.lojaId, 64);
+  const cleanSessaoId = sanitizeIdentifier(data.sessaoId, 128);
+  const cleanEan = sanitizeBarcode(data.ean, 32);
+  if (!client || !isSupabaseConfigured() || !cleanLojaId || !cleanSessaoId || !cleanEan) return;
   try {
     await client
       .from('auditoria_produtos')
       .update({
         status_presenca: 'CONFIRMADO',
-        operador_nome: data.operadorNome,
-        operador_matricula: data.operadorMatricula,
+        operador_nome: encryptSingleField(sanitizeText(data.operadorNome, 120)),
+        operador_matricula: sanitizeIdentifier(data.operadorMatricula, 64),
         auditado_em: Date.now(),
       })
-      .eq('sessao_id', data.sessaoId)
-      .eq('loja_id', data.lojaId)
-      .eq('codigo_barras', data.ean);
+      .eq('sessao_id', cleanSessaoId)
+      .eq('loja_id', cleanLojaId)
+      .eq('produto_id', cleanEan);
 
     await client
       .from('auditorias_finalizadas')
       .update({
-        total_auditado: data.newConfirmedCount,
-        total_divergentes: data.newPendingCount,
-        camera_scans_count: data.newCameraScansCount,
+        total_auditado: validatePositiveInt(data.newConfirmedCount, 0),
+        total_divergentes: validatePositiveInt(data.newPendingCount, 0),
+        camera_scans_count: validatePositiveInt(data.newCameraScansCount, 0),
       })
-      .eq('id', data.sessaoId)
-      .eq('loja_id', data.lojaId);
+      .eq('id', cleanSessaoId)
+      .eq('loja_id', cleanLojaId);
   } catch (err) {
     console.warn('[Relatórios] Erro ao atualizar bip pós-auditoria:', err);
   }
@@ -2004,14 +2178,15 @@ export function subscribeToAuditRealtime(
   onUserJoinedSession?: (userName: string, sessaoId: string, matricula?: string) => void,
   onSessionClosed?: (sessaoId: string, closedByName?: string, tipo?: string) => void
 ): () => void {
-  if (!client || !isSupabaseConfigured() || !lojaId) return () => {};
+  const cleanLojaId = sanitizeIdentifier(lojaId, 64);
+  if (!client || !isSupabaseConfigured() || !cleanLojaId) return () => {};
 
   try {
-    const channelName = `realtime_auditoria_${lojaId}`;
+    const channelName = `realtime_auditoria_${cleanLojaId}`;
     const channel = client.channel(channelName, {
       config: {
         broadcast: { self: false },
-        ...(operatorPresence ? { presence: { key: operatorPresence.matricula } } : {}),
+        ...(operatorPresence ? { presence: { key: sanitizeIdentifier(operatorPresence.matricula, 64) } } : {}),
       },
     });
 
@@ -2019,18 +2194,18 @@ export function subscribeToAuditRealtime(
     const ready = new Promise<void>((res) => {
       resolveReady = res;
     });
-    activeAuditChannelRef = { lojaId, channel, ready };
+    activeAuditChannelRef = { lojaId: cleanLojaId, channel, ready };
 
     channel
       .on(
         'postgres_changes',
-        { event: '*', schema: 'public', table: 'auditoria_presenca_sessoes', filter: `loja_id=eq.${lojaId}` },
+        { event: '*', schema: 'public', table: 'auditoria_presenca_sessoes', filter: `loja_id=eq.${cleanLojaId}` },
         (payload) => {
           const row = payload.new as Record<string, unknown> | undefined;
           if (payload.eventType === 'UPDATE' && row && row.status === 'CONCLUIDA' && onSessionClosed) {
             onSessionClosed(
               String(row.id || ''),
-              row.iniciada_por_nome ? String(row.iniciada_por_nome) : undefined,
+              row.iniciada_por_nome ? decryptSingleField(String(row.iniciada_por_nome)) : undefined,
               row.tipo ? String(row.tipo) : undefined
             );
           }
@@ -2039,17 +2214,23 @@ export function subscribeToAuditRealtime(
       )
       .on(
         'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'auditoria_presenca_bips', filter: `loja_id=eq.${lojaId}` },
+        { event: 'INSERT', schema: 'public', table: 'auditoria_presenca_bips', filter: `loja_id=eq.${cleanLojaId}` },
         (payload) => {
           if (payload.new && onNewBip) {
-            onNewBip(payload.new as DbAuditBip);
+            const rawBip = payload.new as DbAuditBip;
+            onNewBip({
+              ...rawBip,
+              codigo_barras: sanitizeBarcode(decryptSingleField(rawBip.codigo_barras)),
+              produto_nome: decryptSingleField(rawBip.produto_nome),
+              operador_nome: decryptSingleField(rawBip.operador_nome),
+            });
           }
           onEvent();
         }
       )
       .on(
         'postgres_changes',
-        { event: 'UPDATE', schema: 'public', table: 'auditoria_presenca_bips', filter: `loja_id=eq.${lojaId}` },
+        { event: 'UPDATE', schema: 'public', table: 'auditoria_presenca_bips', filter: `loja_id=eq.${cleanLojaId}` },
         () => {
           onEvent();
         }
@@ -2169,8 +2350,9 @@ export function saveStoredChatMessage(message: ChatMessage): void {
  * significa que o banco está vazio e a interface deve refletir isso imediatamente.
  */
 export async function fetchChatMessagesFromSupabase(lojaId: string): Promise<ChatMessage[] | null> {
+  const cleanLojaId = sanitizeIdentifier(lojaId, 64);
   if (!client || !isSupabaseConfigured()) {
-    return getStoredChatMessages(lojaId);
+    return getStoredChatMessages(cleanLojaId);
   }
 
   // Elimina qualquer cache local obsoleto para evitar ressuscitar mensagens excluídas
@@ -2180,7 +2362,7 @@ export async function fetchChatMessagesFromSupabase(lojaId: string): Promise<Cha
     const { data, error } = await client
       .from('chat_mensagens')
       .select('*')
-      .eq('loja_id', lojaId)
+      .eq('loja_id', cleanLojaId)
       .order('timestamp', { ascending: true })
       .limit(200);
 
@@ -2189,21 +2371,7 @@ export async function fetchChatMessagesFromSupabase(lojaId: string): Promise<Cha
       return null;
     }
 
-    const mapped: ChatMessage[] = (data || []).map(row => ({
-      id: String(row.id),
-      loja_id: String(row.loja_id),
-      canal_tipo: (row.canal_tipo as 'grupo' | 'direto_lider') || 'grupo',
-      destinatario_id: row.destinatario_id ? String(row.destinatario_id) : undefined,
-      destinatario_nome: row.destinatario_nome ? String(row.destinatario_nome) : undefined,
-      remetente_matricula: String(row.remetente_matricula),
-      remetente_nome: String(row.remetente_nome),
-      remetente_cargo: row.remetente_cargo ? String(row.remetente_cargo) : undefined,
-      is_anonimo: Boolean(row.is_anonimo),
-      conteudo: String(row.conteudo || ''),
-      timestamp: Number(row.timestamp) || Date.now(),
-      created_at: row.created_at ? String(row.created_at) : undefined,
-    }));
-
+    const mapped: ChatMessage[] = (data || []).map(row => mapChatRow(row as Record<string, unknown>));
     return mapped;
   } catch (err) {
     console.warn('[Chat] Erro ao carregar mensagens:', err);
@@ -2213,28 +2381,24 @@ export async function fetchChatMessagesFromSupabase(lojaId: string): Promise<Cha
 
 /**
  * Nome ESTÁVEL do canal Realtime do chat da loja.
- *
- * IMPORTANTE: o nome precisa ser IDÊNTICO em todos os dispositivos da loja
- * (remetente e destinatário). Se o nome tiver `Date.now()` no final, cada
- * dispositivo cria um canal diferente e as mensagens nunca chegam.
  */
-export const getChatChannelName = (lojaId: string): string => `realtime_chat_${lojaId}`;
+export const getChatChannelName = (lojaId: string): string => `realtime_chat_${sanitizeIdentifier(lojaId, 64)}`;
 
 /**
- * Converte uma linha da tabela `chat_mensagens` no modelo da aplicação.
+ * Converte uma linha da tabela `chat_mensagens` no modelo da aplicação (descriptografando em RAM).
  */
 function mapChatRow(row: Record<string, unknown>): ChatMessage {
   return {
-    id: String(row.id),
-    loja_id: String(row.loja_id),
-    canal_tipo: (row.canal_tipo as 'grupo' | 'direto_lider') || 'grupo',
-    destinatario_id: row.destinatario_id ? String(row.destinatario_id) : undefined,
-    destinatario_nome: row.destinatario_nome ? String(row.destinatario_nome) : undefined,
-    remetente_matricula: String(row.remetente_matricula),
-    remetente_nome: String(row.remetente_nome),
-    remetente_cargo: row.remetente_cargo ? String(row.remetente_cargo) : undefined,
+    id: sanitizeIdentifier(row.id, 80),
+    loja_id: sanitizeIdentifier(row.loja_id, 64),
+    canal_tipo: validateEnum(row.canal_tipo, ['grupo', 'direto_lider'] as const, 'grupo'),
+    destinatario_id: row.destinatario_id ? sanitizeIdentifier(row.destinatario_id, 64) : undefined,
+    destinatario_nome: row.destinatario_nome ? decryptSingleField(String(row.destinatario_nome)) : undefined,
+    remetente_matricula: sanitizeIdentifier(row.remetente_matricula, 64),
+    remetente_nome: decryptSingleField(String(row.remetente_nome || '')),
+    remetente_cargo: row.remetente_cargo ? sanitizeText(row.remetente_cargo, 80) : undefined,
     is_anonimo: Boolean(row.is_anonimo),
-    conteudo: String(row.conteudo || ''),
+    conteudo: decryptSingleField(String(row.conteudo || '')),
     timestamp: Number(row.timestamp) || Date.now(),
     created_at: row.created_at ? String(row.created_at) : undefined,
   };
@@ -2255,7 +2419,8 @@ interface ChatChannelEntry {
 const chatChannelRegistry = new Map<string, ChatChannelEntry>();
 
 function getOrCreateChatChannel(lojaId: string): ChatChannelEntry {
-  const name = getChatChannelName(lojaId);
+  const cleanLojaId = sanitizeIdentifier(lojaId, 64);
+  const name = getChatChannelName(cleanLojaId);
   const existing = chatChannelRegistry.get(name);
   if (existing) return existing;
 
@@ -2270,7 +2435,7 @@ function getOrCreateChatChannel(lojaId: string): ChatChannelEntry {
   channel.on('broadcast', { event: 'new_message' }, (payload: { payload?: unknown }) => {
     if (!payload?.payload) return;
     try {
-      const msg = payload.payload as ChatMessage;
+      const msg = mapChatRow(payload.payload as Record<string, unknown>);
       if (!msg?.id) return;
       saveStoredChatMessage(msg);
       listeners.forEach((listener) => listener(msg));
@@ -2292,7 +2457,7 @@ function getOrCreateChatChannel(lojaId: string): ChatChannelEntry {
       event: 'INSERT',
       schema: 'public',
       table: 'chat_mensagens',
-      filter: `loja_id=eq.${lojaId}`,
+      filter: `loja_id=eq.${cleanLojaId}`,
     },
     (payload) => {
       if (!payload.new) return;
@@ -2308,7 +2473,7 @@ function getOrCreateChatChannel(lojaId: string): ChatChannelEntry {
       event: 'UPDATE',
       schema: 'public',
       table: 'chat_mensagens',
-      filter: `loja_id=eq.${lojaId}`,
+      filter: `loja_id=eq.${cleanLojaId}`,
     },
     (payload) => {
       if (!payload.new) return;
@@ -2323,7 +2488,7 @@ function getOrCreateChatChannel(lojaId: string): ChatChannelEntry {
       event: 'DELETE',
       schema: 'public',
       table: 'chat_mensagens',
-      filter: `loja_id=eq.${lojaId}`,
+      filter: `loja_id=eq.${cleanLojaId}`,
     },
     (payload) => {
       const oldRow = payload.old as Record<string, unknown> | undefined;
@@ -2385,9 +2550,23 @@ export async function broadcastChatMessage(msg: ChatMessage): Promise<boolean> {
 export async function sendChatMessageToSupabase(
   msg: Omit<ChatMessage, 'id' | 'timestamp' | 'created_at'>
 ): Promise<{ success: boolean; data?: ChatMessage; error?: string }> {
+  const cleanLojaId = sanitizeIdentifier(msg.loja_id, 64);
+  const cleanConteudo = sanitizeText(msg.conteudo, 1000);
+  if (!cleanConteudo) {
+    return { success: false, error: 'Mensagem vazia ou inválida.' };
+  }
+
   const newMsg: ChatMessage = {
-    ...msg,
     id: `msg_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+    loja_id: cleanLojaId,
+    canal_tipo: validateEnum(msg.canal_tipo, ['grupo', 'direto_lider'] as const, 'grupo'),
+    destinatario_id: msg.destinatario_id ? sanitizeIdentifier(msg.destinatario_id, 64) : undefined,
+    destinatario_nome: msg.destinatario_nome ? sanitizeText(msg.destinatario_nome, 120) : undefined,
+    remetente_matricula: sanitizeIdentifier(msg.remetente_matricula, 64),
+    remetente_nome: sanitizeText(msg.remetente_nome, 120),
+    remetente_cargo: msg.remetente_cargo ? sanitizeText(msg.remetente_cargo, 80) : undefined,
+    is_anonimo: Boolean(msg.is_anonimo),
+    conteudo: cleanConteudo,
     timestamp: Date.now(),
     created_at: new Date().toISOString(),
   };
@@ -2403,18 +2582,25 @@ export async function sendChatMessageToSupabase(
     // Garante que a loja exista antes do INSERT para evitar falha de FK.
     await ensureStoreExists(newMsg.loja_id);
 
+    const encryptedPayload: ChatMessage = {
+      ...newMsg,
+      destinatario_nome: newMsg.destinatario_nome ? encryptSingleField(newMsg.destinatario_nome) : undefined,
+      remetente_nome: encryptSingleField(newMsg.remetente_nome),
+      conteudo: encryptSingleField(newMsg.conteudo),
+    };
+
     const { error } = await client.from('chat_mensagens').insert({
-      id: newMsg.id,
-      loja_id: newMsg.loja_id,
-      canal_tipo: newMsg.canal_tipo,
-      destinatario_id: newMsg.destinatario_id || null,
-      destinatario_nome: newMsg.destinatario_nome || null,
-      remetente_matricula: newMsg.remetente_matricula,
-      remetente_nome: newMsg.remetente_nome,
-      remetente_cargo: newMsg.remetente_cargo || null,
-      is_anonimo: newMsg.is_anonimo,
-      conteudo: newMsg.conteudo,
-      timestamp: newMsg.timestamp,
+      id: encryptedPayload.id,
+      loja_id: encryptedPayload.loja_id,
+      canal_tipo: encryptedPayload.canal_tipo,
+      destinatario_id: encryptedPayload.destinatario_id || null,
+      destinatario_nome: encryptedPayload.destinatario_nome || null,
+      remetente_matricula: encryptedPayload.remetente_matricula,
+      remetente_nome: encryptedPayload.remetente_nome,
+      remetente_cargo: encryptedPayload.remetente_cargo || null,
+      is_anonimo: encryptedPayload.is_anonimo,
+      conteudo: encryptedPayload.conteudo,
+      timestamp: encryptedPayload.timestamp,
     });
 
     if (error) {
@@ -2422,9 +2608,8 @@ export async function sendChatMessageToSupabase(
       return { success: false, error: error.message };
     }
 
-    // Broadcast instantâneo para os demais dispositivos da loja.
-    // Feito DEPOIS do insert para o banco sempre ser a fonte de verdade.
-    await broadcastChatMessage(newMsg);
+    // Broadcast instantâneo criptografado para os demais dispositivos da loja.
+    await broadcastChatMessage(encryptedPayload);
 
     return { success: true, data: newMsg };
   } catch (err: unknown) {
@@ -2544,9 +2729,26 @@ export async function saveAvariaInDatabase(
   avariaData: Omit<AvariaItem, 'id' | 'registrado_em' | 'timestamp'>
 ): Promise<{ success: boolean; data?: AvariaItem; synced: boolean; error?: string }> {
   const nowMs = Date.now();
+  const cleanBarcode = sanitizeBarcode(avariaData.codigo_barras, 32);
+  const cleanProdName = sanitizeText(avariaData.produto_nome, 200);
+  const cleanQty = validatePositiveInt(avariaData.quantidade, 1);
+
+  if (!cleanBarcode || !cleanProdName || cleanQty <= 0) {
+    return { success: false, synced: false, error: 'Dados da avaria inválidos.' };
+  }
+
   const avaria: AvariaItem = {
-    ...avariaData,
     id: `av_${nowMs}_${Math.random().toString(36).substring(2, 7)}`,
+    loja_id: sanitizeIdentifier(avariaData.loja_id, 64),
+    codigo_barras: cleanBarcode,
+    codigo_reduzido: avariaData.codigo_reduzido ? sanitizeIdentifier(avariaData.codigo_reduzido, 32) : undefined,
+    produto_nome: cleanProdName,
+    quantidade: cleanQty,
+    tipo_avaria: validateEnum(avariaData.tipo_avaria, TIPOS_AVARIA, 'Outro'),
+    para_troca: Boolean(avariaData.para_troca),
+    setor: avariaData.setor ? sanitizeText(avariaData.setor, 64) : undefined,
+    registrado_por_nome: sanitizeText(avariaData.registrado_por_nome || 'Operador', 120),
+    registrado_por_matricula: sanitizeIdentifier(avariaData.registrado_por_matricula, 64),
     registrado_em: new Date(nowMs).toLocaleString('pt-BR'),
     timestamp: nowMs,
   };
@@ -2554,7 +2756,7 @@ export async function saveAvariaInDatabase(
   // 1. Persistência local garantida (mesmo offline)
   saveStoredAvaria(avaria);
 
-  // 2. Sincronização com a nuvem
+  // 2. Sincronização com a nuvem (criptografado)
   if (!client || !isSupabaseConfigured()) {
     return { success: true, data: avaria, synced: false };
   }
@@ -2564,14 +2766,14 @@ export async function saveAvariaInDatabase(
       {
         id: avaria.id,
         loja_id: avaria.loja_id,
-        codigo_barras: avaria.codigo_barras,
-        codigo_reduzido: avaria.codigo_reduzido || null,
-        produto_nome: avaria.produto_nome,
+        codigo_barras: encryptSingleField(avaria.codigo_barras),
+        codigo_reduzido: avaria.codigo_reduzido ? encryptSingleField(avaria.codigo_reduzido) : null,
+        produto_nome: encryptSingleField(avaria.produto_nome),
         quantidade: avaria.quantidade,
         tipo_avaria: avaria.tipo_avaria,
         para_troca: avaria.para_troca,
         setor: avaria.setor || null,
-        registrado_por_nome: avaria.registrado_por_nome,
+        registrado_por_nome: encryptSingleField(avaria.registrado_por_nome),
         registrado_por_matricula: avaria.registrado_por_matricula,
         timestamp: avaria.timestamp,
       },
@@ -2596,15 +2798,16 @@ export async function saveAvariaInDatabase(
  * Carrega as avarias da loja. Se a tabela não existir, mantém o cache local.
  */
 export async function fetchAvariasFromDatabase(lojaId: string): Promise<AvariaItem[]> {
-  const localList = getStoredAvarias(lojaId);
+  const cleanLojaId = sanitizeIdentifier(lojaId, 64);
+  const localList = getStoredAvarias(cleanLojaId);
 
-  if (!client || !isSupabaseConfigured()) return localList;
+  if (!client || !isSupabaseConfigured() || !cleanLojaId) return localList;
 
   try {
     const { data, error } = await client
       .from('avarias_estoque')
       .select('*')
-      .eq('loja_id', lojaId)
+      .eq('loja_id', cleanLojaId)
       .order('timestamp', { ascending: false })
       .limit(200);
 
@@ -2618,17 +2821,17 @@ export async function fetchAvariasFromDatabase(lojaId: string): Promise<AvariaIt
     if (!data || data.length === 0) return localList;
 
     const mapped: AvariaItem[] = data.map((row: Record<string, unknown>) => ({
-      id: String(row.id),
-      loja_id: String(row.loja_id),
-      codigo_barras: String(row.codigo_barras),
-      codigo_reduzido: row.codigo_reduzido ? String(row.codigo_reduzido) : undefined,
-      produto_nome: String(row.produto_nome || ''),
-      quantidade: Number(row.quantidade) || 0,
-      tipo_avaria: (row.tipo_avaria as AvariaItem['tipo_avaria']) || 'Outro',
+      id: sanitizeIdentifier(row.id, 80),
+      loja_id: sanitizeIdentifier(row.loja_id, 64),
+      codigo_barras: sanitizeBarcode(decryptSingleField(String(row.codigo_barras || ''))),
+      codigo_reduzido: row.codigo_reduzido ? decryptSingleField(String(row.codigo_reduzido)) : undefined,
+      produto_nome: decryptSingleField(String(row.produto_nome || '')),
+      quantidade: validatePositiveInt(row.quantidade, 0),
+      tipo_avaria: validateEnum(row.tipo_avaria, TIPOS_AVARIA, 'Outro'),
       para_troca: Boolean(row.para_troca),
-      setor: row.setor ? String(row.setor) : undefined,
-      registrado_por_nome: String(row.registrado_por_nome || ''),
-      registrado_por_matricula: String(row.registrado_por_matricula || ''),
+      setor: row.setor ? sanitizeText(row.setor, 64) : undefined,
+      registrado_por_nome: decryptSingleField(String(row.registrado_por_nome || '')),
+      registrado_por_matricula: sanitizeIdentifier(row.registrado_por_matricula, 64),
       registrado_em: row.timestamp
         ? new Date(Number(row.timestamp)).toLocaleString('pt-BR')
         : '',
@@ -2665,11 +2868,12 @@ export function subscribeToAvariasRealtime(
   lojaId: string,
   onNewAvaria: (avaria: AvariaItem) => void
 ): () => void {
-  if (!client || !isSupabaseConfigured()) return () => {};
+  const cleanLojaId = sanitizeIdentifier(lojaId, 64);
+  if (!client || !isSupabaseConfigured() || !cleanLojaId) return () => {};
   const supabaseClient = client;
 
   try {
-    const channel = supabaseClient.channel(`realtime_avarias_${lojaId}`, {
+    const channel = supabaseClient.channel(`realtime_avarias_${cleanLojaId}`, {
       config: { broadcast: { self: false } },
     });
 
@@ -2693,23 +2897,23 @@ export function subscribeToAvariasRealtime(
         event: '*',
         schema: 'public',
         table: 'avarias_estoque',
-        filter: `loja_id=eq.${lojaId}`,
+        filter: `loja_id=eq.${cleanLojaId}`,
       },
       (payload) => {
         const row = (payload.new || payload.old) as Record<string, unknown> | undefined;
         if (!row || !row.id) return;
         emit({
-          id: String(row.id),
-          loja_id: String(row.loja_id || lojaId),
-          codigo_barras: String(row.codigo_barras || ''),
-          codigo_reduzido: row.codigo_reduzido ? String(row.codigo_reduzido) : undefined,
-          produto_nome: String(row.produto_nome || ''),
-          quantidade: Number(row.quantidade) || 0,
-          tipo_avaria: (row.tipo_avaria as AvariaItem['tipo_avaria']) || 'Outro',
+          id: sanitizeIdentifier(row.id, 80),
+          loja_id: sanitizeIdentifier(row.loja_id || cleanLojaId, 64),
+          codigo_barras: sanitizeBarcode(decryptSingleField(String(row.codigo_barras || ''))),
+          codigo_reduzido: row.codigo_reduzido ? decryptSingleField(String(row.codigo_reduzido)) : undefined,
+          produto_nome: decryptSingleField(String(row.produto_nome || '')),
+          quantidade: validatePositiveInt(row.quantidade, 0),
+          tipo_avaria: validateEnum(row.tipo_avaria, TIPOS_AVARIA, 'Outro'),
           para_troca: Boolean(row.para_troca),
-          setor: row.setor ? String(row.setor) : undefined,
-          registrado_por_nome: String(row.registrado_por_nome || ''),
-          registrado_por_matricula: String(row.registrado_por_matricula || ''),
+          setor: row.setor ? sanitizeText(row.setor, 64) : undefined,
+          registrado_por_nome: decryptSingleField(String(row.registrado_por_nome || '')),
+          registrado_por_matricula: sanitizeIdentifier(row.registrado_por_matricula, 64),
           registrado_em: row.timestamp ? new Date(Number(row.timestamp)).toLocaleString('pt-BR') : '',
           timestamp: Number(row.timestamp) || Date.now(),
         });
@@ -2739,17 +2943,18 @@ export async function lockProductInSupabase(
   productId: string,
   lockedBy: string
 ): Promise<{ success: boolean }> {
-  if (!client || !isSupabaseConfigured()) return { success: true };
+  const cleanId = sanitizeIdentifier(productId, 64);
+  if (!client || !isSupabaseConfigured() || !cleanId) return { success: true };
 
   try {
     await client
       .from('produtos')
       .update({
         is_locked_for_edit: true,
-        locked_by: lockedBy,
+        locked_by: encryptSingleField(sanitizeText(lockedBy, 120)),
         locked_at: new Date().toISOString(),
       })
-      .eq('id', productId);
+      .eq('id', cleanId);
     return { success: true };
   } catch (err) {
     console.warn('[ProductLock] Erro ao bloquear produto:', err);
@@ -2758,7 +2963,8 @@ export async function lockProductInSupabase(
 }
 
 export async function unlockProductInSupabase(productId: string): Promise<{ success: boolean }> {
-  if (!client || !isSupabaseConfigured()) return { success: true };
+  const cleanId = sanitizeIdentifier(productId, 64);
+  if (!client || !isSupabaseConfigured() || !cleanId) return { success: true };
 
   try {
     await client
@@ -2768,7 +2974,7 @@ export async function unlockProductInSupabase(productId: string): Promise<{ succ
         locked_by: null,
         locked_at: null,
       })
-      .eq('id', productId);
+      .eq('id', cleanId);
     return { success: true };
   } catch (err) {
     console.warn('[ProductLock] Erro ao desbloquear produto:', err);
@@ -2780,6 +2986,8 @@ export async function updateProductInSupabase(
   productId: string,
   updates: Partial<Product>
 ): Promise<{ success: boolean; error?: string }> {
+  const cleanId = sanitizeIdentifier(productId, 64);
+  if (!cleanId) return { success: false, error: 'ID de produto inválido.' };
   if (!client || !isSupabaseConfigured()) return { success: true };
 
   try {
@@ -2787,21 +2995,39 @@ export async function updateProductInSupabase(
       is_locked_for_edit: false,
       locked_by: null,
       locked_at: null,
+      is_encrypted: true,
       updated_at: new Date().toISOString(),
     };
 
-    if (updates.name !== undefined) payload.nome = updates.name.trim();
-    if (updates.ean !== undefined) payload.codigo_barras = updates.ean.trim();
-    if (updates.secondaryEan !== undefined) payload.codigo_barras_secundario = updates.secondaryEan.trim() || null;
-    if (updates.stock !== undefined) payload.quantidade = Math.max(0, updates.stock);
-    if (updates.category !== undefined) payload.setor = updates.category;
-    if (updates.reducedCode !== undefined) payload.plu = updates.reducedCode.trim() || null;
-    if (updates.supplierCode !== undefined) payload.codigo_fornecedor = updates.supplierCode.trim() || null;
+    if (updates.name !== undefined) {
+      const cleanName = sanitizeText(updates.name, 200);
+      if (!cleanName) return { success: false, error: 'Nome do produto inválido.' };
+      payload.nome = encryptSingleField(cleanName);
+    }
+    if (updates.ean !== undefined) {
+      const cleanEan = sanitizeBarcode(updates.ean, 32);
+      if (!cleanEan) return { success: false, error: 'Código de barras inválido.' };
+      payload.codigo_barras = encryptSingleField(cleanEan);
+    }
+    if (updates.secondaryEan !== undefined) {
+      const cleanSec = sanitizeBarcode(updates.secondaryEan, 32);
+      payload.codigo_barras_secundario = cleanSec ? encryptSingleField(cleanSec) : null;
+    }
+    if (updates.stock !== undefined) payload.quantidade = validatePositiveInt(updates.stock, 0);
+    if (updates.category !== undefined) payload.setor = sanitizeText(updates.category, 64);
+    if (updates.reducedCode !== undefined) {
+      const cleanPlu = sanitizeIdentifier(updates.reducedCode, 32);
+      payload.plu = cleanPlu ? encryptSingleField(cleanPlu) : null;
+    }
+    if (updates.supplierCode !== undefined) {
+      const cleanForn = sanitizeIdentifier(updates.supplierCode, 32);
+      payload.codigo_fornecedor = cleanForn ? encryptSingleField(cleanForn) : null;
+    }
 
     const { error } = await client
       .from('produtos')
       .update(payload)
-      .eq('id', productId);
+      .eq('id', cleanId);
 
     if (error) throw error;
     return { success: true };

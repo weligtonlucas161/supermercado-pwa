@@ -22,6 +22,7 @@ import {
 import { StoreEmployee, SETORES_DISPONIVEIS, SetorLoja } from '../../types';
 import { useApp } from '../../context/AppContext';
 import { triggerScanBeep } from '../../utils/haptics';
+import { sanitizeText, sanitizeIdentifier } from '../../utils/security';
 
 interface EmployeeDetailModalProps {
   employee: StoreEmployee | null;
@@ -81,18 +82,20 @@ export const EmployeeDetailModal: React.FC<EmployeeDetailModalProps> = ({
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!nome.trim() || !matricula.trim()) {
-      setNotice({ type: 'error', text: 'Nome e matrícula são obrigatórios.' });
+    const cleanNome = sanitizeText(nome, 120);
+    const cleanMatricula = sanitizeIdentifier(matricula, 64);
+    if (!cleanNome || !cleanMatricula) {
+      setNotice({ type: 'error', text: 'Nome e matrícula válidos são obrigatórios.' });
       return;
     }
 
     const updatedEmployee: StoreEmployee = {
       ...employee,
-      nome: nome.trim(),
-      matricula: matricula.trim(),
+      nome: cleanNome,
+      matricula: cleanMatricula,
       senha: senha.trim() || employee.senha || '',
-      cargo: cargo.trim(),
-      setor_restrito: setorRestrito,
+      cargo: sanitizeText(cargo, 64),
+      setor_restrito: sanitizeText(setorRestrito, 64),
       ativo,
       permissoes: {
         setores_permitidos: setorRestrito === 'TODOS' ? [] : [setorRestrito],

@@ -16,6 +16,7 @@ import {
 import { useApp } from '../../context/AppContext';
 import { PatchNotesModal } from '../modals/PatchNotesModal';
 import { TermsModal } from '../modals/TermsModal';
+import { sanitizeIdentifier } from '../../utils/security';
 
 export const LoginScreen: React.FC = () => {
   const { login, darkMode, disconnectedMessage, clearDisconnectedMessage } = useApp();
@@ -34,8 +35,9 @@ export const LoginScreen: React.FC = () => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!matricula.trim() || !senha.trim()) {
-      setErrorMessage('Por favor, preencha a matrícula e a senha de acesso.');
+    const cleanMatricula = sanitizeIdentifier(matricula, 64);
+    if (!cleanMatricula || !senha.trim()) {
+      setErrorMessage('Por favor, preencha uma matrícula válida e a senha de acesso.');
       return;
     }
 
@@ -43,7 +45,7 @@ export const LoginScreen: React.FC = () => {
     setErrorMessage(null);
 
     try {
-      const result = await login(matricula, senha);
+      const result = await login(cleanMatricula, senha);
       if (!result.success) {
         setErrorMessage(result.message || 'Credenciais inválidas. Verifique os dados digitados.');
       }
