@@ -1,4 +1,4 @@
-import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import { createClient, SupabaseClient, RealtimeChannel } from '@supabase/supabase-js';
 import { 
   Product, 
   ValidityItem, 
@@ -10,7 +10,8 @@ import {
   Store,
   StoreEmployee,
   StoreRole,
-  ChatMessage
+  ChatMessage,
+  AvariaItem
 } from '../types';
 import { decryptSingleField, isEncrypted } from '../utils/encryptionUtils';
 
@@ -267,9 +268,16 @@ export function getStoredRoles(): StoreRole[] {
 }
 
 /**
- * Altera a senha do usuário e marca primeiro_login como false
+ * Altera a senha do usuário e marca primeiro_login como false.
+ *
+ * O usuário pode existir APENAS no Supabase (criado pelo Gerente em outro
+ * dispositivo). Por isso, quando a matrícula não é encontrada no cache local,
+ * consultamos a tabela `usuarios` antes de concluir que ela não existe.
  */
-export function changeUserPassword(matricula: string, newPassword: string): { success: boolean; message?: string } {
+export async function changeUserPassword(
+  matricula: string,
+  newPassword: string
+): Promise<{ success: boolean; message?: string }> {
   const cleanMatricula = matricula.trim();
   const cleanPassword = newPassword.trim();
 
@@ -289,6 +297,7 @@ export function changeUserPassword(matricula: string, newPassword: string): { su
   // 2. Funcionários e Gerentes de Loja
   const emps = getStoredEmployees();
   const idx = emps.findIndex(e => e.matricula.toLowerCase() === cleanMatricula.toLowerCase());
+
   if (idx >= 0) {
     emps[idx].senha = cleanPassword;
     emps[idx].primeiro_login = false;
@@ -296,17 +305,79 @@ export function changeUserPassword(matricula: string, newPassword: string): { su
       localStorage.setItem(LOCAL_STORAGE_EMPLOYEES_KEY, JSON.stringify(emps));
     }
 
-    // Sincroniza também no Supabase se cliente estiver ativo
+    // Sincroniza também no Supabase se cliente estiver ativo.
+    // O PostgrestBuilder NUNCA rejeita: o erro vem dentro do valor resolvido.
     if (client) {
-      Promise.resolve(
-        client.rpc('rpc_alterar_senha', {
-          p_matricula: cleanMatricula,
-          p_nova_senha: cleanPassword,
-        })
-      ).catch((err: unknown) => console.warn('Erro ao sincronizar senha no Supabase:', err));
+      const { error } = await client.rpc('rpc_alterar_senha', {
+        p_matricula: cleanMatricula,
+        p_nova_senha: cleanPassword,
+      });
+      if (error) {
+        console.warn('Erro ao sincronizar senha no Supabase:', error.message);
+      }
     }
 
     return { success: true, message: 'Senha alterada com sucesso!' };
+  }
+
+  // 3. FALLBACK: usuário existe apenas no Supabase (criado em outro dispositivo).
+  // A RPC `rpc_alterar_senha` NÃO valida a existência do usuário, por isso
+  // confirmamos a matrícula na tabela antes de alterar qualquer coisa.
+  if (client && isSupabaseConfigured()) {
+    try {
+      const { data: remoteUser, error: findError } = await client
+        .from('usuarios')
+        .select('id, matricula, nome, cargo, setor, loja_id, ativo')
+        .eq('matricula', cleanMatricula)
+        .maybeSingle();
+
+      if (!findError && remoteUser) {
+        const { data: rpcData, error: rpcError } = await client.rpc('rpc_alterar_senha', {
+          p_matricula: cleanMatricula,
+          p_nova_senha: cleanPassword,
+        });
+
+        if (rpcError) {
+          console.warn('Erro ao alterar senha no servidor:', rpcError.message);
+          return {
+            success: false,
+            message: 'Não foi possível alterar a senha no servidor. Tente novamente com internet.',
+          };
+        }
+
+        const rpcResult = rpcData as { success?: boolean; message?: string } | null;
+        if (rpcResult && rpcResult.success === false) {
+          return {
+            success: false,
+            message: rpcResult.message || 'Não foi possível alterar a senha no servidor.',
+          };
+        }
+
+        // Atualiza o cache local para que os próximos acessos funcionem offline.
+        const cached = emps.filter(
+          e => e.matricula.toLowerCase() !== cleanMatricula.toLowerCase()
+        );
+        cached.unshift({
+          id: String(remoteUser.id),
+          matricula: String(remoteUser.matricula),
+          nome: String(remoteUser.nome),
+          senha: cleanPassword,
+          cargo: String(remoteUser.cargo || 'Operador'),
+          setor_restrito: remoteUser.setor ? String(remoteUser.setor) : 'TODOS',
+          loja_id: String(remoteUser.loja_id || 'loja_padrao_001'),
+          ativo: Boolean(remoteUser.ativo ?? true),
+          primeiro_login: false,
+          created_at: new Date().toISOString(),
+        });
+        if (typeof window !== 'undefined') {
+          localStorage.setItem(LOCAL_STORAGE_EMPLOYEES_KEY, JSON.stringify(cached));
+        }
+
+        return { success: true, message: 'Senha alterada com sucesso!' };
+      }
+    } catch (err) {
+      console.warn('Erro ao alterar senha no Supabase:', err);
+    }
   }
 
   return { success: false, message: 'Usuário não encontrado para alteração de senha.' };
@@ -493,10 +564,12 @@ export async function loginUser(matricula: string, senha: string): Promise<Login
     }
   }
 
-  // 3. Checagem em funcionários/gerentes cadastrados localmente
+  // 3. Checagem em funcionários/gerentes cadastrados localmente.
+  // A senha precisa bater EXATAMENTE: aceitar `!e.senha` permitiria entrar
+  // com qualquer senha em um cadastro sem senha definida.
   const localEmployees = getStoredEmployees();
   const matchedEmp = localEmployees.find(
-    e => e.matricula.toLowerCase() === cleanMatricula.toLowerCase() && (e.senha === cleanSenha || !e.senha)
+    e => e.matricula.toLowerCase() === cleanMatricula.toLowerCase() && !!e.senha && e.senha === cleanSenha
   );
   if (matchedEmp) {
     if (!matchedEmp.ativo) {
@@ -679,6 +752,145 @@ export async function createStoreInDatabase(store: Store): Promise<{ success: bo
 }
 
 /**
+ * Atualiza o limite de usuários de uma loja diretamente no banco e localmente
+ */
+export async function updateStoreUserLimitInDatabase(
+  storeId: string, 
+  newLimit: number
+): Promise<{ success: boolean; error?: string }> {
+  const localStores = getStoredStores();
+  const index = localStores.findIndex(s => s.id === storeId);
+  if (index !== -1) {
+    localStores[index].limite_usuarios = newLimit;
+    if (typeof window !== 'undefined') {
+      localStorage.setItem(LOCAL_STORAGE_STORES_KEY, JSON.stringify(localStores));
+    }
+  }
+
+  if (client) {
+    try {
+      const { error } = await client
+        .from('lojas')
+        .update({ limite_usuarios: newLimit })
+        .eq('id', storeId);
+
+      if (error) {
+        console.error('Erro ao atualizar limite de usuários na loja:', error.message);
+        return { success: false, error: error.message };
+      }
+    } catch (err: any) {
+      console.error('Erro de conexão ao atualizar limite:', err);
+      return { success: false, error: err?.message || 'Falha de conexão com o banco.' };
+    }
+  }
+
+  return { success: true };
+}
+
+export interface SaasTelemetryData {
+  server: {
+    total_stores: number;
+    active_stores: number;
+    total_users: number;
+    total_products: number;
+    active_sessions: number;
+    total_logs: number;
+  };
+  stores: Record<string, {
+    users_count: number;
+    products_count: number;
+    logs_count: number;
+    sessions_count: number;
+  }>;
+}
+
+/**
+ * Consulta telemetria agregada de uso geral do servidor e consumo individual por loja
+ */
+export async function fetchSaasTelemetry(): Promise<SaasTelemetryData> {
+  const defaultTelemetry: SaasTelemetryData = {
+    server: {
+      total_stores: 0,
+      active_stores: 0,
+      total_users: 0,
+      total_products: 0,
+      active_sessions: 0,
+      total_logs: 0,
+    },
+    stores: {},
+  };
+
+  if (!client) {
+    const localStores = getStoredStores();
+    const localEmps = getStoredEmployees();
+    defaultTelemetry.server.total_stores = localStores.length;
+    defaultTelemetry.server.active_stores = localStores.filter(s => s.ativa).length;
+    defaultTelemetry.server.total_users = localEmps.length;
+    localStores.forEach(s => {
+      const emps = localEmps.filter(e => e.loja_id === s.id);
+      defaultTelemetry.stores[s.id] = {
+        users_count: emps.length,
+        products_count: 0,
+        logs_count: 0,
+        sessions_count: 0,
+      };
+    });
+    return defaultTelemetry;
+  }
+
+  try {
+    const { data, error } = await client.rpc('rpc_get_saas_telemetry');
+    if (!error && data) {
+      return data as SaasTelemetryData;
+    }
+  } catch (err) {
+    console.debug('Aviso rpc_get_saas_telemetry fallback:', err);
+  }
+
+  // Fallback via queries diretas no Supabase
+  try {
+    const [storesRes, usersRes, prodsRes, sessRes, logsRes] = await Promise.allSettled([
+      client.from('lojas').select('id, ativa, limite_usuarios'),
+      client.from('usuarios').select('id, loja_id'),
+      client.from('produtos').select('id, loja_id'),
+      client.from('sessoes_ativas').select('matricula, loja_id').eq('status', 'ATIVA'),
+      client.from('app_logs').select('id, loja_id'),
+    ]);
+
+    const stores = storesRes.status === 'fulfilled' && storesRes.value.data ? storesRes.value.data : [];
+    const users = usersRes.status === 'fulfilled' && usersRes.value.data ? usersRes.value.data : [];
+    const products = prodsRes.status === 'fulfilled' && prodsRes.value.data ? prodsRes.value.data : [];
+    const sessions = sessRes.status === 'fulfilled' && sessRes.value.data ? sessRes.value.data : [];
+    const logs = logsRes.status === 'fulfilled' && logsRes.value.data ? logsRes.value.data : [];
+
+    const storeMetrics: Record<string, { users_count: number; products_count: number; logs_count: number; sessions_count: number }> = {};
+    stores.forEach((s: any) => {
+      storeMetrics[s.id] = {
+        users_count: users.filter((u: any) => u.loja_id === s.id).length,
+        products_count: products.filter((p: any) => p.loja_id === s.id).length,
+        logs_count: logs.filter((l: any) => l.loja_id === s.id).length,
+        sessions_count: sessions.filter((sess: any) => sess.loja_id === s.id).length,
+      };
+    });
+
+    return {
+      server: {
+        total_stores: stores.length,
+        active_stores: stores.filter((s: any) => s.ativa).length,
+        total_users: users.length,
+        total_products: products.length,
+        active_sessions: sessions.length,
+        total_logs: logs.length,
+      },
+      stores: storeMetrics,
+    };
+  } catch (e) {
+    console.warn('Erro ao consolidar telemetria:', e);
+    return defaultTelemetry;
+  }
+}
+
+/**
  * Operações do Gerente de Loja: Gestão de Funcionários & Permissões de Setor
  */
 export async function fetchStoreEmployees(lojaId: string): Promise<StoreEmployee[]> {
@@ -824,8 +1036,11 @@ async function ensureStoreExists(lojaId: string): Promise<void> {
       await client.from('lojas').insert({
         id: lojaId,
         nome_loja: 'Supermercado Silva - Loja 01 (Matriz)',
-        cor_primaria: '#059669',
+        // A coluna real no banco é `cor_borda` (o type usa `cor_primaria`).
+        // Gravar a coluna errada fazia o INSERT falhar e a loja nunca era criada.
+        cor_borda: '#059669',
         ativa: true,
+        limite_usuarios: 15,
         cnpj: '12.345.678/0001-90',
         endereco: 'Av. Principal, 1000 - Centro',
         telefone: '(11) 3456-7890',
@@ -1624,9 +1839,18 @@ export async function fetchChatMessagesFromSupabase(lojaId: string): Promise<Cha
         created_at: row.created_at ? String(row.created_at) : undefined,
       }));
 
-      // Sincroniza local
+      // Sincroniza local SEM apagar o que já existe:
+      // sobrescrever apagava o histórico de outras lojas e as mensagens
+      // locais que ainda não foram sincronizadas.
       try {
-        localStorage.setItem(LOCAL_STORAGE_CHAT_KEY, JSON.stringify(mapped));
+        const current = getStoredChatMessages();
+        const merged = [
+          ...current.filter(c => !mapped.some(m => m.id === c.id)),
+          ...mapped,
+        ]
+          .sort((a, b) => a.timestamp - b.timestamp)
+          .slice(-200);
+        localStorage.setItem(LOCAL_STORAGE_CHAT_KEY, JSON.stringify(merged));
       } catch {
         // ignore
       }
@@ -1638,6 +1862,136 @@ export async function fetchChatMessagesFromSupabase(lojaId: string): Promise<Cha
   } catch (err) {
     console.warn('[Chat] Erro ao carregar mensagens:', err);
     return localList;
+  }
+}
+
+/**
+ * Nome ESTÁVEL do canal Realtime do chat da loja.
+ *
+ * IMPORTANTE: o nome precisa ser IDÊNTICO em todos os dispositivos da loja
+ * (remetente e destinatário). Se o nome tiver `Date.now()` no final, cada
+ * dispositivo cria um canal diferente e as mensagens nunca chegam.
+ */
+export const getChatChannelName = (lojaId: string): string => `realtime_chat_${lojaId}`;
+
+/**
+ * Converte uma linha da tabela `chat_mensagens` no modelo da aplicação.
+ */
+function mapChatRow(row: Record<string, unknown>): ChatMessage {
+  return {
+    id: String(row.id),
+    loja_id: String(row.loja_id),
+    canal_tipo: (row.canal_tipo as 'grupo' | 'direto_lider') || 'grupo',
+    destinatario_id: row.destinatario_id ? String(row.destinatario_id) : undefined,
+    destinatario_nome: row.destinatario_nome ? String(row.destinatario_nome) : undefined,
+    remetente_matricula: String(row.remetente_matricula),
+    remetente_nome: String(row.remetente_nome),
+    remetente_cargo: row.remetente_cargo ? String(row.remetente_cargo) : undefined,
+    is_anonimo: Boolean(row.is_anonimo),
+    conteudo: String(row.conteudo || ''),
+    timestamp: Number(row.timestamp) || Date.now(),
+    created_at: row.created_at ? String(row.created_at) : undefined,
+  };
+}
+
+/**
+ * Registro de canais de chat abertos, indexado pelo nome estável do canal.
+ * Mantém UM único canal por loja para que todos os dispositivos (enviar e
+ * receber) compartilhem o mesmo endereço.
+ */
+interface ChatChannelEntry {
+  channel: RealtimeChannel;
+  listeners: Set<(msg: ChatMessage) => void>;
+  ready: Promise<void>;
+}
+
+const chatChannelRegistry = new Map<string, ChatChannelEntry>();
+
+function getOrCreateChatChannel(lojaId: string): ChatChannelEntry {
+  const name = getChatChannelName(lojaId);
+  const existing = chatChannelRegistry.get(name);
+  if (existing) return existing;
+
+  const channel = client!.channel(name, {
+    config: { broadcast: { self: false } },
+  });
+  const listeners = new Set<(msg: ChatMessage) => void>();
+
+  // Canal 1: BROADCAST — entrega instantânea e NÃO depende da tabela estar
+  // publicada em `supabase_realtime`. É o caminho que garante latência baixa.
+  channel.on('broadcast', { event: 'new_message' }, (payload: { payload?: unknown }) => {
+    if (!payload?.payload) return;
+    try {
+      const msg = payload.payload as ChatMessage;
+      if (!msg?.id) return;
+      saveStoredChatMessage(msg);
+      listeners.forEach((listener) => listener(msg));
+    } catch (err) {
+      console.warn('[Chat] Erro ao processar broadcast recebido:', err);
+    }
+  });
+
+  // Canal 2: POSTGRES CHANGES — entrega via tabela (funciona quando a tabela
+  // está na publicação `supabase_realtime`). Serve como reforço/redundância.
+  channel.on(
+    'postgres_changes',
+    {
+      event: 'INSERT',
+      schema: 'public',
+      table: 'chat_mensagens',
+      filter: `loja_id=eq.${lojaId}`,
+    },
+    (payload) => {
+      if (!payload.new) return;
+      const msg = mapChatRow(payload.new as Record<string, unknown>);
+      saveStoredChatMessage(msg);
+      listeners.forEach((listener) => listener(msg));
+    }
+  );
+
+  const ready = new Promise<void>((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve();
+    };
+    // Rede lenta ou canal travado não pode bloquear o envio de mensagens.
+    const timer = setTimeout(finish, 3000);
+    channel.subscribe((status) => {
+      if (status === 'SUBSCRIBED') {
+        finish();
+      } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+        console.warn(`[Chat] Canal realtime com erro (${status}). O envio continua via broadcast.`);
+        finish();
+      }
+    });
+  });
+
+  const entry: ChatChannelEntry = { channel, listeners, ready };
+  chatChannelRegistry.set(name, entry);
+  return entry;
+}
+
+/**
+ * Envia a mensagem via BROADCAST para entrega instantânea aos demais
+ * dispositivos da loja. Não depende da publicação `supabase_realtime`.
+ */
+export async function broadcastChatMessage(msg: ChatMessage): Promise<boolean> {
+  if (!client || !isSupabaseConfigured()) return false;
+  try {
+    const entry = getOrCreateChatChannel(msg.loja_id);
+    await entry.ready;
+    const res = await entry.channel.send({
+      type: 'broadcast',
+      event: 'new_message',
+      payload: msg,
+    });
+    return res === 'ok';
+  } catch (err) {
+    console.warn('[Chat] Falha no broadcast da mensagem:', err);
+    return false;
   }
 }
 
@@ -1662,6 +2016,10 @@ export async function sendChatMessageToSupabase(
   }
 
   try {
+    // Garante que a loja exista: sem isso o INSERT falha com FK 409 para
+    // lojas que ainda não foram cadastradas (ex.: 'loja_padrao_001').
+    await ensureStoreExists(newMsg.loja_id);
+
     const { error } = await client.from('chat_mensagens').insert({
       id: newMsg.id,
       loja_id: newMsg.loja_id,
@@ -1677,64 +2035,53 @@ export async function sendChatMessageToSupabase(
     });
 
     if (error) {
-      console.warn('[Chat] Supabase insert warning:', error.message);
-      return { success: true, data: newMsg }; // fallback local
+      console.warn('[Chat] insert falhou:', error.message);
+      // A mensagem continua visível em tempo real para quem está online e
+      // fica na fila offline para ser gravada quando a conexão voltar.
+      await broadcastChatMessage(newMsg);
+      return { success: true, data: newMsg, error: error.message };
     }
+
+    // Broadcast instantâneo para os demais dispositivos da loja.
+    // Feito DEPOIS do insert para o banco sempre ser a fonte de verdade.
+    await broadcastChatMessage(newMsg);
 
     return { success: true, data: newMsg };
   } catch (err: unknown) {
     const msgErr = err instanceof Error ? err.message : String(err);
     console.error('[Chat] Erro no envio:', msgErr);
-    return { success: true, data: newMsg }; // salvo localmente
+    return { success: true, data: newMsg, error: msgErr };
   }
 }
 
 /**
- * Assina o canal de chat da loja em tempo real
+ * Assina o canal de chat da loja em tempo real.
+ *
+ * Retorna uma função de cancelamento. O canal físico só é destruído quando
+ * não restam mais escutantes, evitando que abrir/fechar o modal derrube a
+ * conexão dos demais dispositivos.
  */
 export function subscribeToChatRealtime(
   lojaId: string,
   onNewMessage: (msg: ChatMessage) => void
 ): () => void {
   if (!client || !isSupabaseConfigured()) return () => {};
+  const supabaseClient = client;
 
   try {
-    const channel = client
-      .channel(`realtime_chat_${lojaId}_${Date.now()}`)
-      .on(
-        'postgres_changes',
-        {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'chat_mensagens',
-          filter: `loja_id=eq.${lojaId}`,
-        },
-        (payload) => {
-          if (payload.new) {
-            const raw = payload.new as Record<string, unknown>;
-            const msg: ChatMessage = {
-              id: String(raw.id),
-              loja_id: String(raw.loja_id),
-              canal_tipo: (raw.canal_tipo as 'grupo' | 'direto_lider') || 'grupo',
-              destinatario_id: raw.destinatario_id ? String(raw.destinatario_id) : undefined,
-              destinatario_nome: raw.destinatario_nome ? String(raw.destinatario_nome) : undefined,
-              remetente_matricula: String(raw.remetente_matricula),
-              remetente_nome: String(raw.remetente_nome),
-              remetente_cargo: raw.remetente_cargo ? String(raw.remetente_cargo) : undefined,
-              is_anonimo: Boolean(raw.is_anonimo),
-              conteudo: String(raw.conteudo || ''),
-              timestamp: Number(raw.timestamp) || Date.now(),
-              created_at: raw.created_at ? String(raw.created_at) : undefined,
-            };
-            saveStoredChatMessage(msg);
-            onNewMessage(msg);
-          }
-        }
-      )
-      .subscribe();
+    const entry = getOrCreateChatChannel(lojaId);
+    entry.listeners.add(onNewMessage);
 
     return () => {
-      client?.removeChannel(channel);
+      entry.listeners.delete(onNewMessage);
+      if (entry.listeners.size === 0) {
+        try {
+          supabaseClient.removeChannel(entry.channel);
+        } catch {
+          // ignore
+        }
+        chatChannelRegistry.delete(getChatChannelName(lojaId));
+      }
     };
   } catch (err) {
     console.warn('[Chat] Falha ao registrar realtime:', err);
@@ -1743,7 +2090,262 @@ export function subscribeToChatRealtime(
 }
 
 // ============================================================================
-// 13. BLOQUEIO E ATUALIZAÇÃO DE PRODUTOS (CONCORRÊNCIA E 2º CÓDIGO DE BARRAS)
+// 13. REGISTRO DE AVARIAS NO ESTOQUE (PERDAS, QUEBRAS E TROCAS)
+// ============================================================================
+
+export const LOCAL_STORAGE_AVARIAS_KEY = 'superpwa_avarias_estoque_v1';
+
+/**
+ * Lê as avarias salvas localmente no dispositivo.
+ */
+export function getStoredAvarias(lojaId?: string): AvariaItem[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const raw = localStorage.getItem(LOCAL_STORAGE_AVARIAS_KEY);
+    if (!raw) return [];
+    const list: AvariaItem[] = JSON.parse(raw);
+    if (lojaId) return list.filter(a => a.loja_id === lojaId);
+    return list;
+  } catch (e) {
+    console.warn('[Avaria] Erro ao ler avarias locais:', e);
+    return [];
+  }
+}
+
+/**
+ * Salva/atualiza uma avaria no armazenamento local.
+ */
+export function saveStoredAvaria(avaria: AvariaItem): void {
+  if (typeof window === 'undefined') return;
+  try {
+    const current = getStoredAvarias();
+    const exists = current.some(a => a.id === avaria.id);
+    const updated = exists
+      ? current.map(a => (a.id === avaria.id ? avaria : a))
+      : [avaria, ...current];
+    localStorage.setItem(LOCAL_STORAGE_AVARIAS_KEY, JSON.stringify(updated));
+  } catch (e) {
+    console.warn('[Avaria] Erro ao salvar avaria local:', e);
+  }
+}
+
+/**
+ * Verifica se a tabela `avarias_estoque` existe no projeto Supabase.
+ * O app funciona em modo local quando ela ainda não foi criada.
+ */
+let avariasTableAvailable: boolean | null = null;
+export async function isAvariaTableAvailable(): Promise<boolean> {
+  if (!client || !isSupabaseConfigured()) return false;
+  if (avariasTableAvailable !== null) return avariasTableAvailable;
+  try {
+    const { error } = await client.from('avarias_estoque').select('id').limit(1);
+    avariasTableAvailable = !error;
+  } catch {
+    avariasTableAvailable = false;
+  }
+  return avariasTableAvailable;
+}
+
+/**
+ * Registra uma avaria: grava localmente (garantido) e sincroniza com a nuvem.
+ *
+ * `synced` indica se a gravação chegou ao banco. Quando a tabela ainda não
+ * existe, o registro é preservado no dispositivo e pode ser sincronizado
+ * depois que a migração for aplicada.
+ */
+export async function saveAvariaInDatabase(
+  avariaData: Omit<AvariaItem, 'id' | 'registrado_em' | 'timestamp'>
+): Promise<{ success: boolean; data?: AvariaItem; synced: boolean; error?: string }> {
+  const nowMs = Date.now();
+  const avaria: AvariaItem = {
+    ...avariaData,
+    id: `av_${nowMs}_${Math.random().toString(36).substring(2, 7)}`,
+    registrado_em: new Date(nowMs).toLocaleString('pt-BR'),
+    timestamp: nowMs,
+  };
+
+  // 1. Persistência local garantida (mesmo offline)
+  saveStoredAvaria(avaria);
+
+  // 2. Sincronização com a nuvem
+  if (!client || !isSupabaseConfigured()) {
+    return { success: true, data: avaria, synced: false };
+  }
+
+  try {
+    const { error } = await client.from('avarias_estoque').upsert(
+      {
+        id: avaria.id,
+        loja_id: avaria.loja_id,
+        codigo_barras: avaria.codigo_barras,
+        codigo_reduzido: avaria.codigo_reduzido || null,
+        produto_nome: avaria.produto_nome,
+        quantidade: avaria.quantidade,
+        tipo_avaria: avaria.tipo_avaria,
+        para_troca: avaria.para_troca,
+        setor: avaria.setor || null,
+        registrado_por_nome: avaria.registrado_por_nome,
+        registrado_por_matricula: avaria.registrado_por_matricula,
+        timestamp: avaria.timestamp,
+      },
+      { onConflict: 'id' }
+    );
+
+    if (error) {
+      console.warn('[Avaria] Falha ao sincronizar com o Supabase:', error.message);
+      return { success: true, data: avaria, synced: false, error: error.message };
+    }
+
+    avariasTableAvailable = true;
+    return { success: true, data: avaria, synced: true };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn('[Avaria] Erro ao sincronizar avaria:', msg);
+    return { success: true, data: avaria, synced: false, error: msg };
+  }
+}
+
+/**
+ * Carrega as avarias da loja. Se a tabela não existir, mantém o cache local.
+ */
+export async function fetchAvariasFromDatabase(lojaId: string): Promise<AvariaItem[]> {
+  const localList = getStoredAvarias(lojaId);
+
+  if (!client || !isSupabaseConfigured()) return localList;
+
+  try {
+    const { data, error } = await client
+      .from('avarias_estoque')
+      .select('*')
+      .eq('loja_id', lojaId)
+      .order('timestamp', { ascending: false })
+      .limit(200);
+
+    if (error) {
+      console.warn('[Avaria] Erro na consulta, mantendo cache local:', error.message);
+      avariasTableAvailable = false;
+      return localList;
+    }
+
+    avariasTableAvailable = true;
+    if (!data || data.length === 0) return localList;
+
+    const mapped: AvariaItem[] = data.map((row: Record<string, unknown>) => ({
+      id: String(row.id),
+      loja_id: String(row.loja_id),
+      codigo_barras: String(row.codigo_barras),
+      codigo_reduzido: row.codigo_reduzido ? String(row.codigo_reduzido) : undefined,
+      produto_nome: String(row.produto_nome || ''),
+      quantidade: Number(row.quantidade) || 0,
+      tipo_avaria: (row.tipo_avaria as AvariaItem['tipo_avaria']) || 'Outro',
+      para_troca: Boolean(row.para_troca),
+      setor: row.setor ? String(row.setor) : undefined,
+      registrado_por_nome: String(row.registrado_por_nome || ''),
+      registrado_por_matricula: String(row.registrado_por_matricula || ''),
+      registrado_em: row.timestamp
+        ? new Date(Number(row.timestamp)).toLocaleString('pt-BR')
+        : '',
+      timestamp: Number(row.timestamp) || Date.now(),
+    }));
+
+    // Consolida o banco como fonte de verdade, preservando o que só existe local
+    const merged = [...mapped];
+    localList.forEach(local => {
+      if (!merged.some(m => m.id === local.id)) merged.push(local);
+    });
+    merged.sort((a, b) => b.timestamp - a.timestamp);
+
+    try {
+      localStorage.setItem(LOCAL_STORAGE_AVARIAS_KEY, JSON.stringify(merged));
+    } catch {
+      // ignore
+    }
+
+    return merged;
+  } catch (err) {
+    console.warn('[Avaria] Erro ao carregar avarias:', err);
+    return localList;
+  }
+}
+
+/**
+ * Assina as avarias da loja em tempo real.
+ *
+ * Usa BROADCAST (não depende da publicação `supabase_realtime`) e completa
+ * com `postgres_changes` quando a tabela estiver publicada.
+ */
+export function subscribeToAvariasRealtime(
+  lojaId: string,
+  onNewAvaria: (avaria: AvariaItem) => void
+): () => void {
+  if (!client || !isSupabaseConfigured()) return () => {};
+  const supabaseClient = client;
+
+  try {
+    const channel = supabaseClient.channel(`realtime_avarias_${lojaId}`, {
+      config: { broadcast: { self: false } },
+    });
+
+    const emit = (avaria: AvariaItem) => {
+      saveStoredAvaria(avaria);
+      onNewAvaria(avaria);
+    };
+
+    channel.on('broadcast', { event: 'new_avaria' }, (payload: { payload?: unknown }) => {
+      if (!payload?.payload) return;
+      try {
+        emit(payload.payload as AvariaItem);
+      } catch {
+        // ignore
+      }
+    });
+
+    channel.on(
+      'postgres_changes',
+      {
+        event: '*',
+        schema: 'public',
+        table: 'avarias_estoque',
+        filter: `loja_id=eq.${lojaId}`,
+      },
+      (payload) => {
+        const row = (payload.new || payload.old) as Record<string, unknown> | undefined;
+        if (!row || !row.id) return;
+        emit({
+          id: String(row.id),
+          loja_id: String(row.loja_id || lojaId),
+          codigo_barras: String(row.codigo_barras || ''),
+          codigo_reduzido: row.codigo_reduzido ? String(row.codigo_reduzido) : undefined,
+          produto_nome: String(row.produto_nome || ''),
+          quantidade: Number(row.quantidade) || 0,
+          tipo_avaria: (row.tipo_avaria as AvariaItem['tipo_avaria']) || 'Outro',
+          para_troca: Boolean(row.para_troca),
+          setor: row.setor ? String(row.setor) : undefined,
+          registrado_por_nome: String(row.registrado_por_nome || ''),
+          registrado_por_matricula: String(row.registrado_por_matricula || ''),
+          registrado_em: row.timestamp ? new Date(Number(row.timestamp)).toLocaleString('pt-BR') : '',
+          timestamp: Number(row.timestamp) || Date.now(),
+        });
+      }
+    );
+
+    channel.subscribe();
+
+    return () => {
+      try {
+        supabaseClient.removeChannel(channel);
+      } catch {
+        // ignore
+      }
+    };
+  } catch (err) {
+    console.warn('[Avaria] Falha ao registrar realtime:', err);
+    return () => {};
+  }
+}
+
+// ============================================================================
+// 14. BLOQUEIO E ATUALIZAÇÃO DE PRODUTOS (CONCORRÊNCIA E 2º CÓDIGO DE BARRAS)
 // ============================================================================
 
 export async function lockProductInSupabase(

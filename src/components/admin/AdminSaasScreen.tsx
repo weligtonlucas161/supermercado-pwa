@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Building2, 
   Server, 
@@ -24,17 +24,24 @@ import {
   Briefcase,
   Phone,
   MapPin,
-  FileText
+  FileText,
+  Save,
+  Activity,
+  Package,
+  RefreshCw,
+  Radio
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { Store, StoreEmployee } from '../../types';
 import { triggerScanBeep } from '../../utils/haptics';
+import { fetchSaasTelemetry, SaasTelemetryData } from '../../services/supabaseService';
 
 export const AdminSaasScreen: React.FC = () => {
   const { 
     logout, 
     stores, 
     addStore, 
+    updateStoreUserLimit,
     employees, 
     addOrUpdateEmployee, 
     effectiveOnline,
@@ -44,8 +51,32 @@ export const AdminSaasScreen: React.FC = () => {
 
   const [activeTab, setActiveTab] = useState<'lojas' | 'gerentes' | 'servidor'>('lojas');
 
+  // Telemetria do Servidor SaaS e Consumo por Loja
+  const [telemetry, setTelemetry] = useState<SaasTelemetryData | null>(null);
+  const [isLoadingTelemetry, setIsLoadingTelemetry] = useState(false);
+
+  const loadTelemetry = async () => {
+    setIsLoadingTelemetry(true);
+    try {
+      const data = await fetchSaasTelemetry();
+      setTelemetry(data);
+    } catch (e) {
+      console.warn('Erro ao consultar telemetria:', e);
+    } finally {
+      setIsLoadingTelemetry(false);
+    }
+  };
+
+  useEffect(() => {
+    loadTelemetry();
+    const interval = setInterval(loadTelemetry, 30000);
+    return () => clearInterval(interval);
+  }, [stores.length, employees.length]);
+
   // Modal de Detalhes da Loja com Hierarquia de Usuários e Revelação de Senhas
   const [selectedStoreForDetails, setSelectedStoreForDetails] = useState<Store | null>(null);
+  const [editingUserLimit, setEditingUserLimit] = useState<number>(15);
+  const [isSavingLimit, setIsSavingLimit] = useState(false);
   const [revealedPasswords, setRevealedPasswords] = useState<Record<string, boolean>>({});
 
   const togglePasswordReveal = (empId: string) => {
@@ -55,11 +86,40 @@ export const AdminSaasScreen: React.FC = () => {
     }));
   };
 
+  const handleOpenStoreDetails = (store: Store) => {
+    setSelectedStoreForDetails(store);
+    setEditingUserLimit(store.limite_usuarios || 15);
+  };
+
+  const handleSaveStoreUserLimit = async () => {
+    if (!selectedStoreForDetails) return;
+    if (editingUserLimit < 1) {
+      setFeedbackMessage({ type: 'error', text: 'O limite mínimo de usuários deve ser 1.' });
+      return;
+    }
+
+    setIsSavingLimit(true);
+    const res = await updateStoreUserLimit(selectedStoreForDetails.id, editingUserLimit);
+    setIsSavingLimit(false);
+
+    if (res.success) {
+      triggerScanBeep(true);
+      setSelectedStoreForDetails({ ...selectedStoreForDetails, limite_usuarios: editingUserLimit });
+      setFeedbackMessage({ 
+        type: 'success', 
+        text: `Limite de usuários da loja "${selectedStoreForDetails.nome_loja}" atualizado para ${editingUserLimit} com sucesso!` 
+      });
+      loadTelemetry();
+    } else {
+      setFeedbackMessage({ type: 'error', text: res.error || 'Erro ao atualizar o limite de usuários.' });
+    }
+  };
+
   // Modais de Criação
   const [isStoreModalOpen, setIsStoreModalOpen] = useState(false);
   const [isManagerModalOpen, setIsManagerModalOpen] = useState(false);
 
-  // Form Nova Loja
+  // Form Nova Loja (Registra apenas infraestrutura sem gerentes automáticos)
   const [newStoreId, setNewStoreId] = useState('');
   const [newStoreName, setNewStoreName] = useState('');
   const [newStoreCnpj, setNewStoreCnpj] = useState('');
@@ -104,10 +164,14 @@ export const AdminSaasScreen: React.FC = () => {
       created_at: new Date().toISOString(),
     };
 
+    // Registra estritamente a infraestrutura/tenant sem criar perfis de gerente automáticos
     const res = await addStore(newStore);
     if (res.success) {
       triggerScanBeep(true);
-      setFeedbackMessage({ type: 'success', text: `Loja "${newStore.nome_loja}" criada com limite de ${newStore.limite_usuarios} usuários!` });
+      setFeedbackMessage({ 
+        type: 'success', 
+        text: `Loja "${newStore.nome_loja}" cadastrada com sucesso! Cota configurada para ${newStore.limite_usuarios} usuários (sem gerente automático).` 
+      });
       setIsStoreModalOpen(false);
       setNewStoreId('');
       setNewStoreName('');
@@ -115,6 +179,7 @@ export const AdminSaasScreen: React.FC = () => {
       setNewStoreAddress('');
       setNewStorePhone('');
       setNewStoreUserLimit(15);
+      loadTelemetry();
     } else {
       setFeedbackMessage({ type: 'error', text: res.error || 'Erro ao criar loja no banco.' });
     }
@@ -228,54 +293,108 @@ export const AdminSaasScreen: React.FC = () => {
           </div>
         )}
 
-        {/* Estatísticas do Servidor SaaS (Cards com detalhes em Vermelho) */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
-          <div className="p-4 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 shadow-sm flex items-center justify-between">
-            <div>
-              <p className="text-[11px] font-bold text-slate-400 uppercase">Lojas Contratadas</p>
-              <h3 className="text-2xl font-black text-slate-900 dark:text-white mt-0.5">{stores.length}</h3>
-              <span className="text-[10px] text-rose-600 dark:text-rose-400 font-semibold">
-                {stores.filter(s => s.ativa).length} ativas
-              </span>
-            </div>
-            <div className="p-3 rounded-2xl bg-rose-500/10 text-rose-600 dark:text-rose-400">
-              <Building2 className="w-5 h-5" />
-            </div>
-          </div>
-
-          <div className="p-4 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 shadow-sm flex items-center justify-between">
-            <div>
-              <p className="text-[11px] font-bold text-slate-400 uppercase">Capacidade Total</p>
-              <h3 className="text-2xl font-black text-slate-900 dark:text-white mt-0.5">{totalUserCapacity}</h3>
-              <span className="text-[10px] text-slate-400">licenças contratadas</span>
-            </div>
-            <div className="p-3 rounded-2xl bg-rose-500/10 text-rose-600 dark:text-rose-400">
-              <Users className="w-5 h-5" />
-            </div>
-          </div>
-
-          <div className="p-4 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 shadow-sm flex items-center justify-between">
-            <div>
-              <p className="text-[11px] font-bold text-slate-400 uppercase">Gerentes de Loja</p>
-              <h3 className="text-2xl font-black text-slate-900 dark:text-white mt-0.5">{storeManagers.length}</h3>
-              <span className="text-[10px] text-rose-600 dark:text-rose-400 font-semibold">habilitados</span>
-            </div>
-            <div className="p-3 rounded-2xl bg-rose-500/10 text-rose-600 dark:text-rose-400">
-              <KeyRound className="w-5 h-5" />
-            </div>
-          </div>
-
-          <div className="p-4 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 shadow-sm flex items-center justify-between">
-            <div>
-              <p className="text-[11px] font-bold text-slate-400 uppercase">Status do Servidor</p>
-              <h3 className="text-base font-black text-rose-600 dark:text-rose-400 mt-1 flex items-center gap-1.5">
-                <span className="w-2.5 h-2.5 rounded-full bg-rose-500 animate-pulse" />
-                Operacional
+        {/* Telemetria de Uso Geral do Servidor SaaS */}
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Activity className="w-4 h-4 text-rose-600 dark:text-rose-400 animate-pulse" />
+              <h3 className="text-xs font-black uppercase tracking-wider text-slate-700 dark:text-slate-300">
+                Telemetria Geral do Servidor
               </h3>
-              <span className="text-[10px] text-slate-400">PostgreSQL + Realtime</span>
             </div>
-            <div className="p-3 rounded-2xl bg-rose-500/10 text-rose-600 dark:text-rose-400">
-              <HardDrive className="w-5 h-5" />
+            <button
+              onClick={loadTelemetry}
+              disabled={isLoadingTelemetry}
+              className="text-[11px] font-bold text-rose-600 dark:text-rose-400 hover:underline flex items-center gap-1 cursor-pointer"
+              title="Recarregar dados de telemetria do servidor"
+            >
+              <RefreshCw className={`w-3 h-3 ${isLoadingTelemetry ? 'animate-spin' : ''}`} />
+              <span>{isLoadingTelemetry ? 'Atualizando...' : 'Atualizar'}</span>
+            </button>
+          </div>
+
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2.5 sm:gap-3">
+            <div className="p-3.5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 shadow-xs flex items-center justify-between">
+              <div>
+                <p className="text-[10px] font-bold text-slate-400 uppercase">Lojas SaaS</p>
+                <h3 className="text-xl font-black text-slate-900 dark:text-white mt-0.5">
+                  {telemetry?.server ? telemetry.server.total_stores : stores.length}
+                </h3>
+                <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-semibold">
+                  {telemetry?.server ? telemetry.server.active_stores : stores.filter(s => s.ativa).length} ativas
+                </span>
+              </div>
+              <div className="p-2.5 rounded-xl bg-rose-500/10 text-rose-600 dark:text-rose-400">
+                <Building2 className="w-4 h-4" />
+              </div>
+            </div>
+
+            <div className="p-3.5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 shadow-xs flex items-center justify-between">
+              <div>
+                <p className="text-[10px] font-bold text-slate-400 uppercase">Usuários no Banco</p>
+                <h3 className="text-xl font-black text-slate-900 dark:text-white mt-0.5">
+                  {telemetry?.server ? telemetry.server.total_users : employees.length}
+                </h3>
+                <span className="text-[10px] text-slate-400">
+                  {totalUserCapacity} cota total
+                </span>
+              </div>
+              <div className="p-2.5 rounded-xl bg-rose-500/10 text-rose-600 dark:text-rose-400">
+                <Users className="w-4 h-4" />
+              </div>
+            </div>
+
+            <div className="p-3.5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 shadow-xs flex items-center justify-between">
+              <div>
+                <p className="text-[10px] font-bold text-slate-400 uppercase">Itens / Catálogo</p>
+                <h3 className="text-xl font-black text-slate-900 dark:text-white mt-0.5">
+                  {telemetry?.server ? telemetry.server.total_products : 0}
+                </h3>
+                <span className="text-[10px] text-slate-400">cadastrados</span>
+              </div>
+              <div className="p-2.5 rounded-xl bg-rose-500/10 text-rose-600 dark:text-rose-400">
+                <Package className="w-4 h-4" />
+              </div>
+            </div>
+
+            <div className="p-3.5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 shadow-xs flex items-center justify-between">
+              <div>
+                <p className="text-[10px] font-bold text-slate-400 uppercase">Sessões Ativas</p>
+                <h3 className="text-xl font-black text-emerald-600 dark:text-emerald-400 mt-0.5">
+                  {telemetry?.server ? telemetry.server.active_sessions : 0}
+                </h3>
+                <span className="text-[10px] text-slate-400">online agora</span>
+              </div>
+              <div className="p-2.5 rounded-xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
+                <Radio className="w-4 h-4" />
+              </div>
+            </div>
+
+            <div className="p-3.5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 shadow-xs flex items-center justify-between">
+              <div>
+                <p className="text-[10px] font-bold text-slate-400 uppercase">Logs & Ações</p>
+                <h3 className="text-xl font-black text-slate-900 dark:text-white mt-0.5">
+                  {telemetry?.server ? telemetry.server.total_logs : 0}
+                </h3>
+                <span className="text-[10px] text-slate-400">registros auditados</span>
+              </div>
+              <div className="p-2.5 rounded-xl bg-rose-500/10 text-rose-600 dark:text-rose-400">
+                <FileText className="w-4 h-4" />
+              </div>
+            </div>
+
+            <div className="p-3.5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 shadow-xs flex items-center justify-between">
+              <div>
+                <p className="text-[10px] font-bold text-slate-400 uppercase">Status do Servidor</p>
+                <h3 className="text-xs font-black text-rose-600 dark:text-rose-400 mt-1 flex items-center gap-1.5">
+                  <span className="w-2 h-2 rounded-full bg-rose-500 animate-pulse" />
+                  Operacional
+                </h3>
+                <span className="text-[10px] text-slate-400">PostgreSQL + Realtime</span>
+              </div>
+              <div className="p-2.5 rounded-xl bg-rose-500/10 text-rose-600 dark:text-rose-400">
+                <HardDrive className="w-4 h-4" />
+              </div>
             </div>
           </div>
         </div>
@@ -351,14 +470,21 @@ export const AdminSaasScreen: React.FC = () => {
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                 {stores.map(store => {
                   const storeEmps = employees.filter(e => e.loja_id === store.id);
-                  const isNearLimit = storeEmps.length >= (store.limite_usuarios || 15);
+                  const storeMetrics = telemetry?.stores?.[store.id];
+                  const usersCount = storeMetrics ? storeMetrics.users_count : storeEmps.length;
+                  const limit = store.limite_usuarios || 15;
+                  const percentUsed = Math.min(100, Math.round((usersCount / Math.max(1, limit)) * 100));
+                  const isNearLimit = usersCount >= limit;
+                  const productsCount = storeMetrics?.products_count ?? 0;
+                  const sessionsCount = storeMetrics?.sessions_count ?? 0;
+                  const logsCount = storeMetrics?.logs_count ?? 0;
 
                   return (
                     <div 
                       key={store.id}
-                      onClick={() => setSelectedStoreForDetails(store)}
+                      onClick={() => handleOpenStoreDetails(store)}
                       className="p-5 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 shadow-sm space-y-3.5 hover:shadow-lg hover:border-rose-500/50 transition cursor-pointer group"
-                      title="Clique para abrir detalhes completos, equipe e senhas desta loja"
+                      title="Clique para abrir detalhes completos, cota de licenças, equipe e senhas desta loja"
                     >
                       <div className="flex items-start justify-between">
                         <div className="flex items-center gap-2.5">
@@ -391,27 +517,56 @@ export const AdminSaasScreen: React.FC = () => {
                         {store.telefone && <p><strong>Telefone:</strong> {store.telefone}</p>}
                       </div>
 
-                      {/* Medidor de Limite de Usuários */}
+                      {/* Contagem de Usuários & Limite da Loja */}
                       <div className="pt-2 border-t border-slate-100 dark:border-slate-800 space-y-1.5">
                         <div className="flex justify-between text-xs font-bold">
-                          <span className="text-slate-500">Usuários Vinculados</span>
-                          <span className={isNearLimit ? 'text-amber-500 font-black' : 'text-slate-800 dark:text-slate-200'}>
-                            {storeEmps.length} / {store.limite_usuarios}
+                          <span className="text-slate-500 flex items-center gap-1">
+                            <Users className="w-3.5 h-3.5" />
+                            <span>Contagem de Usuários</span>
+                          </span>
+                          <span className={isNearLimit ? 'text-rose-600 dark:text-rose-400 font-black' : 'text-slate-800 dark:text-slate-200'}>
+                            {usersCount} / {limit} licenças ({percentUsed}%)
                           </span>
                         </div>
                         <div className="w-full h-2 rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden">
                           <div 
                             className={`h-full rounded-full transition-all ${
-                              isNearLimit ? 'bg-amber-500' : 'bg-rose-600'
+                              percentUsed >= 100 
+                                ? 'bg-rose-600' 
+                                : percentUsed >= 80 
+                                ? 'bg-amber-500' 
+                                : 'bg-emerald-500'
                             }`}
-                            style={{ width: `${Math.min(100, (storeEmps.length / (store.limite_usuarios || 1)) * 100)}%` }}
+                            style={{ width: `${percentUsed}%` }}
                           />
+                        </div>
+                      </div>
+
+                      {/* Consumo Individual de Dados da Loja */}
+                      <div className="p-2.5 rounded-2xl bg-slate-50 dark:bg-slate-850 border border-slate-100 dark:border-slate-800 grid grid-cols-3 gap-1.5 text-center text-[10px]">
+                        <div>
+                          <span className="text-slate-400 block font-medium">Produtos</span>
+                          <span className="font-extrabold text-slate-800 dark:text-slate-200 text-xs">
+                            {productsCount}
+                          </span>
+                        </div>
+                        <div className="border-x border-slate-200 dark:border-slate-750">
+                          <span className="text-slate-400 block font-medium">Sessões</span>
+                          <span className="font-extrabold text-emerald-600 dark:text-emerald-400 text-xs">
+                            {sessionsCount} online
+                          </span>
+                        </div>
+                        <div>
+                          <span className="text-slate-400 block font-medium">Logs/Ações</span>
+                          <span className="font-extrabold text-slate-800 dark:text-slate-200 text-xs">
+                            {logsCount}
+                          </span>
                         </div>
                       </div>
 
                       {/* Dica de Clique */}
                       <div className="pt-1 flex items-center justify-between text-[11px] text-rose-600 dark:text-rose-400 font-bold group-hover:underline">
-                        <span>Ver detalhes, gerentes e senhas</span>
+                        <span>Editar cota, ver equipe e senhas</span>
                         <span>→</span>
                       </div>
                     </div>
@@ -574,6 +729,92 @@ export const AdminSaasScreen: React.FC = () => {
                 </div>
               </div>
 
+              {/* Gestão e Alteração do Limite de Usuários da Loja */}
+              <div className="p-3.5 rounded-2xl bg-rose-500/5 dark:bg-rose-950/20 border border-rose-500/20 space-y-2.5">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div>
+                    <span className="text-xs font-black text-rose-600 dark:text-rose-400 uppercase tracking-wider flex items-center gap-1.5">
+                      <Users className="w-4 h-4" />
+                      <span>Limite Editável de Usuários (Cota)</span>
+                    </span>
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                      Em uso: <strong>{storeEmps.length}</strong> de <strong>{selectedStoreForDetails.limite_usuarios}</strong> licenças ({Math.max(0, selectedStoreForDetails.limite_usuarios - storeEmps.length)} vagas livres)
+                    </p>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-1.5 bg-white dark:bg-slate-800 border border-rose-300 dark:border-rose-900 rounded-xl px-2.5 py-1.5 shadow-xs">
+                      <label htmlFor="modal-edit-limit-input" className="text-[10px] font-bold text-slate-400 uppercase">
+                        Limite:
+                      </label>
+                      <input
+                        id="modal-edit-limit-input"
+                        type="number"
+                        min={1}
+                        max={500}
+                        value={editingUserLimit}
+                        onChange={e => setEditingUserLimit(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                        className="w-16 font-black text-xs text-rose-600 dark:text-rose-400 bg-transparent focus:outline-none"
+                      />
+                    </div>
+
+                    <button
+                      type="button"
+                      disabled={isSavingLimit || editingUserLimit === selectedStoreForDetails.limite_usuarios}
+                      onClick={handleSaveStoreUserLimit}
+                      className={`px-3 py-1.5 rounded-xl font-bold text-xs flex items-center gap-1.5 transition cursor-pointer ${
+                        editingUserLimit !== selectedStoreForDetails.limite_usuarios
+                          ? 'bg-rose-600 hover:bg-rose-700 text-white shadow-sm shadow-rose-600/30'
+                          : 'bg-slate-100 dark:bg-slate-800 text-slate-400 cursor-not-allowed'
+                      }`}
+                      title={editingUserLimit === selectedStoreForDetails.limite_usuarios ? 'Modifique o valor para salvar' : 'Salvar novo limite no banco'}
+                    >
+                      {isSavingLimit ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+                      <span>{isSavingLimit ? 'Salvando...' : 'Salvar Limite'}</span>
+                    </button>
+                  </div>
+                </div>
+
+                <div className="w-full h-2 rounded-full bg-slate-200 dark:bg-slate-800 overflow-hidden">
+                  <div
+                    className={`h-full rounded-full transition-all ${
+                      storeEmps.length >= selectedStoreForDetails.limite_usuarios
+                        ? 'bg-rose-600'
+                        : storeEmps.length >= selectedStoreForDetails.limite_usuarios * 0.8
+                        ? 'bg-amber-500'
+                        : 'bg-emerald-500'
+                    }`}
+                    style={{
+                      width: `${Math.min(100, (storeEmps.length / Math.max(1, selectedStoreForDetails.limite_usuarios)) * 100)}%`
+                    }}
+                  />
+                </div>
+              </div>
+
+              {/* Métricas de Consumo da Loja no Modal */}
+              {telemetry?.stores?.[selectedStoreForDetails.id] && (
+                <div className="grid grid-cols-3 gap-2 p-2.5 rounded-2xl bg-slate-50 dark:bg-slate-850 border border-slate-200/70 dark:border-slate-800 text-center text-xs">
+                  <div>
+                    <span className="text-[10px] text-slate-400 block font-medium uppercase">Produtos em Estoque</span>
+                    <span className="font-extrabold text-slate-900 dark:text-white text-sm">
+                      {telemetry.stores[selectedStoreForDetails.id].products_count} itens
+                    </span>
+                  </div>
+                  <div className="border-x border-slate-200 dark:border-slate-750">
+                    <span className="text-[10px] text-slate-400 block font-medium uppercase">Conexões Ativas</span>
+                    <span className="font-extrabold text-emerald-600 dark:text-emerald-400 text-sm">
+                      {telemetry.stores[selectedStoreForDetails.id].sessions_count} online
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-slate-400 block font-medium uppercase">Logs & Auditorias</span>
+                    <span className="font-extrabold text-slate-900 dark:text-white text-sm">
+                      {telemetry.stores[selectedStoreForDetails.id].logs_count} registros
+                    </span>
+                  </div>
+                </div>
+              )}
+
               {/* Endereço */}
               {selectedStoreForDetails.endereco && (
                 <p className="text-xs text-slate-500 dark:text-slate-400 flex items-center gap-1.5 px-1">
@@ -723,12 +964,19 @@ export const AdminSaasScreen: React.FC = () => {
                 </div>
                 <div>
                   <h3 className="font-extrabold text-sm text-slate-900 dark:text-white">Criar Nova Loja (Tenant)</h3>
-                  <p className="text-[11px] text-slate-400">Defina os dados da unidade e o limite contratado de operadores</p>
+                  <p className="text-[11px] text-slate-400">Registra apenas a infraestrutura da loja no banco de dados</p>
                 </div>
               </div>
               <button onClick={() => setIsStoreModalOpen(false)} className="text-slate-400 hover:text-slate-600">
                 <X className="w-5 h-5" />
               </button>
+            </div>
+
+            <div className="p-3 rounded-2xl bg-amber-500/10 border border-amber-500/20 text-amber-700 dark:text-amber-400 text-[11px] flex items-start gap-2">
+              <ShieldCheck className="w-4 h-4 shrink-0 mt-0.5 text-amber-500" />
+              <span>
+                <strong>Sem criação automática de gerente:</strong> Esta rotina cadastra unicamente a infraestrutura da loja/tenant. Usuários e lideranças podem ser provisionados manualmente na aba <em>"Gerentes de Loja"</em>.
+              </span>
             </div>
 
             <form onSubmit={handleCreateStore} className="space-y-3.5 text-xs">

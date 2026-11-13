@@ -16,3 +16,11 @@ public/assets/
 
 # O projeto usa bun.lock (Bun) como gerenciador de pacotes
 package-lock.json
+
+# Ferramentas locais de manutenção (não fazem parte do app)
+_patch.mjs
+_*.mjs
+
+# Configuração local de IDE / MCP
+.vscode/
+opencode.json

@@ -211,9 +211,48 @@ export interface Operator {
   primeiro_login?: boolean;
 }
 
+/**
+ * Tipos de avaria de mercadoria (risco de perda / quebra / troca)
+ */
+export type TipoAvaria =
+  | 'Embalagem danificada'
+  | 'Agentes da natureza'
+  | 'Falha do produto'
+  | 'Vazamento ou quebra'
+  | 'Prazo de validade expirado'
+  | 'Outro';
+
+export const TIPOS_AVARIA: TipoAvaria[] = [
+  'Embalagem danificada',
+  'Agentes da natureza',
+  'Falha do produto',
+  'Vazamento ou quebra',
+  'Prazo de validade expirado',
+  'Outro',
+];
+
+/**
+ * Registro de avaria no estoque
+ */
+export interface AvariaItem {
+  id: string;
+  loja_id: string;
+  codigo_barras: string;
+  codigo_reduzido?: string;
+  produto_nome: string;
+  quantidade: number;
+  tipo_avaria: TipoAvaria;
+  para_troca: boolean; // Sim/Não
+  setor?: string;
+  registrado_por_nome: string;
+  registrado_por_matricula: string;
+  registrado_em: string;
+  timestamp: number;
+}
+
 export interface OfflineAction {
   id: string;
-  type: 'ADD_PRODUCT' | 'UPDATE_STOCK' | 'ADD_VALIDITY' | 'ADD_AUDIT' | 'APPLY_DISCOUNT' | 'IMPORT_ENCRYPTED_SPREADSHEET';
+  type: 'ADD_PRODUCT' | 'UPDATE_STOCK' | 'ADD_VALIDITY' | 'ADD_AUDIT' | 'APPLY_DISCOUNT' | 'IMPORT_ENCRYPTED_SPREADSHEET' | 'REGISTRAR_AVARIA';
   payload: unknown;
   timestamp: string;
 }

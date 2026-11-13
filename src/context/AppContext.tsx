@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import { 
   Product, 
   ValidityItem, 
@@ -13,7 +13,8 @@ import {
   StoreRole,
   ChatMessage,
   SpreadsheetProductItem,
-  SetorLoja
+  SetorLoja,
+  AvariaItem
 } from '../types';
 import { 
   INITIAL_PRODUCTS, 
@@ -36,6 +37,7 @@ import {
   subscribeToProductsRealtime,
   fetchStoresFromDatabase,
   createStoreInDatabase,
+  updateStoreUserLimitInDatabase,
   fetchStoreEmployees,
   saveStoreEmployee,
   toggleStoreEmployeeActive,
@@ -51,6 +53,10 @@ import {
   sendChatMessageToSupabase,
   subscribeToChatRealtime,
   getStoredChatMessages,
+  getStoredAvarias,
+  saveAvariaInDatabase,
+  fetchAvariasFromDatabase,
+  subscribeToAvariasRealtime,
   lockProductInSupabase,
   unlockProductInSupabase,
   updateProductInSupabase
@@ -92,6 +98,7 @@ interface AppContextType {
   stores: Store[];
   refreshStores: () => Promise<void>;
   addStore: (store: Store) => Promise<{ success: boolean; error?: string }>;
+  updateStoreUserLimit: (storeId: string, newLimit: number) => Promise<{ success: boolean; error?: string }>;
   employees: StoreEmployee[];
   refreshEmployees: (lojaId?: string) => Promise<void>;
   addOrUpdateEmployee: (emp: StoreEmployee) => Promise<{ success: boolean; error?: string }>;
@@ -113,6 +120,13 @@ interface AppContextType {
   addAudit: (audit: Omit<AuditItem, 'id' | 'date'>) => AuditItem;
   updateAudit: (auditId: string, updated: Partial<AuditItem>) => void;
   resetAllData: () => void;
+
+  // Avarias no Estoque (perdas, quebras e trocas)
+  avarias: AvariaItem[];
+  addAvaria: (
+    avaria: Omit<AvariaItem, 'id' | 'registrado_em' | 'timestamp'>
+  ) => Promise<{ success: boolean; data?: AvariaItem; synced: boolean }>;
+  refreshAvarias: () => Promise<void>;
 
   // Notifications
   notifications: NotificationItem[];
@@ -309,6 +323,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return res;
   };
 
+  const updateStoreUserLimit = async (storeId: string, newLimit: number) => {
+    const res = await updateStoreUserLimitInDatabase(storeId, newLimit);
+    if (res.success) {
+      await refreshStores();
+    }
+    return res;
+  };
+
   const addOrUpdateEmployee = async (emp: StoreEmployee) => {
     const res = await saveStoreEmployee(emp);
     if (res.success) {
@@ -385,7 +407,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const updateUserPassword = async (newPassword: string): Promise<{ success: boolean; message?: string }> => {
     if (!currentUser) return { success: false, message: 'Nenhum usuário conectado.' };
-    const res = changeUserPassword(currentUser.matricula, newPassword);
+    const res = await changeUserPassword(currentUser.matricula, newPassword);
     if (res.success) {
       const updatedUser: AuthUser = {
         ...currentUser,
@@ -829,6 +851,66 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setOperator(prev => ({ ...prev, ...newOperatorData }));
   };
 
+  // =========================================================================
+  // AVARIAS NO ESTOQUE (PERDAS, QUEBRAS E TROCAS)
+  // =========================================================================
+  const [avarias, setAvarias] = useState<AvariaItem[]>(() => {
+    return getStoredAvarias(operator.loja_id);
+  });
+
+  const refreshAvarias = useCallback(async () => {
+    const lojaId = operator.loja_id || 'loja_padrao_001';
+    const list = await fetchAvariasFromDatabase(lojaId);
+    setAvarias(list);
+  }, [operator.loja_id]);
+
+  const addAvaria = async (
+    avariaData: Omit<AvariaItem, 'id' | 'registrado_em' | 'timestamp'>
+  ): Promise<{ success: boolean; data?: AvariaItem; synced: boolean }> => {
+    const res = await saveAvariaInDatabase(avariaData);
+
+    if (res.data) {
+      setAvarias(prev => [res.data!, ...prev.filter(a => a.id !== res.data!.id)]);
+
+      // A avaria é uma perda real: dá baixa no estoque do produto afetado.
+      const target = products.find(
+        p => p.ean === res.data!.codigo_barras || p.secondaryEan === res.data!.codigo_barras
+      );
+      if (target && res.data!.quantidade > 0) {
+        updateProductStock(target.id, { delta: -res.data!.quantidade });
+      }
+
+      triggerScanBeep(true);
+      setNotifications(prev => [
+        {
+          id: `notif-avaria-${res.data!.id}`,
+          title: 'Avaria Registrada',
+          message: `${res.data!.quantidade}x "${res.data!.produto_nome}" registrada como ${res.data!.tipo_avaria} (${res.data!.para_troca ? 'Para Troca' : 'Sem Troca'}).`,
+          type: 'warning',
+          timestamp: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
+          read: false,
+        },
+        ...prev,
+      ]);
+    }
+
+    return { success: res.success, data: res.data, synced: res.synced };
+  };
+
+  // Carrega as avarias e assina o canal em tempo real ao autenticar
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    const lojaId = operator.loja_id || 'loja_padrao_001';
+
+    refreshAvarias();
+
+    const unsub = subscribeToAvariasRealtime(lojaId, (newAv) => {
+      setAvarias(prev => [newAv, ...prev.filter(a => a.id !== newAv.id)]);
+    });
+
+    return () => unsub();
+  }, [isAuthenticated, operator.loja_id, refreshAvarias]);
+
   const markNotificationAsRead = (id: string) => {
     setNotifications(prev => prev.map(n => (n.id === id ? { ...n, read: true } : n)));
   };
@@ -906,16 +988,34 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
+  // Refs mantêm a assinatura do canal ESTÁVEL durante toda a sessão.
+  // Sem elas, abrir/fechar o chat recriaria a assinatura a cada vez,
+  // derrubando e reconstruindo o WebSocket desnecessariamente.
+  const isChatOpenRef = useRef(isChatOpen);
+  useEffect(() => {
+    isChatOpenRef.current = isChatOpen;
+  }, [isChatOpen]);
+
+  const chatOwnerRef = useRef<string>(operator.code || operator.matricula || '');
+  useEffect(() => {
+    chatOwnerRef.current = operator.code || operator.matricula || '';
+  }, [operator.code, operator.matricula]);
+
   // Carregar mensagens do chat e registrar canal em tempo real
   useEffect(() => {
     if (!isAuthenticated) return;
     const lojaId = operator.loja_id || 'loja_padrao_001';
 
-    fetchChatMessagesFromSupabase(lojaId).then(msgs => {
-      if (msgs && msgs.length > 0) {
-        setChatMessages(msgs);
-      }
-    });
+    const mergeIncoming = (msgs: ChatMessage[]) => {
+      if (!msgs || msgs.length === 0) return;
+      setChatMessages(prev => {
+        const known = new Set(prev.map(m => m.id));
+        const incoming = msgs.filter(m => !known.has(m.id));
+        return incoming.length > 0 ? [...prev, ...incoming] : prev;
+      });
+    };
+
+    fetchChatMessagesFromSupabase(lojaId).then(mergeIncoming);
 
     const unsubscribe = subscribeToChatRealtime(lojaId, (newMsg) => {
       setChatMessages(prev => {
@@ -924,11 +1024,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return [...prev, newMsg];
       });
 
-      const myMatricula = operator.code || operator.matricula;
+      const myMatricula = chatOwnerRef.current;
       const isFromMe = newMsg.remetente_matricula === myMatricula;
 
       if (!isFromMe) {
-        if (!isChatOpen) {
+        if (!isChatOpenRef.current) {
           setUnreadChatCount(c => c + 1);
         }
 
@@ -970,10 +1070,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     });
 
+    // Rede de segurança: o Realtime é efêmero (não há replay). Se o app ficou
+    // offline ou o canal caiu, o polling recupera as mensagens perdidas.
+    const pollTimer = setInterval(() => {
+      if (document.visibilityState === 'hidden') return;
+      fetchChatMessagesFromSupabase(lojaId).then(mergeIncoming);
+    }, 20000);
+
     return () => {
+      clearInterval(pollTimer);
       unsubscribe();
     };
-  }, [isAuthenticated, operator.loja_id, isChatOpen]);
+  }, [isAuthenticated, operator.loja_id]);
 
   return (
     <AppContext.Provider
@@ -1008,6 +1116,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         stores,
         refreshStores,
         addStore,
+        updateStoreUserLimit,
         employees,
         refreshEmployees,
         addOrUpdateEmployee,
@@ -1028,6 +1137,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         addAudit,
         updateAudit,
         resetAllData,
+
+        avarias,
+        addAvaria,
+        refreshAvarias,
 
         notifications,
         unreadCount,
