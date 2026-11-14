@@ -447,6 +447,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Login
   const login = async (matricula: string, senha: string): Promise<{ success: boolean; message?: string }> => {
+    setDisconnectedMessage(null);
     const result = await loginUser(matricula, senha);
     if (result.success && result.user) {
       setCurrentUser(result.user);

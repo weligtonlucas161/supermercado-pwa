@@ -23,7 +23,7 @@ export const SUPABASE_STORAGE_KEYS = {
   KEY: 'superpwa_supabase_anon_key',
 } as const;
 
-export type DbConfigSource = 'custom' | 'env' | 'none';
+export type DbConfigSource = 'custom' | 'env' | 'default' | 'none';
 
 export interface DbConfig {
   url: string;
@@ -78,9 +78,12 @@ export function validateDbKey(value: unknown): string | null {
   return key;
 }
 
+const DEFAULT_SUPABASE_URL = 'https://senbgpiuhjtlpnhvpykh.supabase.co';
+const DEFAULT_SUPABASE_ANON_KEY = 'sb_publishable_8T__DxVCm4aYMJB_pGtIeA_79V65KbL';
+
 /**
  * Resolve a configuração efetiva do banco.
- * Prioridade: configuração do usuário (localStorage) > ambiente (VITE_*) > não configurado.
+ * Prioridade: configuração do usuário (localStorage) > ambiente (VITE_*) > padrão do projeto.
  */
 export function resolveDbConfig(): DbConfig {
   const envUrl = import.meta.env.VITE_SUPABASE_URL || '';
@@ -89,15 +92,15 @@ export function resolveDbConfig(): DbConfig {
   const localUrl = typeof window !== 'undefined' ? localStorage.getItem(SUPABASE_STORAGE_KEYS.URL) || '' : '';
   const localKey = typeof window !== 'undefined' ? localStorage.getItem(SUPABASE_STORAGE_KEYS.KEY) || '' : '';
 
-  const url = validateDbUrl(localUrl) || validateDbUrl(envUrl) || '';
-  const key = validateDbKey(localKey) || validateDbKey(envKey) || '';
+  const url = validateDbUrl(localUrl) || validateDbUrl(envUrl) || validateDbUrl(DEFAULT_SUPABASE_URL) || '';
+  const key = validateDbKey(localKey) || validateDbKey(envKey) || validateDbKey(DEFAULT_SUPABASE_ANON_KEY) || '';
 
   const source: DbConfigSource =
     validateDbUrl(localUrl) && validateDbKey(localKey)
       ? 'custom'
       : validateDbUrl(envUrl) && validateDbKey(envKey)
         ? 'env'
-        : 'none';
+        : 'default';
 
   return {
     url,

@@ -177,9 +177,9 @@ export async function changeUserPassword(
     // Sincroniza também no Supabase se cliente estiver ativo.
     // O PostgrestBuilder NUNCA rejeita: o erro vem dentro do valor resolvido.
     if (client) {
-      const { error } = await client.rpc('rpc_alterar_senha', {
+      const { error } = await client.rpc('rpc_sync_user_password', {
         p_matricula: cleanMatricula,
-        p_nova_senha: encryptedPassword,
+        p_senha: cleanPassword,
       });
       if (error) {
         console.warn('Erro ao sincronizar senha no Supabase:', error.message);
@@ -190,8 +190,7 @@ export async function changeUserPassword(
   }
 
   // 3. FALLBACK: usuário existe apenas no Supabase (criado em outro dispositivo).
-  // A RPC `rpc_alterar_senha` NÃO valida a existência do usuário, por isso
-  // confirmamos a matrícula na tabela antes de alterar qualquer coisa.
+  // A RPC `rpc_sync_user_password` valida a existência do usuário e atualiza auth.users e usuarios
   if (client && isSupabaseConfigured()) {
     try {
       const { data: remoteUser, error: findError } = await client
@@ -201,9 +200,9 @@ export async function changeUserPassword(
         .maybeSingle();
 
       if (!findError && remoteUser) {
-        const { data: rpcData, error: rpcError } = await client.rpc('rpc_alterar_senha', {
+        const { data: rpcData, error: rpcError } = await client.rpc('rpc_sync_user_password', {
           p_matricula: cleanMatricula,
-          p_nova_senha: encryptedPassword,
+          p_senha: cleanPassword,
         });
 
         if (rpcError) {
@@ -257,14 +256,29 @@ export async function changeUserPassword(
  */
 export function verifyUserStillActive(matricula: string, lojaId?: string): { active: boolean; companyName?: string } {
   const cleanMatricula = sanitizeIdentifier(matricula, 64);
+  if (!cleanMatricula) return { active: false, companyName: 'Sua Loja' };
 
   const emps = getStoredEmployees();
+  if (emps.length === 0) {
+    return { active: true };
+  }
+
   const emp = emps.find(e => e.matricula.toLowerCase() === cleanMatricula.toLowerCase());
 
-  // Se o usuário foi removido da base ou está inativo
-  if (!emp || !emp.ativo) {
+  // Se o usuário foi encontrado e está explicitamente inativo
+  if (emp && emp.ativo === false) {
     const stores = getStoredStores();
     const store = stores.find(s => s.id === (lojaId || emp?.loja_id));
+    return {
+      active: false,
+      companyName: store ? store.nome_loja : 'Sua Loja',
+    };
+  }
+
+  // Se a lista de funcionários tem registros mas este foi removido e estamos estritamente offline
+  if (!emp && (!client || !isSupabaseConfigured())) {
+    const stores = getStoredStores();
+    const store = stores.find(s => s.id === lojaId);
     return {
       active: false,
       companyName: store ? store.nome_loja : 'Sua Loja',
@@ -285,40 +299,32 @@ export async function verifyUserStillActiveRemote(
   const cleanMatricula = sanitizeIdentifier(matricula, 64);
   if (!cleanMatricula) return { active: false, companyName: 'Sua Loja' };
 
-  // 1. Consulta remota no Supabase se cliente conectado
+  // 1. Consulta remota no Supabase via RPC com SECURITY DEFINER (imune a restrições de RLS anônimo)
   if (client && isSupabaseConfigured()) {
     try {
-      const { data, error } = await client
-        .from('usuarios')
-        .select('id, matricula, ativo, loja_id')
-        .eq('matricula', cleanMatricula)
-        .maybeSingle();
+      const { data, error } = await client.rpc('rpc_verify_usuario_ativo', {
+        p_matricula: cleanMatricula,
+      });
 
-      if (!error) {
-        if (!data) {
-          // Usuário NÃO EXISTE mais no banco de dados (apagado)
-          const stores = getStoredStores();
-          const store = stores.find(s => s.id === lojaId);
+      if (!error && data) {
+        const res = data as { exists?: boolean; active?: boolean; company_name?: string };
+        if (res.exists === false || res.active === false) {
           return {
             active: false,
-            companyName: store ? store.nome_loja : 'Sua Loja',
+            companyName: res.company_name || 'Sua Loja',
           };
         }
+        return { active: true };
+      }
 
-        if (data.ativo === false) {
-          // Usuário foi DESATIVADO no banco de dados
-          const stores = getStoredStores();
-          const store = stores.find(s => s.id === (data.loja_id || lojaId));
-          return {
-            active: false,
-            companyName: store ? store.nome_loja : 'Sua Loja',
-          };
-        }
-
+      // Se ocorreu erro de comunicação/timeout, NÃO desloga por falso positivo
+      if (error) {
+        console.warn('Aviso de verificação remota no Supabase:', error.message);
         return { active: true };
       }
     } catch (err) {
-      console.debug('Aviso ao consultar usuário ativo no Supabase:', err);
+      console.warn('Aviso de rede ao consultar status do usuário:', err);
+      return { active: true };
     }
   }
 
@@ -397,6 +403,35 @@ export async function loginUser(matricula: string, senha: string): Promise<Login
     const stores = getStoredStores();
     const matchedStore = stores.find(s => s.id === matchedEmp.loja_id);
 
+    // Se o cliente Supabase estiver ativo, garante autenticação no Supabase Auth para emitir JWT com loja_id
+    if (client && isSupabaseConfigured()) {
+      const authEmail = `${cleanMatricula.toLowerCase().replace(/[^a-z0-9]/g, '')}@superpwa.app`;
+      try {
+        const { error: authErr } = await client.auth.signInWithPassword({
+          email: authEmail,
+          password: cleanSenha,
+        });
+
+        if (authErr) {
+          // Auto-repara a senha em auth.users e usuarios.senha_hash caso tenha havido descompasso de migração
+          try {
+            await client.rpc('rpc_sync_user_password', {
+              p_matricula: cleanMatricula,
+              p_senha: cleanSenha,
+            });
+            await client.auth.signInWithPassword({
+              email: authEmail,
+              password: cleanSenha,
+            });
+          } catch (syncErr) {
+            console.warn('Sincronização de credencial em auth.users:', syncErr);
+          }
+        }
+      } catch (err) {
+        console.warn('Aviso de conexão Supabase Auth no login local:', err);
+      }
+    }
+
     return {
       success: true,
       token: 'tok_emp_' + matchedEmp.id,
@@ -418,14 +453,10 @@ export async function loginUser(matricula: string, senha: string): Promise<Login
   if (client) {
     try {
       const authEmail = `${cleanMatricula.toLowerCase().replace(/[^a-z0-9]/g, '')}@superpwa.app`;
-      try {
-        await client.auth.signInWithPassword({
-          email: authEmail,
-          password: cleanSenha,
-        });
-      } catch (authErr) {
-        console.warn('Login Supabase Auth (prosseguindo para RPC):', authErr);
-      }
+      const { error: authErr } = await client.auth.signInWithPassword({
+        email: authEmail,
+        password: cleanSenha,
+      });
 
       const { data, error } = await client.rpc('rpc_login_usuario', {
         p_matricula: cleanMatricula,
@@ -433,6 +464,21 @@ export async function loginUser(matricula: string, senha: string): Promise<Login
       });
 
       if (!error && data && data.success && data.user) {
+        if (authErr) {
+          try {
+            await client.rpc('rpc_sync_user_password', {
+              p_matricula: cleanMatricula,
+              p_senha: cleanSenha,
+            });
+            await client.auth.signInWithPassword({
+              email: authEmail,
+              password: cleanSenha,
+            });
+          } catch (syncErr) {
+            console.warn('Erro ao sincronizar senha no Supabase Auth:', syncErr);
+          }
+        }
+
         const dbCargo = String(data.user.cargo || 'operador').toLowerCase();
         const mappedCargo = dbCargo.includes('saas') ? 'saas_admin' : dbCargo.includes('gerente') ? 'gerente' : 'operador';
 
@@ -919,6 +965,17 @@ export async function saveStoreEmployee(emp: StoreEmployee): Promise<{ success: 
         loja_id: cleanEmp.loja_id,
         ativo: cleanEmp.ativo,
       });
+
+      if (cleanEmp.senha) {
+        try {
+          await client.rpc('rpc_sync_user_password', {
+            p_matricula: cleanEmp.matricula,
+            p_senha: cleanEmp.senha,
+          });
+        } catch (syncErr) {
+          console.warn('Aviso ao sincronizar senha com auth.users:', syncErr);
+        }
+      }
     } catch (err) {
       console.warn('Erro ao salvar funcionário no banco:', err);
     }
