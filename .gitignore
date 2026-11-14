@@ -5,8 +5,19 @@ dev-dist/
 coverage/
 .DS_Store
 *.log
+.env
+.env.local
+.env.*.local
 .env*
 !.env.example
+
+# Arquivos de conexão e credenciais (Cloud SQL / certificados)
+*.pem
+*.key
+*credentials*.json
+database/connection.local.*
+config/db.credentials.*
+db-connection*
 
 # Migrações e scripts SQL do Supabase (mantidos fora do repositório)
 supabase/
