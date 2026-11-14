@@ -8,10 +8,14 @@
  * (com fallbacks diferentes). Isso gerava divergência entre o que é cifrado
  * e o que é decifrado. Agora existe uma única fonte de verdade.
  *
- * Ordem de resolução (compatível com os dados já gravados no banco):
+ * Ordem de resolução:
  *  1. process.env.REACT_APP_ENCRYPTION_KEY  (build legado)
  *  2. import.meta.env.VITE_ENCRYPTION_KEY    (build Vite)
- *  3. valor histórico (mantido para não invalidar os dados já cifrados)
+ *
+ * Não existe mais valor de fallback no código-fonte: a chave que vivia
+ * hardcoded no repositório era pública e permitia decifrar todo o acervo.
+ * Sem `VITE_ENCRYPTION_KEY` configurada, a cifragem é recusada (fail fast).
+ * A rotação da chave é feita pelo script `scripts/recrypt-acervo.mjs`.
  */
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -36,11 +40,11 @@ function readEnv(key: string): string {
   return '';
 }
 
+const MASTER_KEY_ENV =
+  readEnv('REACT_APP_ENCRYPTION_KEY') || readEnv('VITE_ENCRYPTION_KEY');
+
 /** Chave mestra AES-256 (CryptoJS) usada nos campos cifrados do banco. */
-export const MASTER_KEY =
-  readEnv('REACT_APP_ENCRYPTION_KEY') ||
-  readEnv('VITE_ENCRYPTION_KEY') ||
-  'superpwa_aes256_zero_knowledge_master_key_2026';
+export const MASTER_KEY = MASTER_KEY_ENV;
 
 /**
  * Pepper do hash deterministico de EAN. Por padrao reaproveita a chave mestra,
@@ -50,6 +54,13 @@ export const MASTER_KEY =
 export const EAN_HASH_PEPPER = readEnv('VITE_EAN_HASH_PEPPER') || MASTER_KEY;
 
 /** Indica se a chave mestra veio do ambiente (em vez do valor historico). */
-export const MASTER_KEY_FROM_ENV = Boolean(
-  readEnv('REACT_APP_ENCRYPTION_KEY') || readEnv('VITE_ENCRYPTION_KEY')
-);
+export const MASTER_KEY_FROM_ENV = Boolean(MASTER_KEY_ENV);
+
+/** Mensagem exibida quando a chave mestra nao esta configurada. */
+export const MASTER_KEY_MISSING_MESSAGE =
+  'Chave mestra de cifragem nao configurada. Defina VITE_ENCRYPTION_KEY no ambiente e recompile a aplicacao.';
+
+/** Indica se a cifragem esta operacional (chave mestra presente). */
+export function hasMasterKey(): boolean {
+  return MASTER_KEY.length > 0;
+}

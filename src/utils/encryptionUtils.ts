@@ -12,10 +12,11 @@
 
 import CryptoJS from 'crypto-js';
 import { sanitizeText } from './security';
-import { MASTER_KEY } from './keys';
+import { MASTER_KEY, MASTER_KEY_MISSING_MESSAGE } from './keys';
 
-// A chave mestra AES-256 é resolvida em um único lugar (src/utils/keys.ts),
-// com a mesma ordem de precedência histórica usada desde o início do projeto.
+// A chave mestra AES-256 é resolvida em um único lugar (src/utils/keys.ts).
+// Não há fallback no código: sem chave configurada, cifrar é erro de
+// configuração (lança) e decifrar devolve um marcador seguro.
 export { MASTER_KEY };
 
 export interface DecryptedProduct {
@@ -76,6 +77,10 @@ export function decryptSingleField(
   options?: { skipSanitize?: boolean }
 ): string {
   if (!cipherText || typeof cipherText !== 'string') return '';
+  if (!secretKey) {
+    console.error('[encryption] ' + MASTER_KEY_MISSING_MESSAGE);
+    return '[DADO PROTEGIDO]';
+  }
   const trimmed = cipherText.trim();
 
   // Se não estiver criptografado, retorna o texto original sanitizado
@@ -103,6 +108,9 @@ export function encryptSingleField(
   options?: { skipSanitize?: boolean }
 ): string {
   if (!plainText || typeof plainText !== 'string') return '';
+  if (!secretKey) {
+    throw new Error(MASTER_KEY_MISSING_MESSAGE);
+  }
   const trimmed = plainText.trim();
   if (!trimmed) return '';
   if (isEncrypted(trimmed)) return trimmed;

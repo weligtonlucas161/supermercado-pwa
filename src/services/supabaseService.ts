@@ -414,9 +414,19 @@ export async function loginUser(matricula: string, senha: string): Promise<Login
     };
   }
 
-  // 3. Se o Supabase estiver configurado, tenta autenticar via RPC no banco
+  // 3. Se o Supabase estiver configurado, autentica no Supabase Auth (para emitir JWT com loja_id) e valida na RPC
   if (client) {
     try {
+      const authEmail = `${cleanMatricula.toLowerCase().replace(/[^a-z0-9]/g, '')}@superpwa.app`;
+      try {
+        await client.auth.signInWithPassword({
+          email: authEmail,
+          password: cleanSenha,
+        });
+      } catch (authErr) {
+        console.warn('Login Supabase Auth (prosseguindo para RPC):', authErr);
+      }
+
       const { data, error } = await client.rpc('rpc_login_usuario', {
         p_matricula: cleanMatricula,
         p_senha: cleanSenha,
@@ -488,6 +498,16 @@ export async function loginUser(matricula: string, senha: string): Promise<Login
     success: false,
     message: 'Matrícula ou senha incorreta. Verifique os dados digitados.',
   };
+}
+
+export async function logoutUser(): Promise<void> {
+  if (client) {
+    try {
+      await client.auth.signOut();
+    } catch (err) {
+      console.warn('Erro ao deslogar do Supabase Auth:', err);
+    }
+  }
 }
 
 /**

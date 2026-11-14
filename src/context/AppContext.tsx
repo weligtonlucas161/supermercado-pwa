@@ -37,6 +37,7 @@ import {
 } from '../utils/chatUtils';
 import { 
   loginUser, 
+  logoutUser, 
   isSupabaseConfigured, 
   syncOfflineQueueToSupabase, 
   fetchProductsFromSupabase, 
@@ -571,6 +572,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const logout = () => {
     if (isInventoryLocked) return;
+    void logoutUser();
     setCurrentUser(null);
     setIsAuthenticated(false);
     setAudits([]);

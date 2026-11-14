@@ -75,15 +75,15 @@ src/services/supabaseService.ts   Camada de domínio (API única do app)
 - **Realtime:** aplica apenas o **delta** da linha alterada, em vez de recarregar
   a loja inteira.
 
-## Segurança
+## Segurança e Isolamento Multi-Tenant
 
-- Sem credenciais no código-fonte; URL e anon key vêm do ambiente ou da
-  configuração da interface (localStorage).
-- URL do projeto validada (https obrigatório; http apenas em loopback).
-- Sanitização anti-injeção em todas as entradas (`src/utils/security.ts`).
-- Campos sensíveis cifrados com AES-256; descriptografia somente em RAM.
-
-> **Pendente (recomendado):** as políticas RLS atuais são permissivas
-> (`qual = true`) em todas as tabelas. Para isolamento multi-tenant de fato, é
-> necessário migrar a autenticação para o Supabase Auth e vincular o `loja_id`
-> ao JWT (`auth.jwt() ->> 'loja_id'`).
+- **Isolamento de Tenants via Supabase Auth + RLS Estrita:**
+  - O aplicativo autentica nativamente no Supabase Auth (`signInWithPassword`) gerando sessão JWT com claims em `app_metadata` (`loja_id`, `cargo`, `matricula`).
+  - Todas as tabelas operacionais possuem Row Level Security (RLS) habilitada com predicados rígidos baseados em `fn_jwt_loja_id()` e `fn_is_saas_admin()`. Acesso anônimo indiscriminado (`qual = true`) foi totalmente eliminado.
+  - As senhas dos usuários utilizam hash bcrypt (`crypt(..., gen_salt('bf'))`), e senhas em texto claro foram purgadas do banco.
+- **Cifragem Ponta a Ponta (Zero-Knowledge):**
+  - Campos sensíveis (nome do produto, EAN/código de barras, PLU, fornecedor, CNPJ e auditorias) são cifrados com AES-256 (CryptoJS) antes de trafegar na rede.
+  - A descriptografia ocorre estritamente na memória RAM do cliente para exibição.
+  - A chave mestra é lida exclusivamente de `VITE_ENCRYPTION_KEY` no ambiente (qualquer fallback hardcoded no código foi removido).
+  - O acervo legado foi 100% recriptografado e indexado via hash determinístico `ean_hash` (HMAC-SHA256) através do utilitário `scripts/recrypt-acervo.mjs`.
+- **Prevenção de Injeção:** sanitização anti-injeção em todas as entradas (`src/utils/security.ts`).
