@@ -40,8 +40,29 @@ function readEnv(key: string): string {
   return '';
 }
 
+/**
+ * Leitura estática para garantir que o Vite substitua no build de produção.
+ * O compilador do Vite faz substituição léxica (AST) de import.meta.env.VITE_*.
+ * O bloco try/catch assegura compatibilidade quando executado fora do Vite (ex: Node/TSX).
+ */
+function getViteStaticEnv(key: 'VITE_ENCRYPTION_KEY' | 'VITE_EAN_HASH_PEPPER'): string {
+  try {
+    if (key === 'VITE_ENCRYPTION_KEY') {
+      return import.meta.env.VITE_ENCRYPTION_KEY || '';
+    }
+    if (key === 'VITE_EAN_HASH_PEPPER') {
+      return import.meta.env.VITE_EAN_HASH_PEPPER || '';
+    }
+  } catch {
+    /* ambiente sem import.meta.env (ex: Node/TSX) */
+  }
+  return '';
+}
+
 const MASTER_KEY_ENV =
-  readEnv('REACT_APP_ENCRYPTION_KEY') || readEnv('VITE_ENCRYPTION_KEY');
+  getViteStaticEnv('VITE_ENCRYPTION_KEY') ||
+  readEnv('VITE_ENCRYPTION_KEY') ||
+  readEnv('REACT_APP_ENCRYPTION_KEY');
 
 /** Chave mestra AES-256 (CryptoJS) usada nos campos cifrados do banco. */
 export const MASTER_KEY = MASTER_KEY_ENV;
@@ -51,7 +72,10 @@ export const MASTER_KEY = MASTER_KEY_ENV;
  * de modo que o hash nunca fica mais exposto do que os proprios campos
  * cifrados. Pode ser separado via VITE_EAN_HASH_PEPPER.
  */
-export const EAN_HASH_PEPPER = readEnv('VITE_EAN_HASH_PEPPER') || MASTER_KEY;
+export const EAN_HASH_PEPPER =
+  getViteStaticEnv('VITE_EAN_HASH_PEPPER') ||
+  readEnv('VITE_EAN_HASH_PEPPER') ||
+  MASTER_KEY;
 
 /** Indica se a chave mestra veio do ambiente (em vez do valor historico). */
 export const MASTER_KEY_FROM_ENV = Boolean(MASTER_KEY_ENV);
