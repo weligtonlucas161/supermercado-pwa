@@ -3,6 +3,7 @@ build/
 dist/
 dev-dist/
 coverage/
+.vite/
 .DS_Store
 *.log
 .env
@@ -11,19 +12,30 @@ coverage/
 .env*
 !.env.example
 
+# ---------------------------------------------------------------------------
+# Estrutura do banco de dados (schema, migrations, seeds, dumps, RLS)
+# Mantida somente em disco (local), fora do versionamento.
+# ---------------------------------------------------------------------------
+database/
+supabase/
+*.sql
+*.dump
+*.backup
+*.sqlite
+*.sqlite3
+db-connection*
+schema.prisma
+prisma/migrations/
+
+# Assets locais (ex.: .sql gerados em public/assets/aistudio)
+public/assets/
+
 # Arquivos de conexão e credenciais (Cloud SQL / certificados)
 *.pem
 *.key
 *credentials*.json
 database/connection.local.*
 config/db.credentials.*
-db-connection*
-
-# Migrações e scripts SQL do Supabase (mantidos fora do repositório)
-supabase/
-
-# Assets locais (ex.: .sql gerados em public/assets/aistudio)
-public/assets/
 
 # O projeto usa bun.lock (Bun) como gerenciador de pacotes
 package-lock.json
@@ -31,6 +43,9 @@ package-lock.json
 # Ferramentas locais de manutenção (não fazem parte do app)
 _patch.mjs
 _*.mjs
+
+# Skills de agentes duplicadas (mantida apenas .agents/ no repo)
+.aider-desk/
 
 # Configuração local de IDE / MCP
 .vscode/

@@ -41,6 +41,7 @@ import {
   syncOfflineQueueToSupabase, 
   fetchProductsFromSupabase, 
   subscribeToProductsRealtime,
+  mapProductRow,
   fetchStoresFromDatabase,
   createStoreInDatabase,
   updateStoreUserLimitInDatabase,
@@ -654,15 +655,49 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, [isAuthenticated, refreshProductsFromDatabase, refreshAuditsFromDatabase]);
 
   // Assinatura em Tempo Real (Realtime Channel) para multi-sessões
+  // Aplica apenas o delta da linha alterada, evitando recarregar a loja inteira.
   useEffect(() => {
     if (!isAuthenticated || !isSupabaseConfigured()) return;
-    const unsubscribe = subscribeToProductsRealtime(() => {
-      refreshProductsFromDatabase();
+    const unsubscribe = subscribeToProductsRealtime((event) => {
+      const lojaId = operator.loja_id || currentUser?.loja_id || '';
+
+      if (event.type === 'DELETE') {
+        const removedId = event.oldRow?.id ? String(event.oldRow.id) : '';
+        if (!removedId) {
+          refreshProductsFromDatabase();
+          return;
+        }
+        setProducts(prev => {
+          const next = prev.filter(p => p.id !== removedId);
+          saveStoredData(STORAGE_KEYS.PRODUCTS, next);
+          return next;
+        });
+        return;
+      }
+
+      if (!event.row || !event.row.id) {
+        refreshProductsFromDatabase();
+        return;
+      }
+
+      // Linhas de outra loja não devem entrar na lista local.
+      const rowLoja = event.row.loja_id ? String(event.row.loja_id) : lojaId;
+      if (lojaId && rowLoja && rowLoja !== lojaId) return;
+
+      const mapped = mapProductRow(event.row, lojaId);
+      setProducts(prev => {
+        const index = prev.findIndex(p => p.id === mapped.id);
+        const next = index >= 0
+          ? prev.map((p, i) => (i === index ? mapped : p))
+          : [mapped, ...prev];
+        saveStoredData(STORAGE_KEYS.PRODUCTS, next);
+        return next;
+      });
     });
     return () => {
       unsubscribe();
     };
-  }, [isAuthenticated, refreshProductsFromDatabase]);
+  }, [isAuthenticated, refreshProductsFromDatabase, operator.loja_id, currentUser?.loja_id]);
 
   // Background Sync when online
   useBackgroundSync({

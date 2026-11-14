@@ -1,4 +1,4 @@
-import { createClient, SupabaseClient, RealtimeChannel } from '@supabase/supabase-js';
+import { SupabaseClient, RealtimeChannel } from '@supabase/supabase-js';
 import { 
   Product, 
   ValidityItem, 
@@ -16,6 +16,14 @@ import {
   TIPOS_AVARIA
 } from '../types';
 import { decryptSingleField, encryptSingleField, isEncrypted } from '../utils/encryptionUtils';
+import { hashEan, hashEanBatch } from '../utils/productHash';
+import {
+  loadProductIndex,
+  loadCatalogIndex,
+  invalidateProductIndex,
+  invalidateCatalogIndex,
+} from './db/productIndex';
+import { upsertProductRows, upsertCatalogRows, ProductWriteRow } from './db/productWrite';
 import {
   sanitizeText,
   sanitizeIdentifier,
@@ -23,128 +31,58 @@ import {
   validatePositiveInt,
   validateEnum,
   validateHexColor,
-  validateSafeHttpUrl,
 } from '../utils/security';
+import {
+  SUPABASE_STORAGE_KEYS,
+  getDbClient,
+  getDbConfig,
+  isDbConfigured,
+  setCustomDbConfig,
+  clearCustomDbConfig,
+} from './db/client';
 
-export const SUPABASE_STORAGE_KEYS = {
-  URL: 'superpwa_supabase_url',
-  KEY: 'superpwa_supabase_anon_key',
-};
+export { SUPABASE_STORAGE_KEYS };
 
-// Credenciais oficiais do projeto Supabase fornecidas pelo usuário
-const DEFAULT_FALLBACK_URL = 'https://senbgpiuhjtlpnhvpykh.supabase.co';
-const DEFAULT_FALLBACK_KEY = 'sb_publishable_8T__DxVCm4aYMJB_pGtIeA_79V65KbL';
+/**
+ * Cliente do banco (singleton centralizado em ./db/client).
+ * Retorna null quando o banco não está configurado — nenhuma credencial
+ * padrão é embarcada no bundle do front-end.
+ */
+let client: SupabaseClient | null = getDbClient();
 
-function resolveConfig() {
-  const envUrl = import.meta.env.VITE_SUPABASE_URL || '';
-  const envKey = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
-
-  const localUrl = typeof window !== 'undefined' ? localStorage.getItem(SUPABASE_STORAGE_KEYS.URL) || '' : '';
-  const localKey = typeof window !== 'undefined' ? localStorage.getItem(SUPABASE_STORAGE_KEYS.KEY) || '' : '';
-
-  // Prioridade: LocalStorage customizado > Variável de Ambiente Vite > Credenciais do Projeto
-  const activeUrl = localUrl.trim() || envUrl.trim() || DEFAULT_FALLBACK_URL;
-  const activeKey = localKey.trim() || envKey.trim() || DEFAULT_FALLBACK_KEY;
-
-  const isConfigured = Boolean(
-    activeUrl &&
-    activeKey &&
-    activeUrl !== 'https://seu-projeto.supabase.co' &&
-    activeUrl.startsWith('http')
-  );
-
-  return {
-    url: activeUrl,
-    key: activeKey,
-    isConfigured,
-    source: (localUrl ? 'custom' : envUrl ? 'env' : 'default') as 'custom' | 'env' | 'default',
-  };
+/** Re-sincroniza o espelho local do cliente após troca de configuração. */
+function syncClient(): void {
+  client = getDbClient();
 }
-
-let activeConfig = resolveConfig();
-let client: SupabaseClient | null = null;
-
-if (activeConfig.isConfigured) {
-  try {
-    client = createClient(activeConfig.url, activeConfig.key, {
-      auth: {
-        persistSession: true,
-        autoRefreshToken: true,
-      },
-    });
-  } catch (err) {
-    console.warn('Erro ao inicializar Supabase client:', err);
-    client = null;
-  }
-}
-
-export const supabase = client;
 
 export function isSupabaseConfigured(): boolean {
-  return !!client && activeConfig.isConfigured;
+  return isDbConfigured();
 }
 
 export function getSupabaseConfigInfo() {
+  const cfg = getDbConfig();
   return {
-    isConfigured: isSupabaseConfigured(),
-    url: activeConfig.url,
-    source: activeConfig.source,
+    isConfigured: cfg.isConfigured,
+    url: cfg.url,
+    source: cfg.source,
   };
 }
 
 /**
- * Permite configurar o Supabase dinamicamente via interface (armazenado em localStorage)
+ * Permite configurar o banco dinamicamente via interface (armazenado em localStorage)
  */
 export function setCustomSupabaseConfig(url: string, key: string): { success: boolean; message: string } {
-  const safeUrl = validateSafeHttpUrl(url);
-  const cleanKey = sanitizeText(key, 512);
-
-  if (!safeUrl) {
-    return { success: false, message: 'A URL do Supabase deve iniciar com https:// ou http:// válida.' };
-  }
-
-  if (!cleanKey || cleanKey.length < 20) {
-    return { success: false, message: 'A chave anônima (anon key) do Supabase é inválida.' };
-  }
-
-  const cleanUrl = safeUrl;
-
-  try {
-    const testClient = createClient(cleanUrl, cleanKey);
-    client = testClient;
-    activeConfig = {
-      url: cleanUrl,
-      key: cleanKey,
-      isConfigured: true,
-      source: 'custom',
-    };
-
-    if (typeof window !== 'undefined') {
-      localStorage.setItem(SUPABASE_STORAGE_KEYS.URL, cleanUrl);
-      localStorage.setItem(SUPABASE_STORAGE_KEYS.KEY, cleanKey);
-    }
-
-    return { success: true, message: 'Configuração do Supabase salva com sucesso!' };
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return { success: false, message: `Falha ao instanciar cliente Supabase: ${msg}` };
-  }
+  const result = setCustomDbConfig(url, key);
+  syncClient();
+  return result;
 }
 
 /**
- * Remove a configuração customizada do Supabase
+ * Remove a configuração customizada do banco
  */
 export function clearCustomSupabaseConfig() {
-  if (typeof window !== 'undefined') {
-    localStorage.removeItem(SUPABASE_STORAGE_KEYS.URL);
-    localStorage.removeItem(SUPABASE_STORAGE_KEYS.KEY);
-  }
-  activeConfig = resolveConfig();
-  if (activeConfig.isConfigured) {
-    client = createClient(activeConfig.url, activeConfig.key);
-  } else {
-    client = null;
-  }
+  clearCustomDbConfig();
+  syncClient();
 }
 
 const LOCAL_STORAGE_STORES_KEY = 'superpwa_stores_data';
@@ -1016,7 +954,7 @@ export async function saveStoreRole(role: StoreRole): Promise<boolean> {
  * Valida a conexão com o banco de dados oficial Synk (tabela lojas ou produtos)
  */
 export async function testSupabaseConnection(): Promise<{ success: boolean; message: string }> {
-  if (!client || !activeConfig.isConfigured) {
+  if (!client || !isSupabaseConfigured()) {
     return {
       success: false,
       message: 'Supabase operando em modo local/offline. Configure a URL e a Anon Key nas configurações para conectar seu banco de dados na nuvem.',
@@ -1102,7 +1040,7 @@ export async function uploadEncryptedProductsRealtime(
   const nomeOperador = sanitizeText(options?.operatorNome || 'Operador', 120);
 
   // Se o Supabase não estiver configurado, NÃO finge que gravou no banco!
-  if (!client || !activeConfig.isConfigured) {
+  if (!client || !isSupabaseConfigured()) {
     console.warn('[uploadEncryptedProductsRealtime] Supabase não conectado. Modo local ativo.');
     // Simula o progresso visual para não congelar a UI
     for (let i = 0; i < total; i++) {
@@ -1124,89 +1062,104 @@ export async function uploadEncryptedProductsRealtime(
     // 0. Garante que a loja exista no banco para satisfazer a FK
     await ensureStoreExists(lojaId);
 
-    // Mapeia produtos já existentes na loja descriptografando o EAN em RAM para atualizar sem expor EAN em texto puro
-    const { data: existingStoreRows } = await client
-      .from('produtos')
-      .select('id, codigo_barras')
-      .eq('loja_id', lojaId);
+    // 1. Índice determinístico da loja (EAN -> id) construído a partir do
+    //    `ean_hash`. Evita decifrar a tabela inteira a cada importação.
+    const index = await loadProductIndex(client, lojaId, { force: true });
+    const catalogHashes = await loadCatalogIndex(client);
 
-    const existingMap = new Map<string, string>();
-    (existingStoreRows || []).forEach((r: { id: string; codigo_barras: string }) => {
-      const decEan = sanitizeBarcode(decryptSingleField(String(r.codigo_barras || '')));
-      if (decEan) existingMap.set(decEan, r.id);
-    });
-
-    const batchSize = 10;
+    const batchSize = 500;
     let uploaded = 0;
     const defaultDueDate = new Date(Date.now() + 60 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
 
+    // Pré-calcula os hashes de todos os itens do lote em paralelo.
+    const prepared = items.map(c => {
+      const cleanEan = sanitizeBarcode(c.original.ean, 32);
+      const cleanName = sanitizeText(c.original.name, 200);
+      const cleanReduced = c.original.reducedCode ? sanitizeIdentifier(c.original.reducedCode, 32) : '';
+      const cleanSupplier = c.original.supplierCode ? sanitizeIdentifier(c.original.supplierCode, 32) : '';
+      const cleanSetor = validateEnum(c.original.setor || c.original.sector, SETORES_DISPONIVEIS, 'MERCEARIA');
+      const cleanQty = validatePositiveInt(c.original.quantity, 0);
+
+      return {
+        cleanEan,
+        cleanName,
+        dbRow: {
+          loja_id: lojaId,
+          codigo_barras: encryptSingleField(cleanEan),
+          nome: encryptSingleField(cleanName),
+          plu: cleanReduced ? encryptSingleField(cleanReduced) : null,
+          codigo_fornecedor: cleanSupplier ? encryptSingleField(cleanSupplier) : null,
+          setor: cleanSetor,
+          quantidade: cleanQty,
+          data_vencimento: defaultDueDate,
+          is_encrypted: true,
+          ciphertext: c.encrypted.ciphertext,
+          iv: c.encrypted.iv,
+          criado_em: Date.now(),
+        },
+      };
+    });
+
+    const hashes = await hashEanBatch(prepared.map(p => p.cleanEan));
+
     for (let i = 0; i < total; i += batchSize) {
-      const chunk = items.slice(i, i + batchSize);
+      const chunk = prepared.slice(i, i + batchSize);
+      const chunkHashes = hashes.slice(i, i + batchSize);
 
-      // 1. Mapeamento sanitizado e totalmente criptografado para a tabela 'produtos':
-      const preparedChunk = chunk.map(c => {
-        const cleanEan = sanitizeBarcode(c.original.ean, 32);
-        const cleanName = sanitizeText(c.original.name, 200);
-        const cleanReduced = c.original.reducedCode ? sanitizeIdentifier(c.original.reducedCode, 32) : '';
-        const cleanSupplier = c.original.supplierCode ? sanitizeIdentifier(c.original.supplierCode, 32) : '';
-        const cleanSetor = validateEnum(c.original.setor || c.original.sector, SETORES_DISPONIVEIS, 'MERCEARIA');
-        const cleanQty = validatePositiveInt(c.original.quantity, 0);
+      // 2. Uma única requisição de upsert por lote.
+      //    Linhas com `id` são atualizadas; linhas sem `id` são inseridas.
+      const rows: ProductWriteRow[] = [];
+      const seenIds = new Set<string>();
+      const seenHashes = new Set<string>();
+      const newCatalogRows: Array<{ codigo_barras: string; nome: string; ean_hash: string }> = [];
+      const newCatalogHashes: string[] = [];
 
-        return {
-          cleanEan,
-          cleanName,
-          dbRow: {
-            loja_id: lojaId,
-            codigo_barras: encryptSingleField(cleanEan),
-            nome: encryptSingleField(cleanName),
-            plu: cleanReduced ? encryptSingleField(cleanReduced) : null,
-            codigo_fornecedor: cleanSupplier ? encryptSingleField(cleanSupplier) : null,
-            setor: cleanSetor,
-            quantidade: cleanQty,
-            data_vencimento: defaultDueDate,
-            is_encrypted: true,
-            ciphertext: c.encrypted.ciphertext,
-            iv: c.encrypted.iv,
-            criado_em: Date.now(),
-          },
-        };
-      });
+      for (let j = 0; j < chunk.length; j++) {
+        const entry = chunk[j];
+        const eanHash = chunkHashes[j];
+        if (!entry.cleanEan || !entry.cleanName || !eanHash) continue;
 
-      for (const entry of preparedChunk) {
-        if (!entry.cleanEan || !entry.cleanName) continue;
-        const existingId = existingMap.get(entry.cleanEan);
-        if (existingId) {
-          const { error: updateErr } = await client
-            .from('produtos')
-            .update(entry.dbRow)
-            .eq('id', existingId);
-          if (updateErr) throw updateErr;
-        } else {
-          const { data: insertedRow, error: insertErr } = await client
-            .from('produtos')
-            .insert(entry.dbRow)
-            .select('id')
-            .maybeSingle();
-          if (insertErr) throw insertErr;
-          if (insertedRow?.id) {
-            existingMap.set(entry.cleanEan, String(insertedRow.id));
-          }
+        // EAN repetido dentro do mesmo lote: mantém apenas a primeira
+        // ocorrência (evita conflito de ON CONFLICT e produtos duplicados).
+        if (seenHashes.has(eanHash)) continue;
+        seenHashes.add(eanHash);
+
+        const existingId = index.hashToId.get(eanHash);
+        const row: ProductWriteRow = { ...entry.dbRow, ean_hash: eanHash };
+        if (existingId && !seenIds.has(existingId)) {
+          row.id = existingId;
+          seenIds.add(existingId);
+        }
+        rows.push(row);
+
+        // Catálogo universal: só entra o que ainda não existe.
+        if (!catalogHashes.has(eanHash)) {
+          newCatalogRows.push({
+            codigo_barras: encryptSingleField(entry.cleanEan),
+            nome: encryptSingleField(entry.cleanName),
+            ean_hash: eanHash,
+          });
+          newCatalogHashes.push(eanHash);
         }
       }
 
-      // 2. Mapeamento criptografado para 'produtos_catalogo_universal' (Script 08)
-      const payloadCatalogoUniversal = preparedChunk
-        .filter(e => e.cleanEan && e.cleanName)
-        .map(e => ({
-          codigo_barras: encryptSingleField(e.cleanEan),
-          nome: encryptSingleField(e.cleanName),
-        }));
+      if (rows.length > 0) {
+        const savedRows = await upsertProductRows(client, rows);
 
-      if (payloadCatalogoUniversal.length > 0) {
+        // Atualiza o índice com os ids gerados para os produtos novos.
+        savedRows.forEach(saved => {
+          if (!saved?.id || !saved.ean_hash) return;
+          if (!index.hashToId.has(saved.ean_hash)) {
+            index.hashToId.set(saved.ean_hash, saved.id);
+          }
+          index.idToHash.set(saved.id, saved.ean_hash);
+        });
+      }
+
+      if (newCatalogRows.length > 0) {
         try {
-          await client
-            .from('produtos_catalogo_universal')
-            .insert(payloadCatalogoUniversal);
+          await upsertCatalogRows(client, newCatalogRows as Array<{ codigo_barras: string; nome: string; ean_hash: string }>);
+          newCatalogHashes.forEach(hash => catalogHashes.add(hash));
         } catch (catErr) {
           console.debug('Aviso catálogo universal:', catErr);
         }
@@ -1247,31 +1200,123 @@ export async function uploadEncryptedProductsRealtime(
  * Se os dados estiverem criptografados no banco (Zero-Knowledge AES),
  * descriptografa temporariamente em RAM para exibição correta em todas as sessões.
  */
+/**
+ * Leitura paginada em blocos: mantém a resposta da API limitada (memória e
+ * latência estáveis) mesmo com dezenas de milhares de registros, sem alterar
+ * o resultado final para o usuário.
+ */
+const PAGE_SIZE = 1000;
+const FALLBACK_PRODUCT_LIMIT = 2000;
+
+async function fetchPaginated(
+  db: SupabaseClient,
+  table: string,
+  columns: string,
+  lojaId: string
+): Promise<Record<string, unknown>[]> {
+  const rows: Record<string, unknown>[] = [];
+  let from = 0;
+
+  for (;;) {
+    const to = from + PAGE_SIZE - 1;
+    const { data, error } = await db
+      .from(table)
+      .select(columns)
+      .eq('loja_id', lojaId)
+      .order('criado_em', { ascending: false })
+      .order('id', { ascending: true })
+      .range(from, to);
+
+    if (error) {
+      console.warn(`[db] Falha ao paginar ${table}:`, error.message);
+      break;
+    }
+
+    const page = (data || []) as unknown as Record<string, unknown>[];
+    rows.push(...page);
+
+    if (page.length < PAGE_SIZE) break;
+    from = to + 1;
+  }
+
+  return rows;
+}
+
+/**
+ * Converte uma linha da tabela `produtos` no modelo de domínio.
+ * Compartilhado entre a leitura completa e o delta do Realtime para que
+ * os dois caminhos nunca produzam formatos divergentes.
+ */
+export function mapProductRow(
+  row: Record<string, unknown>,
+  fallbackLojaId = ''
+): Product {
+  const rawNome = String(row.nome || '');
+  const rawEan = String(row.codigo_barras || '');
+  const rawPlu = String(row.plu || '');
+  const rawForn = String(row.codigo_fornecedor || '');
+
+  const isEnc = Boolean(row.is_encrypted || isEncrypted(rawNome) || isEncrypted(rawEan));
+
+  return {
+    id: sanitizeIdentifier(row.id || `prod-${Math.random().toString(36).substring(2, 9)}`, 64),
+    ean: sanitizeBarcode(decryptSingleField(rawEan)),
+    secondaryEan: row.codigo_barras_secundario
+      ? sanitizeBarcode(decryptSingleField(String(row.codigo_barras_secundario)))
+      : undefined,
+    name: decryptSingleField(rawNome) || 'Produto Cadastrado',
+    supplierCode: decryptSingleField(rawForn),
+    reducedCode: decryptSingleField(rawPlu),
+    category: sanitizeText(row.setor || 'MERCEARIA', 64),
+    stock: validatePositiveInt(row.quantidade, 0),
+    minStock: 10,
+    price: 0,
+    location: `Gôndola - ${sanitizeText(row.setor || 'Estoque', 64)}`,
+    loja_id: sanitizeIdentifier(row.loja_id || fallbackLojaId || '', 64),
+    data_vencimento: sanitizeText(row.data_vencimento || '', 20),
+    isLockedForEdit: Boolean(row.is_locked_for_edit),
+    lockedBy: row.locked_by ? decryptSingleField(String(row.locked_by)) : undefined,
+    lockedAt: row.locked_at ? String(row.locked_at) : undefined,
+    isEncryptedInStorage: isEnc,
+    encryptedPayload: row.ciphertext
+      ? {
+          ciphertext: String(row.ciphertext),
+          iv: String(row.iv || ''),
+        }
+      : undefined,
+    lastUpdated: new Date().toISOString(),
+  };
+}
+
 export async function fetchProductsFromSupabase(lojaId?: string): Promise<Product[]> {
   if (!client) return [];
 
   try {
     const cleanLojaId = lojaId ? sanitizeIdentifier(lojaId, 64) : '';
+
+    // Projeção explícita: evita trafegar colunas desnecessárias (o payload
+    // encolhe de forma significativa em catálogos grandes).
+    const PRODUCT_COLUMNS =
+      'id, nome, codigo_barras, codigo_barras_secundario, plu, codigo_fornecedor, setor, quantidade, data_vencimento, loja_id, is_encrypted, ciphertext, iv, is_locked_for_edit, locked_by, locked_at, criado_em';
+
     let data: Record<string, unknown>[] | null = null;
 
-    // 1. Tenta buscar pela loja específica se informada
+    // 1. Tenta buscar pela loja específica se informada (paginado em blocos)
     if (cleanLojaId) {
-      const res = await client
-        .from('produtos')
-        .select('*')
-        .eq('loja_id', cleanLojaId)
-        .order('criado_em', { ascending: false });
-      if (res.data && res.data.length > 0) {
-        data = res.data;
+      const res = await fetchPaginated(client, 'produtos', PRODUCT_COLUMNS, cleanLojaId);
+      if (res.length > 0) {
+        data = res;
       }
     }
 
-    // 2. Fallback: se não passou loja ou não retornou nada, busca todos os produtos disponíveis
+    // 2. Fallback: se não passou loja ou não retornou nada, busca os produtos
+    //    disponíveis (limitado para não arrastar a base inteira).
     if (!data || data.length === 0) {
       const globalRes = await client
         .from('produtos')
-        .select('*')
-        .order('criado_em', { ascending: false });
+        .select(PRODUCT_COLUMNS)
+        .order('criado_em', { ascending: false })
+        .limit(FALLBACK_PRODUCT_LIMIT);
 
       if (globalRes.data && globalRes.data.length > 0) {
         data = globalRes.data;
@@ -1282,7 +1327,7 @@ export async function fetchProductsFromSupabase(lojaId?: string): Promise<Produc
     if (!data || data.length === 0) {
       const catRes = await client
         .from('produtos_catalogo_universal')
-        .select('*')
+        .select('codigo_barras, nome, ean_hash')
         .limit(100);
 
       if (catRes.data && catRes.data.length > 0) {
@@ -1307,41 +1352,7 @@ export async function fetchProductsFromSupabase(lojaId?: string): Promise<Produc
     }
 
     // 4. Mapeamento com descriptografia pontual na RAM para dados AES-256
-    return data.map((row: Record<string, unknown>) => {
-      const rawNome = String(row.nome || '');
-      const rawEan = String(row.codigo_barras || '');
-      const rawPlu = String(row.plu || '');
-      const rawForn = String(row.codigo_fornecedor || '');
-
-      const isEnc = Boolean(row.is_encrypted || isEncrypted(rawNome) || isEncrypted(rawEan));
-
-      return {
-        id: sanitizeIdentifier(row.id || `prod-${Math.random().toString(36).substring(2, 9)}`, 64),
-        ean: sanitizeBarcode(decryptSingleField(rawEan)),
-        secondaryEan: row.codigo_barras_secundario ? sanitizeBarcode(decryptSingleField(String(row.codigo_barras_secundario))) : undefined,
-        name: decryptSingleField(rawNome) || 'Produto Cadastrado',
-        supplierCode: decryptSingleField(rawForn),
-        reducedCode: decryptSingleField(rawPlu),
-        category: sanitizeText(row.setor || 'MERCEARIA', 64),
-        stock: validatePositiveInt(row.quantidade, 0),
-        minStock: 10,
-        price: 0,
-        location: `Gôndola - ${sanitizeText(row.setor || 'Estoque', 64)}`,
-        loja_id: sanitizeIdentifier(row.loja_id || cleanLojaId || '', 64),
-        data_vencimento: sanitizeText(row.data_vencimento || '', 20),
-        isLockedForEdit: Boolean(row.is_locked_for_edit),
-        lockedBy: row.locked_by ? decryptSingleField(String(row.locked_by)) : undefined,
-        lockedAt: row.locked_at ? String(row.locked_at) : undefined,
-        isEncryptedInStorage: isEnc,
-        encryptedPayload: row.ciphertext
-          ? {
-              ciphertext: String(row.ciphertext),
-              iv: String(row.iv || ''),
-            }
-          : undefined,
-        lastUpdated: new Date().toISOString(),
-      };
-    });
+    return data.map((row: Record<string, unknown>) => mapProductRow(row, cleanLojaId));
   } catch (err) {
     console.warn('Erro ao consultar produtos no Supabase:', err);
     return [];
@@ -1349,10 +1360,22 @@ export async function fetchProductsFromSupabase(lojaId?: string): Promise<Produc
 }
 
 /**
+ * Evento de alteração na tabela `produtos` emitido pelo Realtime.
+ * Permite aplicar apenas o delta na tela, em vez de recarregar a loja inteira.
+ */
+export interface ProductRealtimeEvent {
+  type: 'INSERT' | 'UPDATE' | 'DELETE';
+  row: Record<string, unknown> | null;
+  oldRow: Record<string, unknown> | null;
+}
+
+/**
  * Inscreve no canal Realtime do Supabase para atualizar todas as sessões conectadas
  * assim que um produto for criado, alterado ou excluído.
  */
-export function subscribeToProductsRealtime(onChanged: () => void): () => void {
+export function subscribeToProductsRealtime(
+  onChanged: (event: ProductRealtimeEvent) => void
+): () => void {
   if (!client) return () => {};
 
   try {
@@ -1361,8 +1384,25 @@ export function subscribeToProductsRealtime(onChanged: () => void): () => void {
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'produtos' },
-        () => {
-          onChanged();
+        (payload: { eventType: string; new: Record<string, unknown>; old: Record<string, unknown> }) => {
+          // O índice determinístico e o catálogo podem ter mudado: invalida
+          // para que a próxima importação use dados frescos.
+          invalidateProductIndex();
+          invalidateCatalogIndex();
+
+          const type = (
+            payload.eventType === 'DELETE'
+              ? 'DELETE'
+              : payload.eventType === 'INSERT'
+                ? 'INSERT'
+                : 'UPDATE'
+          ) as ProductRealtimeEvent['type'];
+
+          onChanged({
+            type,
+            row: type === 'DELETE' ? null : payload.new,
+            oldRow: type === 'DELETE' ? payload.old : null,
+          });
         }
       )
       .subscribe();
@@ -1390,18 +1430,17 @@ export async function syncOfflineQueueToSupabase(
   const cleanLojaId = sanitizeIdentifier(lojaId, 64);
   let synced = 0;
   try {
+    // Agrega as ações por tipo para enviar em lotes (antes era 1 requisição
+    // por ação, o que tornava a fila offline lenta em grandes volumes).
+    const stockUpdates: Array<{ id: string; quantity: number }> = [];
+    const newProducts: Array<Record<string, unknown>> = [];
+
     for (const action of actions) {
       if (action.type === 'UPDATE_STOCK') {
         const payload = action.payload as { id: string; exact?: number; delta?: number };
         const cleanId = sanitizeIdentifier(payload.id, 64);
         if (cleanId && typeof payload.exact === 'number') {
-          await client
-            .from('produtos')
-            .update({
-              quantidade: validatePositiveInt(payload.exact, 0),
-              updated_at: new Date().toISOString(),
-            })
-            .eq('id', cleanId);
+          stockUpdates.push({ id: cleanId, quantity: validatePositiveInt(payload.exact, 0) });
         }
         synced++;
       } else if (action.type === 'ADD_PRODUCT') {
@@ -1409,7 +1448,7 @@ export async function syncOfflineQueueToSupabase(
         const cleanEan = sanitizeBarcode(p.ean, 32);
         const cleanName = sanitizeText(p.name, 200);
         if (cleanEan && cleanName) {
-          await client.from('produtos').insert({
+          newProducts.push({
             loja_id: sanitizeIdentifier(p.loja_id || cleanLojaId, 64),
             codigo_barras: encryptSingleField(cleanEan),
             nome: encryptSingleField(cleanName),
@@ -1420,11 +1459,59 @@ export async function syncOfflineQueueToSupabase(
             is_encrypted: true,
             ciphertext: p.encryptedPayload?.ciphertext || null,
             iv: p.encryptedPayload?.iv || null,
+            ean_hash: await hashEan(cleanEan),
           });
         }
         synced++;
       }
     }
+
+    // 1) Atualizações de estoque: uma leitura + um upsert por lote.
+    if (stockUpdates.length > 0) {
+      const ids = stockUpdates.map(u => u.id);
+      const { data: currentRows } = await client
+        .from('produtos')
+        .select('id, nome, codigo_barras, setor, quantidade, data_vencimento, loja_id')
+        .in('id', ids);
+
+      const byId = new Map<string, Record<string, unknown>>(
+        ((currentRows || []) as unknown as Record<string, unknown>[]).map(r => [String(r.id), r])
+      );
+
+      const rows = stockUpdates
+        .map(update => {
+          const row = byId.get(update.id);
+          if (!row) return null;
+          return {
+            id: update.id,
+            nome: String(row.nome || ''),
+            codigo_barras: String(row.codigo_barras || ''),
+            setor: String(row.setor || 'MERCEARIA'),
+            quantidade: update.quantity,
+            data_vencimento: String(row.data_vencimento || ''),
+            loja_id: String(row.loja_id || cleanLojaId),
+            updated_at: new Date().toISOString(),
+          };
+        })
+        .filter((row): row is NonNullable<typeof row> => row !== null);
+
+      for (let i = 0; i < rows.length; i += 500) {
+        const chunk = rows.slice(i, i + 500);
+        await upsertProductRows(client, chunk as ProductWriteRow[]);
+      }
+    }
+
+    // 2) Produtos novos: inserção em lote.
+    for (let i = 0; i < newProducts.length; i += 500) {
+      const chunk = newProducts.slice(i, i + 500);
+      const { error: insertError } = await client.from('produtos').insert(chunk);
+      if (insertError) throw insertError;
+    }
+
+    // O índice determinístico mudou: invalida para a próxima importação.
+    invalidateProductIndex();
+    invalidateCatalogIndex();
+
     return { success: true, syncedCount: synced };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -1966,9 +2053,10 @@ export async function fetchAuditReportsFromDatabase(
   if (!client || !isSupabaseConfigured() || !cleanLojaId) return null;
 
   try {
+    // Projeção explícita: somente as colunas realmente consumidas.
     let query = client
       .from('auditorias_finalizadas')
-      .select('*')
+      .select('id, loja_id, setor, tipo, data_auditoria, hora_auditoria, iniciada_em, finalizada_em, chave_auditoria, total_esperado, total_auditado, total_divergentes, iniciada_por_nome, iniciada_por_matricula, finalizada_por_nome, finalizada_por_matricula, participantes, duracao_label, camera_scans_count')
       .eq('loja_id', cleanLojaId)
       .order('data_auditoria', { ascending: false })
       .order('hora_auditoria', { ascending: false })
@@ -1996,7 +2084,7 @@ export async function fetchAuditReportsFromDatabase(
     const sessionIds = rows.map(r => String(r.id));
     const { data: prodRows } = await client
       .from('auditoria_produtos')
-      .select('*')
+      .select('sessao_id, status_presenca, nome, codigo_barras, plu, auditado_em, operador_nome, quantidade_fisica, quantidade_sistema, divergencia')
       .eq('loja_id', cleanLojaId)
       .in('sessao_id', sessionIds);
 
@@ -3008,6 +3096,9 @@ export async function updateProductInSupabase(
       const cleanEan = sanitizeBarcode(updates.ean, 32);
       if (!cleanEan) return { success: false, error: 'Código de barras inválido.' };
       payload.codigo_barras = encryptSingleField(cleanEan);
+      // Mantém o hash determinístico em sincronia com o EAN (evita duplicar
+      // o produto na próxima importação).
+      payload.ean_hash = await hashEan(cleanEan);
     }
     if (updates.secondaryEan !== undefined) {
       const cleanSec = sanitizeBarcode(updates.secondaryEan, 32);

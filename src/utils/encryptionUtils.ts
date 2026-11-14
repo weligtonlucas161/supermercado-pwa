@@ -12,13 +12,11 @@
 
 import CryptoJS from 'crypto-js';
 import { sanitizeText } from './security';
+import { MASTER_KEY } from './keys';
 
-// Chave mestra de criptografia AES-256
-// Em produção: process.env.REACT_APP_ENCRYPTION_KEY ou import.meta.env.VITE_ENCRYPTION_KEY
-const MASTER_KEY =
-  (typeof process !== 'undefined' && process.env && process.env.REACT_APP_ENCRYPTION_KEY) ||
-  (typeof import.meta !== 'undefined' && import.meta.env && (import.meta.env as Record<string, string>).VITE_ENCRYPTION_KEY) ||
-  'superpwa_aes256_zero_knowledge_master_key_2026';
+// A chave mestra AES-256 é resolvida em um único lugar (src/utils/keys.ts),
+// com a mesma ordem de precedência histórica usada desde o início do projeto.
+export { MASTER_KEY };
 
 export interface DecryptedProduct {
   id: string;
@@ -168,10 +166,4 @@ export function decryptProductList(rawList: Array<Record<string, unknown>>, secr
   if (!Array.isArray(rawList)) return [];
   return rawList.map(item => decryptDatabaseProduct(item, secretKey));
 }
-
-// Aliases para compatibilidade total com ImportadorEstoque
-export const ENCRYPTION_KEY = MASTER_KEY;
-export const encryptField = encryptSingleField;
-export const decryptField = decryptSingleField;
-export const decryptProductsList = decryptProductList;
 
