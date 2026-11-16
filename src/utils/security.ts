@@ -53,7 +53,7 @@ export function sanitizeIdentifier(value: unknown, maxLen = 80): string {
   const str = (typeof value === 'string' ? value : String(value))
     .replace(CONTROL_CHARS_RE, '')
     .trim()
-    .replace(/[^a-zA-Z0-9_.:-]/g, '');
+    .replace(/[^a-zA-Z0-9_.:@-]/g, '');
 
   return maxLen > 0 ? str.slice(0, maxLen) : str;
 }

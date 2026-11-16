@@ -31,7 +31,9 @@ export const LoginScreen: React.FC = () => {
   const [showPatchNotes, setShowPatchNotes] = useState(false);
   const [showTerms, setShowTerms] = useState(false);
 
-  const isSaasAdminLogin = false;
+  // Detecção dinâmica de Administrador SaaS para mudar detalhes visuais para vermelho
+  const cleanMat = matricula.trim().toLowerCase();
+  const isSaasAdminLogin = cleanMat === '@200309' || cleanMat === '200309' || cleanMat === '111111';
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -156,7 +158,7 @@ export const LoginScreen: React.FC = () => {
                   type="text"
                   value={matricula}
                   onChange={e => setMatricula(e.target.value)}
-                  placeholder="Digite sua matrícula"
+                  placeholder={isSaasAdminLogin ? "@200309" : "Digite sua matrícula (ex: operador, admin ou @200309)"}
                   required
                   autoFocus
                   className={`w-full pl-10 pr-4 py-3 rounded-2xl border bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none font-medium transition ${
@@ -231,6 +233,7 @@ export const LoginScreen: React.FC = () => {
                   onClick={() => {
                     setMatricula('operador');
                     setSenha('operador');
+                    setErrorMessage(null);
                   }}
                   className="p-2.5 rounded-xl border border-slate-200 dark:border-slate-750 bg-slate-50 dark:bg-slate-800 hover:border-emerald-500/50 hover:bg-emerald-50/50 dark:hover:bg-emerald-950/20 text-left transition cursor-pointer"
                 >
@@ -246,6 +249,7 @@ export const LoginScreen: React.FC = () => {
                   onClick={() => {
                     setMatricula('admin');
                     setSenha('admin');
+                    setErrorMessage(null);
                   }}
                   className="p-2.5 rounded-xl border border-slate-200 dark:border-slate-750 bg-slate-50 dark:bg-slate-800 hover:border-emerald-500/50 hover:bg-emerald-50/50 dark:hover:bg-emerald-950/20 text-left transition cursor-pointer"
                 >
@@ -254,6 +258,27 @@ export const LoginScreen: React.FC = () => {
                   </span>
                   <span className="text-[10px] text-slate-400 font-mono">
                     admin / admin
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMatricula('@200309');
+                    setSenha('2003@09');
+                    setErrorMessage(null);
+                  }}
+                  className="col-span-2 p-2.5 rounded-xl border border-rose-200 dark:border-rose-900/50 bg-rose-50/60 dark:bg-rose-950/25 hover:border-rose-500/50 hover:bg-rose-100/60 dark:hover:bg-rose-900/30 text-left transition cursor-pointer flex items-center justify-between"
+                >
+                  <div>
+                    <span className="font-extrabold text-[11px] text-rose-700 dark:text-rose-300 block">
+                      🛡️ Administrador SaaS (Master)
+                    </span>
+                    <span className="text-[10px] text-rose-500 dark:text-rose-400 font-mono">
+                      @200309 / 2003@09
+                    </span>
+                  </div>
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-rose-500/15 text-rose-600 dark:text-rose-300 border border-rose-500/20">
+                    Acesso Master
                   </span>
                 </button>
               </div>

@@ -53,3 +53,4 @@ opencode.json
 
 .vercel
 .env*
+backup/
