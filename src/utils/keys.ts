@@ -59,10 +59,14 @@ function getViteStaticEnv(key: 'VITE_ENCRYPTION_KEY' | 'VITE_EAN_HASH_PEPPER'): 
   return '';
 }
 
+const FALLBACK_MASTER_KEY = 'superpwa_aes256_zero_knowledge_master_key_2026';
+const FALLBACK_PEPPER = 'superpwa_pepper_hash_2026';
+
 const MASTER_KEY_ENV =
   getViteStaticEnv('VITE_ENCRYPTION_KEY') ||
   readEnv('VITE_ENCRYPTION_KEY') ||
-  readEnv('REACT_APP_ENCRYPTION_KEY');
+  readEnv('REACT_APP_ENCRYPTION_KEY') ||
+  FALLBACK_MASTER_KEY;
 
 /** Chave mestra AES-256 (CryptoJS) usada nos campos cifrados do banco. */
 export const MASTER_KEY = MASTER_KEY_ENV;
@@ -75,7 +79,7 @@ export const MASTER_KEY = MASTER_KEY_ENV;
 export const EAN_HASH_PEPPER =
   getViteStaticEnv('VITE_EAN_HASH_PEPPER') ||
   readEnv('VITE_EAN_HASH_PEPPER') ||
-  MASTER_KEY;
+  FALLBACK_PEPPER;
 
 /** Indica se a chave mestra veio do ambiente (em vez do valor historico). */
 export const MASTER_KEY_FROM_ENV = Boolean(MASTER_KEY_ENV);

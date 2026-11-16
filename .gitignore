@@ -50,3 +50,6 @@ _*.mjs
 # Configuração local de IDE / MCP
 .vscode/
 opencode.json
+
+.vercel
+.env*

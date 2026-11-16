@@ -272,17 +272,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return loaded.filter(v => !['v1', 'v2', 'v3', 'v4', 'v5'].includes(v.id));
   });
 
-  // Relatórios de auditoria NUNCA são armazenados localmente (apenas em memória / Supabase)
+  // Relatórios de auditoria no Banco de Dados Local
   const [audits, setAudits] = useState<AuditItem[]>(() => {
-    if (typeof window !== 'undefined') {
-      try {
-        localStorage.removeItem(STORAGE_KEYS.AUDITS);
-      } catch {
-        // ignore
-      }
-    }
-    return INITIAL_AUDITS;
+    return loadStoredData<AuditItem[]>(STORAGE_KEYS.AUDITS, INITIAL_AUDITS);
   });
+
+  useEffect(() => {
+    saveStoredData(STORAGE_KEYS.AUDITS, audits);
+  }, [audits]);
 
   // Autenticação Segura & Papéis
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(() => {
@@ -579,7 +576,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setAudits([]);
     localStorage.removeItem(STORAGE_KEYS.AUTH_USER);
     localStorage.removeItem(STORAGE_KEYS.AUTH_TOKEN);
-    localStorage.removeItem(STORAGE_KEYS.AUDITS);
     setActiveTab('inicio');
   };
 
@@ -634,7 +630,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, [currentUser?.loja_id, operator.loja_id]);
 
   const refreshAuditsFromDatabase = useCallback(async () => {
-    if (!isSupabaseConfigured()) return;
+    if (!isSupabaseConfigured()) {
+      const stored = loadStoredData<AuditItem[]>(STORAGE_KEYS.AUDITS, []);
+      if (stored && stored.length > 0) {
+        setAudits(stored);
+      }
+      return;
+    }
     const lojaId = operator.loja_id || currentUser?.loja_id || '';
     if (!lojaId) return;
     const role = operator.role || currentUser?.cargo || 'operador';

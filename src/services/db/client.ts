@@ -79,7 +79,8 @@ export function validateDbKey(value: unknown): string | null {
 }
 
 const DEFAULT_SUPABASE_URL = 'https://senbgpiuhjtlpnhvpykh.supabase.co';
-const DEFAULT_SUPABASE_ANON_KEY = 'sb_publishable_8T__DxVCm4aYMJB_pGtIeA_79V65KbL';
+const DEFAULT_SUPABASE_ANON_KEY =
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNlbmJncGl1aGp0bHBuaHZweWtoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTQwNjEyNDUsImV4cCI6MjEwOTYzNzI0NX0.mVvpLcwolXGnf8VUC0xuZAQQpMUdZzp0WNTGlykrpWE';
 
 /**
  * Resolve a configuração efetiva do banco.
@@ -100,7 +101,9 @@ export function resolveDbConfig(): DbConfig {
       ? 'custom'
       : validateDbUrl(envUrl) && validateDbKey(envKey)
         ? 'env'
-        : 'default';
+        : validateDbUrl(DEFAULT_SUPABASE_URL) && validateDbKey(DEFAULT_SUPABASE_ANON_KEY)
+          ? 'default'
+          : 'none';
 
   return {
     url,

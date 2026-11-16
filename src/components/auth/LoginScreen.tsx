@@ -219,6 +219,45 @@ export const LoginScreen: React.FC = () => {
                 </>
               )}
             </button>
+
+            {/* Acessos Rápidos do Banco Local */}
+            <div className="pt-2 border-t border-slate-100 dark:border-slate-800 space-y-2">
+              <span className="text-[10px] font-black uppercase tracking-wider text-slate-400 block text-center">
+                Acessos Rápidos (Banco Local)
+              </span>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMatricula('operador');
+                    setSenha('operador');
+                  }}
+                  className="p-2.5 rounded-xl border border-slate-200 dark:border-slate-750 bg-slate-50 dark:bg-slate-800 hover:border-emerald-500/50 hover:bg-emerald-50/50 dark:hover:bg-emerald-950/20 text-left transition cursor-pointer"
+                >
+                  <span className="font-extrabold text-[11px] text-slate-900 dark:text-white block">
+                    🛒 Operador
+                  </span>
+                  <span className="text-[10px] text-slate-400 font-mono">
+                    operador / operador
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMatricula('admin');
+                    setSenha('admin');
+                  }}
+                  className="p-2.5 rounded-xl border border-slate-200 dark:border-slate-750 bg-slate-50 dark:bg-slate-800 hover:border-emerald-500/50 hover:bg-emerald-50/50 dark:hover:bg-emerald-950/20 text-left transition cursor-pointer"
+                >
+                  <span className="font-extrabold text-[11px] text-slate-900 dark:text-white block">
+                    👔 Gerente
+                  </span>
+                  <span className="text-[10px] text-slate-400 font-mono">
+                    admin / admin
+                  </span>
+                </button>
+              </div>
+            </div>
           </form>
         </div>
       </div>
