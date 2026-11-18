@@ -45,6 +45,7 @@ import {
   mapProductRow,
   fetchStoresFromDatabase,
   createStoreInDatabase,
+  deleteStoreFromDatabase,
   updateStoreUserLimitInDatabase,
   updateStoreSettingsInDatabase,
   fetchStoreEmployees,
@@ -58,6 +59,7 @@ import {
   verifyUserStillActive,
   verifyUserStillActiveRemote,
   subscribeToUserStatusRealtime,
+  subscribeToStoreDeletionRealtime,
   fetchChatMessagesFromSupabase,
   sendChatMessageToSupabase,
   subscribeToChatRealtime,
@@ -114,6 +116,7 @@ interface AppContextType {
   stores: Store[];
   refreshStores: () => Promise<void>;
   addStore: (store: Store) => Promise<{ success: boolean; error?: string }>;
+  deleteStore: (storeId: string) => Promise<{ success: boolean; message?: string; lojaNome?: string }>;
   updateStoreUserLimit: (storeId: string, newLimit: number) => Promise<{ success: boolean; error?: string }>;
   employees: StoreEmployee[];
   refreshEmployees: (lojaId?: string) => Promise<void>;
@@ -342,6 +345,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return res;
   };
 
+  const deleteStore = async (storeId: string): Promise<{ success: boolean; message?: string; lojaNome?: string }> => {
+    const res = await deleteStoreFromDatabase(storeId, currentUser?.matricula || operator.matricula);
+    if (res.success) {
+      setStores(prev => prev.filter(s => s.id !== storeId));
+      setEmployees(prev => prev.filter(e => e.loja_id !== storeId));
+      await refreshStores();
+
+      const activeStoreId = currentUser?.loja_id || operator.loja_id;
+      if (isAuthenticated && activeStoreId === storeId && !isSaasAdmin) {
+        logout();
+        setDisconnectedMessage(`A loja ${res.lojaNome || storeId} foi excluída e todas as sessões foram encerradas.`);
+      }
+    }
+    return res;
+  };
+
   const updateStoreUserLimit = async (storeId: string, newLimit: number) => {
     const res = await updateStoreUserLimitInDatabase(storeId, newLimit);
     if (res.success) {
@@ -453,6 +472,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (result.token) {
         saveStoredData(STORAGE_KEYS.AUTH_TOKEN, result.token);
       }
+      // Isolamento estrito de estoque ao trocar de usuário/loja:
+      // limpa o estado e cache anterior antes de carregar o estoque da loja logada.
+      setProducts([]);
+      saveStoredData(STORAGE_KEYS.PRODUCTS, []);
+
       setOperator(prev => ({
         ...prev,
         id: result.user!.id,
@@ -461,8 +485,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         matricula: result.user!.matricula,
         role: result.user!.cargo,
         cargoCompleto: result.user!.cargoCompleto,
-        store: result.user!.loja_nome || prev.store,
-        loja_id: result.user!.loja_id || prev.loja_id,
+        store: result.user!.loja_nome || '',
+        loja_id: result.user!.loja_id || '',
         setor_restrito: result.user!.setor,
       }));
       triggerScanBeep(true);
@@ -549,9 +573,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       performDisconnect(comp);
     });
 
+    // 3b. Assinatura em Tempo Real para exclusão da loja ou revogação de sessão ativa
+    const targetLojaId = currentUser.loja_id || operator.loja_id;
+    const unsubscribeStoreDeletion = subscribeToStoreDeletionRealtime(
+      targetLojaId,
+      currentUser.matricula,
+      (comp) => {
+        performDisconnect(comp);
+      }
+    );
+
     // 4. Ouve alterações no localStorage (ex: gerente desativou ou excluiu funcionário em outra aba)
     const handleStorageEvent = (e: StorageEvent) => {
-      if (e.key === 'superpwa_employees_data') {
+      if (e.key === 'superpwa_employees_data' || e.key === 'superpwa_stores_data') {
         checkActive();
       }
     };
@@ -563,6 +597,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       isSubscribed = false;
       clearInterval(timer);
       unsubscribeRealtime();
+      unsubscribeStoreDeletion();
       window.removeEventListener('storage', handleStorageEvent);
       window.removeEventListener('focus', checkActive);
     };
@@ -573,7 +608,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     void logoutUser();
     setCurrentUser(null);
     setIsAuthenticated(false);
+    setProducts([]);
+    setValidities([]);
     setAudits([]);
+    setNotifications([]);
+    setOfflineQueue([]);
+    localStorage.removeItem(STORAGE_KEYS.PRODUCTS);
+    localStorage.removeItem(STORAGE_KEYS.VALIDITIES);
+    localStorage.removeItem(STORAGE_KEYS.AUDITS);
+    localStorage.removeItem(STORAGE_KEYS.NOTIFICATIONS);
+    localStorage.removeItem(STORAGE_KEYS.OFFLINE_QUEUE);
     localStorage.removeItem(STORAGE_KEYS.AUTH_USER);
     localStorage.removeItem(STORAGE_KEYS.AUTH_TOKEN);
     setActiveTab('inicio');
@@ -605,19 +649,32 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [lastDatabaseSyncTime, setLastDatabaseSyncTime] = useState<string | null>(null);
 
   const refreshProductsFromDatabase = useCallback(async () => {
-    if (!isSupabaseConfigured()) return;
+    const lojaId = currentUser?.loja_id || operator.loja_id;
+    if (!lojaId) {
+      setProducts([]);
+      saveStoredData(STORAGE_KEYS.PRODUCTS, []);
+      return;
+    }
+
+    if (!isSupabaseConfigured()) {
+      const localScoped = loadStoredData<Product[]>(`superpwa_products_${lojaId}`, []);
+      setProducts(localScoped.filter(p => !p.loja_id || p.loja_id === lojaId));
+      return;
+    }
+
     setIsSyncingWithDatabase(true);
     try {
-      const lojaId = operator.loja_id || currentUser?.loja_id;
       const dbProducts = await fetchProductsFromSupabase(lojaId);
       if (dbProducts !== null) {
         if (dbProducts.length === 0) {
-          // Se no banco de dados não possuir estoque (0 produtos), limpa o local storage e o state!
+          // Se no banco de dados a loja não possuir estoque (0 produtos), limpa o local storage e o state!
           setProducts([]);
           saveStoredData(STORAGE_KEYS.PRODUCTS, []);
+          saveStoredData(`superpwa_products_${lojaId}`, []);
         } else {
           setProducts(dbProducts);
           saveStoredData(STORAGE_KEYS.PRODUCTS, dbProducts);
+          saveStoredData(`superpwa_products_${lojaId}`, dbProducts);
         }
         const now = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
         setLastDatabaseSyncTime(now);
@@ -659,14 +716,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   }, [isAuthenticated, refreshProductsFromDatabase, refreshAuditsFromDatabase]);
 
-  // Assinatura em Tempo Real (Realtime Channel) para multi-sessões
-  // Aplica apenas o delta da linha alterada, evitando recarregar a loja inteira.
+  // Assinatura em Tempo Real (Realtime Channel) para multi-sessões isolada por loja
+  // Aplica apenas o delta da linha alterada da loja ativa, evitando recarregar a loja inteira.
   useEffect(() => {
     if (!isAuthenticated || !isSupabaseConfigured()) return;
-    const unsubscribe = subscribeToProductsRealtime((event) => {
-      const lojaId = operator.loja_id || currentUser?.loja_id || '';
+    const lojaId = currentUser?.loja_id || operator.loja_id || '';
+    if (!lojaId) return;
 
+    const unsubscribe = subscribeToProductsRealtime(lojaId, (event) => {
       if (event.type === 'DELETE') {
+        const oldLoja = event.oldRow?.loja_id ? String(event.oldRow.loja_id) : '';
+        if (oldLoja && oldLoja !== lojaId) return;
+
         const removedId = event.oldRow?.id ? String(event.oldRow.id) : '';
         if (!removedId) {
           refreshProductsFromDatabase();
@@ -675,6 +736,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setProducts(prev => {
           const next = prev.filter(p => p.id !== removedId);
           saveStoredData(STORAGE_KEYS.PRODUCTS, next);
+          saveStoredData(`superpwa_products_${lojaId}`, next);
           return next;
         });
         return;
@@ -685,9 +747,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return;
       }
 
-      // Linhas de outra loja não devem entrar na lista local.
-      const rowLoja = event.row.loja_id ? String(event.row.loja_id) : lojaId;
-      if (lojaId && rowLoja && rowLoja !== lojaId) return;
+      // Garantia estrita: linhas sem loja_id ou de outra loja não entram na lista local.
+      const rowLoja = event.row.loja_id ? String(event.row.loja_id) : '';
+      if (!rowLoja || rowLoja !== lojaId) return;
 
       const mapped = mapProductRow(event.row, lojaId);
       setProducts(prev => {
@@ -696,6 +758,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           ? prev.map((p, i) => (i === index ? mapped : p))
           : [mapped, ...prev];
         saveStoredData(STORAGE_KEYS.PRODUCTS, next);
+        saveStoredData(`superpwa_products_${lojaId}`, next);
         return next;
       });
     });
@@ -856,7 +919,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           : p
       )
     );
-    lockProductInSupabase(productId, lockedByName);
+    lockProductInSupabase(productId, lockedByName, currentUser?.loja_id || operator.loja_id);
     return true;
   };
 
@@ -873,7 +936,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           : p
       )
     );
-    unlockProductInSupabase(productId);
+    unlockProductInSupabase(productId, currentUser?.loja_id || operator.loja_id);
   };
 
   const updateProductDetails = async (
@@ -894,7 +957,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       })
     );
 
-    const res = await updateProductInSupabase(productId, updates);
+    const res = await updateProductInSupabase(productId, updates, currentUser?.loja_id || operator.loja_id);
     return res;
   };
 
@@ -1386,6 +1449,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         stores,
         refreshStores,
         addStore,
+        deleteStore,
         updateStoreUserLimit,
         employees,
         refreshEmployees,

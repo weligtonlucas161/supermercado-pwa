@@ -96,7 +96,7 @@ export function getStoredStores(): Store[] {
     const raw = localStorage.getItem(LOCAL_STORAGE_STORES_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed) && parsed.length > 0) {
+      if (Array.isArray(parsed)) {
         return parsed;
       }
     }
@@ -528,6 +528,78 @@ export function subscribeToUserStatusRealtime(
 }
 
 /**
+ * Assina o canal Realtime para detectar exclusão ou encerramento imediato da loja do usuário
+ * (via postgres_changes na tabela 'lojas' / 'sessoes_ativas' e via broadcast instantâneo).
+ */
+export function subscribeToStoreDeletionRealtime(
+  lojaId: string | undefined,
+  matricula: string | undefined,
+  onStoreDeleted: (storeName?: string) => void
+): () => void {
+  if (!client || !isSupabaseConfigured()) return () => {};
+  const cleanLojaId = lojaId ? sanitizeIdentifier(lojaId, 64) : '';
+  const cleanMatricula = matricula ? sanitizeIdentifier(matricula, 64).toLowerCase() : '';
+  if (!cleanLojaId) return () => {};
+
+  const supabaseClient = client;
+
+  try {
+    const channel = supabaseClient
+      .channel(`realtime_store_lifecycle_${cleanLojaId}`)
+      .on(
+        'postgres_changes',
+        { event: 'DELETE', schema: 'public', table: 'lojas' },
+        (payload) => {
+          const oldRec = payload.old as Record<string, unknown> | null;
+          if (oldRec && String(oldRec.id || '') === cleanLojaId) {
+            onStoreDeleted(oldRec.nome_loja ? String(oldRec.nome_loja) : 'Sua Loja');
+          }
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'lojas' },
+        (payload) => {
+          const newRec = payload.new as Record<string, unknown> | null;
+          if (newRec && String(newRec.id || '') === cleanLojaId && newRec.ativa === false) {
+            onStoreDeleted(newRec.nome_loja ? String(newRec.nome_loja) : 'Sua Loja');
+          }
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: 'DELETE', schema: 'public', table: 'sessoes_ativas' },
+        (payload) => {
+          const oldRec = payload.old as Record<string, unknown> | null;
+          if (!oldRec) return;
+          const rowLoja = String(oldRec.loja_id || '');
+          const rowMat = String(oldRec.matricula || '').trim().toLowerCase();
+          if ((rowLoja && rowLoja === cleanLojaId) || (cleanMatricula && rowMat === cleanMatricula)) {
+            onStoreDeleted('Sua Loja');
+          }
+        }
+      )
+      .on('broadcast', { event: 'store_deleted' }, (payload: { payload?: { lojaId?: string; lojaNome?: string } }) => {
+        if (payload?.payload?.lojaId === cleanLojaId) {
+          onStoreDeleted(payload.payload.lojaNome || 'Sua Loja');
+        }
+      })
+      .subscribe();
+
+    return () => {
+      try {
+        supabaseClient.removeChannel(channel);
+      } catch {
+        // ignore
+      }
+    };
+  } catch (err) {
+    console.warn('Aviso ao registrar canal realtime de ciclo de vida da loja:', err);
+    return () => {};
+  }
+}
+
+/**
  * Autenticação Segura por Matrícula e Senha (Script 03 & SaaS Admin)
  */
 export async function loginUser(matricula: string, senha: string): Promise<LoginResult> {
@@ -839,7 +911,7 @@ export async function fetchStoresFromDatabase(): Promise<Store[]> {
       .select('*')
       .order('nome_loja', { ascending: true });
 
-    if (!error && data && data.length > 0) {
+    if (!error && data) {
       const mapped: Store[] = data.map((d: Record<string, unknown>) => ({
         id: sanitizeIdentifier(d.id),
         nome_loja: sanitizeText(d.nome_loja || 'Loja', 120),
@@ -996,6 +1068,114 @@ export async function updateStoreUserLimitInDatabase(
   }
 
   return { success: true };
+}
+
+/**
+ * Exclui definitivamente uma loja no banco de dados Supabase e localmente,
+ * removendo usuários, produtos, auditorias e encerrando todas as sessões ativas da unidade.
+ */
+export async function deleteStoreFromDatabase(
+  storeId: string,
+  solicitanteMatricula?: string
+): Promise<{ success: boolean; message?: string; lojaNome?: string }> {
+  const cleanStoreId = sanitizeIdentifier(storeId, 64);
+  if (!cleanStoreId) {
+    return { success: false, message: 'ID da loja inválido.' };
+  }
+
+  let deletedStoreName = '';
+
+  // 1. Executa exclusão atômica via RPC no Supabase
+  if (client && isSupabaseConfigured()) {
+    try {
+      const { data, error } = await client.rpc('rpc_excluir_loja', {
+        p_loja_id: cleanStoreId,
+        p_solicitante_matricula: solicitanteMatricula ? sanitizeIdentifier(solicitanteMatricula, 64) : null,
+      });
+
+      if (error) {
+        console.error('Erro ao excluir loja via RPC:', error.message);
+        return { success: false, message: error.message };
+      }
+
+      const res = data as { success?: boolean; message?: string; loja_nome?: string } | null;
+      if (res && res.success === false) {
+        return { success: false, message: res.message || 'Falha ao excluir loja no servidor.' };
+      }
+
+      deletedStoreName = res?.loja_nome || '';
+
+      // 2. Emite broadcast instantâneo para desconectar abas e dispositivos conectados nessa loja
+      try {
+        const broadcastChannel = client.channel(`realtime_store_lifecycle_${cleanStoreId}`);
+        await broadcastChannel.subscribe(async (status) => {
+          if (status === 'SUBSCRIBED') {
+            try {
+              await broadcastChannel.send({
+                type: 'broadcast',
+                event: 'store_deleted',
+                payload: { lojaId: cleanStoreId, lojaNome: deletedStoreName },
+              });
+            } catch {
+              // ignore
+            } finally {
+              client?.removeChannel(broadcastChannel);
+            }
+          }
+        });
+      } catch {
+        // ignore broadcast errors
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return { success: false, message: msg || 'Falha de conexão com o banco.' };
+    }
+  }
+
+  // 3. Limpeza completa do cache local (lojas, funcionários, produtos, avarias, chats)
+  if (typeof window !== 'undefined') {
+    try {
+      const localStores = getStoredStores();
+      const targetStore = localStores.find(s => s.id === cleanStoreId);
+      if (!deletedStoreName && targetStore) {
+        deletedStoreName = targetStore.nome_loja;
+      }
+      const remainingStores = localStores.filter(s => s.id !== cleanStoreId);
+      localStorage.setItem(LOCAL_STORAGE_STORES_KEY, JSON.stringify(remainingStores));
+
+      const localEmployees = getStoredEmployees();
+      const remainingEmployees = localEmployees.filter(e => e.loja_id !== cleanStoreId);
+      localStorage.setItem(LOCAL_STORAGE_EMPLOYEES_KEY, JSON.stringify(remainingEmployees));
+
+      localStorage.removeItem(`superpwa_products_${cleanStoreId}`);
+      const rawProducts = localStorage.getItem('superpwa_products_v1');
+      if (rawProducts) {
+        const parsed = JSON.parse(rawProducts);
+        if (Array.isArray(parsed)) {
+          const filtered = parsed.filter((p: { loja_id?: string }) => p.loja_id !== cleanStoreId);
+          localStorage.setItem('superpwa_products_v1', JSON.stringify(filtered));
+        }
+      }
+
+      const rawAuth = localStorage.getItem('superpwa_auth_user_v1');
+      if (rawAuth) {
+        const authUser = JSON.parse(rawAuth) as { loja_id?: string };
+        if (authUser?.loja_id === cleanStoreId) {
+          localStorage.removeItem('superpwa_auth_user_v1');
+          localStorage.removeItem('superpwa_auth_token_v1');
+        }
+      }
+    } catch (err) {
+      console.warn('Aviso ao limpar cache local da loja excluída:', err);
+    }
+  }
+
+  invalidateProductIndex();
+
+  return {
+    success: true,
+    lojaNome: deletedStoreName || cleanStoreId,
+  };
 }
 
 export interface SaasTelemetryData {
@@ -1400,7 +1580,8 @@ export async function uploadEncryptedProductsRealtime(
 
     if (typeof window !== 'undefined') {
       try {
-        const rawProds = localStorage.getItem('superpwa_products_v1');
+        const scopedKey = `superpwa_products_${lojaId || 'default'}`;
+        const rawProds = localStorage.getItem(scopedKey);
         const existing: Product[] = rawProds ? JSON.parse(rawProds) : [];
         const existingMap = new Map<string, Product>();
         existing.forEach(p => existingMap.set(p.ean, p));
@@ -1422,6 +1603,7 @@ export async function uploadEncryptedProductsRealtime(
               category: cleanSetor,
               reducedCode: cleanReduced || cur.reducedCode,
               supplierCode: cleanSupplier || cur.supplierCode,
+              loja_id: lojaId,
               lastUpdated: new Date().toISOString(),
             });
           } else {
@@ -1443,6 +1625,7 @@ export async function uploadEncryptedProductsRealtime(
         });
 
         const merged = Array.from(existingMap.values());
+        localStorage.setItem(scopedKey, JSON.stringify(merged));
         localStorage.setItem('superpwa_products_v1', JSON.stringify(merged));
       } catch (err) {
         console.warn('Erro ao gravar produtos no banco local:', err);
@@ -1687,14 +1870,20 @@ export function mapProductRow(
 }
 
 export async function fetchProductsFromSupabase(lojaId?: string): Promise<Product[]> {
+  const cleanLojaId = lojaId ? sanitizeIdentifier(lojaId, 64) : '';
+  if (!cleanLojaId) {
+    return [];
+  }
+
   if (!client || !isSupabaseConfigured()) {
     if (typeof window !== 'undefined') {
       try {
-        const raw = localStorage.getItem('superpwa_products_v1');
+        const scopedKey = `superpwa_products_${cleanLojaId}`;
+        const raw = localStorage.getItem(scopedKey) || localStorage.getItem('superpwa_products_v1');
         if (raw) {
           const parsed = JSON.parse(raw);
           if (Array.isArray(parsed)) {
-            return parsed;
+            return parsed.filter((p: { loja_id?: string }) => p.loja_id === cleanLojaId);
           }
         }
       } catch {
@@ -1705,66 +1894,20 @@ export async function fetchProductsFromSupabase(lojaId?: string): Promise<Produc
   }
 
   try {
-    const cleanLojaId = lojaId ? sanitizeIdentifier(lojaId, 64) : '';
-
     // Projeção explícita: evita trafegar colunas desnecessárias (o payload
     // encolhe de forma significativa em catálogos grandes).
     const PRODUCT_COLUMNS =
       'id, nome, codigo_barras, codigo_barras_secundario, plu, codigo_fornecedor, setor, quantidade, data_vencimento, loja_id, is_encrypted, ciphertext, iv, is_locked_for_edit, locked_by, locked_at, criado_em';
 
-    let data: Record<string, unknown>[] | null = null;
+    // Busca estritamente pela loja específica (paginado em blocos), garantindo
+    // isolamento total de estoque entre lojas.
+    const data = await fetchPaginated(client, 'produtos', PRODUCT_COLUMNS, cleanLojaId);
 
-    // 1. Tenta buscar pela loja específica se informada (paginado em blocos)
-    if (cleanLojaId) {
-      const res = await fetchPaginated(client, 'produtos', PRODUCT_COLUMNS, cleanLojaId);
-      if (res.length > 0) {
-        data = res;
-      }
-    }
-
-    // 2. Fallback: se não passou loja ou não retornou nada, busca os produtos
-    //    disponíveis (limitado para não arrastar a base inteira).
     if (!data || data.length === 0) {
-      const globalRes = await client
-        .from('produtos')
-        .select(PRODUCT_COLUMNS)
-        .order('criado_em', { ascending: false })
-        .limit(FALLBACK_PRODUCT_LIMIT);
-
-      if (globalRes.data && globalRes.data.length > 0) {
-        data = globalRes.data;
-      }
-    }
-
-    // 3. Fallback adicional em 'produtos_catalogo_universal' se a tabela 'produtos' estiver vazia
-    if (!data || data.length === 0) {
-      const catRes = await client
-        .from('produtos_catalogo_universal')
-        .select('codigo_barras, nome, ean_hash')
-        .limit(100);
-
-      if (catRes.data && catRes.data.length > 0) {
-        return catRes.data.map((row: Record<string, unknown>, idx: number) => {
-          const rawNome = String(row.nome || '');
-          const rawEan = String(row.codigo_barras || '');
-          return {
-            id: `cat-${idx}-${sanitizeBarcode(decryptSingleField(rawEan))}`,
-            ean: sanitizeBarcode(decryptSingleField(rawEan)),
-            name: decryptSingleField(rawNome) || 'Produto Universal',
-            category: 'MERCEARIA',
-            stock: 0,
-            minStock: 10,
-            price: 0,
-            location: 'Gôndola - Catálogo',
-            loja_id: cleanLojaId,
-            isEncryptedInStorage: isEncrypted(rawNome),
-          };
-        });
-      }
       return [];
     }
 
-    // 4. Mapeamento com descriptografia pontual na RAM para dados AES-256
+    // Mapeamento com descriptografia pontual na RAM para dados AES-256
     return data.map((row: Record<string, unknown>) => mapProductRow(row, cleanLojaId));
   } catch (err) {
     console.warn('Erro ao consultar produtos no Supabase:', err);
@@ -1784,23 +1927,31 @@ export interface ProductRealtimeEvent {
 
 /**
  * Inscreve no canal Realtime do Supabase para atualizar todas as sessões conectadas
- * assim que um produto for criado, alterado ou excluído.
+ * daquela loja específica assim que um produto for criado, alterado ou excluído.
  */
 export function subscribeToProductsRealtime(
+  lojaId: string | undefined,
   onChanged: (event: ProductRealtimeEvent) => void
 ): () => void {
   if (!client) return () => {};
+  const cleanLojaId = lojaId ? sanitizeIdentifier(lojaId, 64) : '';
+  if (!cleanLojaId) return () => {};
 
   try {
     const channel = client
-      .channel('realtime_produtos_sync')
+      .channel(`realtime_produtos_sync_${cleanLojaId}`)
       .on(
         'postgres_changes',
-        { event: '*', schema: 'public', table: 'produtos' },
+        {
+          event: '*',
+          schema: 'public',
+          table: 'produtos',
+          filter: `loja_id=eq.${cleanLojaId}`,
+        },
         (payload: { eventType: string; new: Record<string, unknown>; old: Record<string, unknown> }) => {
           // O índice determinístico e o catálogo podem ter mudado: invalida
           // para que a próxima importação use dados frescos.
-          invalidateProductIndex();
+          invalidateProductIndex(cleanLojaId);
           invalidateCatalogIndex();
 
           const type = (
@@ -1879,13 +2030,17 @@ export async function syncOfflineQueueToSupabase(
       }
     }
 
-    // 1) Atualizações de estoque: uma leitura + um upsert por lote.
+    // 1) Atualizações de estoque: uma leitura + um upsert por lote (isolado por loja_id).
     if (stockUpdates.length > 0) {
       const ids = stockUpdates.map(u => u.id);
-      const { data: currentRows } = await client
+      let query = client
         .from('produtos')
         .select('id, nome, codigo_barras, setor, quantidade, data_vencimento, loja_id')
         .in('id', ids);
+      if (cleanLojaId) {
+        query = query.eq('loja_id', cleanLojaId);
+      }
+      const { data: currentRows } = await query;
 
       const byId = new Map<string, Record<string, unknown>>(
         ((currentRows || []) as unknown as Record<string, unknown>[]).map(r => [String(r.id), r])
@@ -3527,13 +3682,15 @@ export function subscribeToAvariasRealtime(
 
 export async function lockProductInSupabase(
   productId: string,
-  lockedBy: string
+  lockedBy: string,
+  lojaId?: string
 ): Promise<{ success: boolean }> {
   const cleanId = sanitizeIdentifier(productId, 64);
+  const cleanLojaId = lojaId ? sanitizeIdentifier(lojaId, 64) : '';
   if (!client || !isSupabaseConfigured() || !cleanId) return { success: true };
 
   try {
-    await client
+    let query = client
       .from('produtos')
       .update({
         is_locked_for_edit: true,
@@ -3541,6 +3698,10 @@ export async function lockProductInSupabase(
         locked_at: new Date().toISOString(),
       })
       .eq('id', cleanId);
+    if (cleanLojaId) {
+      query = query.eq('loja_id', cleanLojaId);
+    }
+    await query;
     return { success: true };
   } catch (err) {
     console.warn('[ProductLock] Erro ao bloquear produto:', err);
@@ -3548,12 +3709,16 @@ export async function lockProductInSupabase(
   }
 }
 
-export async function unlockProductInSupabase(productId: string): Promise<{ success: boolean }> {
+export async function unlockProductInSupabase(
+  productId: string,
+  lojaId?: string
+): Promise<{ success: boolean }> {
   const cleanId = sanitizeIdentifier(productId, 64);
+  const cleanLojaId = lojaId ? sanitizeIdentifier(lojaId, 64) : '';
   if (!client || !isSupabaseConfigured() || !cleanId) return { success: true };
 
   try {
-    await client
+    let query = client
       .from('produtos')
       .update({
         is_locked_for_edit: false,
@@ -3561,6 +3726,10 @@ export async function unlockProductInSupabase(productId: string): Promise<{ succ
         locked_at: null,
       })
       .eq('id', cleanId);
+    if (cleanLojaId) {
+      query = query.eq('loja_id', cleanLojaId);
+    }
+    await query;
     return { success: true };
   } catch (err) {
     console.warn('[ProductLock] Erro ao desbloquear produto:', err);
@@ -3570,9 +3739,11 @@ export async function unlockProductInSupabase(productId: string): Promise<{ succ
 
 export async function updateProductInSupabase(
   productId: string,
-  updates: Partial<Product>
+  updates: Partial<Product>,
+  lojaId?: string
 ): Promise<{ success: boolean; error?: string }> {
   const cleanId = sanitizeIdentifier(productId, 64);
+  const cleanLojaId = lojaId ? sanitizeIdentifier(lojaId, 64) : '';
   if (!cleanId) return { success: false, error: 'ID de produto inválido.' };
   if (!client || !isSupabaseConfigured()) return { success: true };
 
@@ -3613,10 +3784,16 @@ export async function updateProductInSupabase(
       payload.codigo_fornecedor = cleanForn ? encryptSingleField(cleanForn) : null;
     }
 
-    const { error } = await client
+    let query = client
       .from('produtos')
       .update(payload)
       .eq('id', cleanId);
+
+    if (cleanLojaId) {
+      query = query.eq('loja_id', cleanLojaId);
+    }
+
+    const { error } = await query;
 
     if (error) throw error;
     return { success: true };

@@ -29,7 +29,8 @@ import {
   Activity,
   Package,
   RefreshCw,
-  Radio
+  Radio,
+  Trash2
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { Store, StoreEmployee } from '../../types';
@@ -47,6 +48,7 @@ export const AdminSaasScreen: React.FC = () => {
     logout, 
     stores, 
     addStore, 
+    deleteStore,
     updateStoreUserLimit,
     employees, 
     addOrUpdateEmployee, 
@@ -54,6 +56,9 @@ export const AdminSaasScreen: React.FC = () => {
     darkMode,
     isDesktop 
   } = useApp();
+
+  const [isDeletingStore, setIsDeletingStore] = useState(false);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
   const [activeTab, setActiveTab] = useState<'lojas' | 'gerentes' | 'servidor'>('lojas');
 
@@ -1078,19 +1083,71 @@ export const AdminSaasScreen: React.FC = () => {
                 </div>
               </div>
 
+              {/* Confirmação de Exclusão da Loja */}
+              {confirmDeleteId === selectedStoreForDetails.id && (
+                <div className="p-3.5 rounded-2xl bg-rose-500/10 border-2 border-rose-500/30 space-y-2 animate-in zoom-in-95 duration-150">
+                  <div className="flex items-center gap-2 text-rose-600 dark:text-rose-400 font-extrabold text-xs">
+                    <Trash2 className="w-4 h-4 shrink-0" />
+                    <span>Deseja realmente excluir permanentemente a loja {selectedStoreForDetails.nome_loja}?</span>
+                  </div>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
+                    Esta ação removerá do servidor todos os produtos em estoque, colaboradores, auditorias e encerrará imediatamente todas as conexões ativas.
+                  </p>
+                  <div className="flex items-center justify-end gap-2 pt-1">
+                    <button
+                      type="button"
+                      disabled={isDeletingStore}
+                      onClick={() => setConfirmDeleteId(null)}
+                      className="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-bold transition"
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      type="button"
+                      disabled={isDeletingStore}
+                      onClick={async () => {
+                        setIsDeletingStore(true);
+                        try {
+                          await deleteStore(selectedStoreForDetails.id);
+                          setSelectedStoreForDetails(null);
+                          setLocalStoreEmps([]);
+                          setStoreActiveSessions([]);
+                          setConfirmDeleteId(null);
+                          loadTelemetry();
+                        } catch (err) {
+                          console.error('Erro ao excluir loja:', err);
+                        } finally {
+                          setIsDeletingStore(false);
+                        }
+                      }}
+                      className="px-3.5 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold flex items-center gap-1.5 transition disabled:opacity-50"
+                    >
+                      {isDeletingStore ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+                      <span>{isDeletingStore ? 'Excluindo...' : 'Sim, Excluir Definitivamente'}</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+
               {/* Rodapé do Modal */}
               <div className="pt-3 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between">
-                <span className="text-[11px] text-slate-400 font-semibold">
-                  Total de {storeEmps.length} colaboradores na base da unidade • {storeActiveSessions.length} conectados
-                </span>
+                <button
+                  type="button"
+                  onClick={() => setConfirmDeleteId(selectedStoreForDetails.id)}
+                  className="px-3 py-2 rounded-xl text-xs font-bold text-rose-600 hover:text-rose-700 hover:bg-rose-50 dark:hover:bg-rose-950/30 transition flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>Excluir Loja</span>
+                </button>
                 <button
                   type="button"
                   onClick={() => {
                     setSelectedStoreForDetails(null);
                     setLocalStoreEmps([]);
                     setStoreActiveSessions([]);
+                    setConfirmDeleteId(null);
                   }}
-                  className="px-5 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-extrabold text-xs shadow-md shadow-rose-600/20 transition cursor-pointer"
+                  className="px-5 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-extrabold text-xs shadow-md transition cursor-pointer"
                 >
                   Fechar Detalhes
                 </button>
