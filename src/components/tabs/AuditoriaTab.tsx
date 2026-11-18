@@ -95,6 +95,7 @@ export const AuditoriaTab: React.FC = () => {
     operator,
     darkMode,
     openScanner,
+    isScannerOpen,
     storeName,
     isInventoryLocked,
     setIsInventoryLocked,
@@ -134,6 +135,41 @@ export const AuditoriaTab: React.FC = () => {
   const [sessionIniciadaPor, setSessionIniciadaPor] = useState<{ nome: string; matricula: string } | null>(null);
   const [sessionParticipants, setSessionParticipants] = useState<string[]>([]);
   const [showStartSessionPopup, setShowStartSessionPopup] = useState<boolean>(false);
+
+  // Determina se há uma sessão de auditoria ativa na tela
+  const isSessionActive = isAuditing && (
+    (activeInterface === 'presenca' && sessionTipo === 'PRESENCA') ||
+    (activeInterface === 'inventario' && sessionTipo === 'INVENTARIO')
+  );
+  const isSessionActiveRef = useRef<boolean>(isSessionActive);
+  useEffect(() => {
+    isSessionActiveRef.current = isSessionActive;
+  }, [isSessionActive]);
+
+  // Campo de texto oculto para coletores com bipador embutido (Keyboard Wedge / HID)
+  const coletorInputRef = useRef<HTMLInputElement | null>(null);
+  const [coletorInputValue, setColetorInputValue] = useState<string>('');
+  const coletorBufferTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Mantém o campo oculto focado para capturar bipagens dos coletores
+  const focusColetorInput = useCallback(() => {
+    if (!isSessionActiveRef.current) return;
+    if (pendingInventoryCountRef.current) return;
+    if (isScannerOpen) return;
+
+    const activeEl = document.activeElement;
+    if (
+      activeEl &&
+      activeEl !== coletorInputRef.current &&
+      (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA')
+    ) {
+      return;
+    }
+
+    if (coletorInputRef.current && document.activeElement !== coletorInputRef.current) {
+      coletorInputRef.current.focus({ preventScroll: true });
+    }
+  }, [isScannerOpen]);
 
   // Estado de digitação de quantidade física ao bipar item no Inventário Cego
   const [pendingInventoryCountItem, setPendingInventoryCountItem] = useState<{
@@ -488,10 +524,10 @@ export const AuditoriaTab: React.FC = () => {
   }, [operator.loja_id, operator.name, operator.code, operator.matricula, sessionIniciadaPor?.nome, refreshRemoteSessions, syncSessionBips, triggerBorderFlash, triggerOfflineAlert, triggerJoinAlert, handleRemoteSessionClosed]);
 
   // =========================================================================
-  // PROCESSAMENTO CONTÍNUO DE CÓDIGO DE BARRAS EXCLUSIVAMENTE VIA CÂMERA
+  // PROCESSAMENTO DE CÓDIGO DE BARRAS (CÂMERA E BIPADOR EMBUTIDO DO COLETOR)
   // Presença: confirma imediatamente | Inventário Cego: solicita quantidade física
   // =========================================================================
-  const processContinuousBarcode = useCallback((scannedCode: string) => {
+  const processContinuousBarcode = useCallback((scannedCode: string, scanSource: 'camera' | 'coletor' = 'camera') => {
     const cleanEan = scannedCode.replace(/[^0-9A-Za-z]/g, '').trim();
     if (!cleanEan) return;
 
@@ -544,7 +580,7 @@ export const AuditoriaTab: React.FC = () => {
         return;
       }
 
-      // PRESENÇA: confirma imediatamente via leitura da câmera
+      // PRESENÇA: confirma imediatamente via leitura óptica ou coletor
       const newPendentes = [...currentPendentes];
       newPendentes.splice(pendingIndex, 1);
       pendentesRef.current = newPendentes;
@@ -587,7 +623,9 @@ export const AuditoriaTab: React.FC = () => {
       triggerBorderFlash('green');
       setLastBipFeedback({
         type: 'success',
-        message: `✓ Confirmado via câmera: "${foundProduct.name}"`,
+        message: scanSource === 'coletor'
+          ? `✓ Confirmado via bipador: "${foundProduct.name}"`
+          : `✓ Confirmado via câmera: "${foundProduct.name}"`,
         ean: foundProduct.ean,
       });
       return;
@@ -631,6 +669,140 @@ export const AuditoriaTab: React.FC = () => {
       ean: cleanEan,
     });
   }, [operator.name, operator.loja_id, operator.code, operator.matricula, operator.role, operator.setor_restrito, sessionSetor, triggerBorderFlash]);
+
+  // Processamento e submissão do código capturado pelo campo oculto do coletor
+  const handleProcessColetorCode = useCallback((rawCode: string) => {
+    const clean = rawCode.trim();
+    if (clean.length >= 3) {
+      processContinuousBarcode(clean, 'coletor');
+    }
+    setColetorInputValue('');
+  }, [processContinuousBarcode]);
+
+  const handleColetorInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = e.target.value;
+    setColetorInputValue(val);
+
+    if (coletorBufferTimeoutRef.current) {
+      clearTimeout(coletorBufferTimeoutRef.current);
+    }
+
+    // Suporte para coletores sem sufixo Enter: processa após 180ms de inatividade
+    if (val.trim().length >= 3) {
+      coletorBufferTimeoutRef.current = setTimeout(() => {
+        handleProcessColetorCode(val);
+      }, 180);
+    }
+  };
+
+  const handleColetorInputKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter' || e.key === 'Tab') {
+      e.preventDefault();
+      e.stopPropagation();
+      if (coletorBufferTimeoutRef.current) {
+        clearTimeout(coletorBufferTimeoutRef.current);
+      }
+      const val = (e.currentTarget.value || coletorInputValue).trim();
+      if (val) {
+        handleProcessColetorCode(val);
+      }
+    }
+  };
+
+  // Mantém o campo oculto do coletor focado sempre que a sessão estiver ativa
+  useEffect(() => {
+    if (isSessionActive && !pendingInventoryCountItem && !isScannerOpen) {
+      const timer = setTimeout(focusColetorInput, 100);
+      return () => clearTimeout(timer);
+    }
+  }, [isSessionActive, pendingInventoryCountItem, isScannerOpen, focusColetorInput]);
+
+  // Restaura foco no input oculto ao tocar na tela (sem roubar foco de botões/modais)
+  useEffect(() => {
+    if (!isSessionActive) return;
+
+    const handleDocumentClick = (e: MouseEvent) => {
+      if (pendingInventoryCountRef.current || isScannerOpen) return;
+      const target = e.target as HTMLElement | null;
+      if (!target) return;
+
+      if (
+        target.tagName === 'INPUT' ||
+        target.tagName === 'TEXTAREA' ||
+        target.tagName === 'SELECT' ||
+        target.closest('button') ||
+        target.closest('a') ||
+        target.closest('input') ||
+        target.closest('textarea')
+      ) {
+        return;
+      }
+
+      setTimeout(() => {
+        if (!pendingInventoryCountRef.current && isSessionActiveRef.current && !isScannerOpen) {
+          focusColetorInput();
+        }
+      }, 80);
+    };
+
+    document.addEventListener('click', handleDocumentClick);
+    return () => {
+      document.removeEventListener('click', handleDocumentClick);
+    };
+  }, [isSessionActive, isScannerOpen, focusColetorInput]);
+
+  // Listener global de contingência para coletores (caso o foco seja perdido antes do bipe)
+  useEffect(() => {
+    if (!isSessionActive) return;
+
+    let buffer = '';
+    let lastKeyTime = 0;
+
+    const handleGlobalKeyDown = (e: KeyboardEvent) => {
+      if (pendingInventoryCountRef.current || isScannerOpen) return;
+      const target = e.target as HTMLElement | null;
+      if (
+        target &&
+        target !== coletorInputRef.current &&
+        (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')
+      ) {
+        return;
+      }
+
+      if (document.activeElement === coletorInputRef.current) {
+        return;
+      }
+
+      const currentTime = Date.now();
+
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        if (buffer.trim().length >= 3) {
+          e.preventDefault();
+          handleProcessColetorCode(buffer);
+          buffer = '';
+        }
+        return;
+      }
+
+      if (e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey) {
+        if (currentTime - lastKeyTime > 300) {
+          buffer = '';
+        }
+        buffer += e.key;
+        lastKeyTime = currentTime;
+
+        if (coletorInputRef.current) {
+          coletorInputRef.current.focus({ preventScroll: true });
+          setColetorInputValue(buffer);
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleGlobalKeyDown, true);
+    return () => {
+      window.removeEventListener('keydown', handleGlobalKeyDown, true);
+    };
+  }, [isSessionActive, isScannerOpen, handleProcessColetorCode]);
 
   // Confirma quantidade física digitada após bipagem no Inventário Cego
   const handleConfirmInventoryPhysicalCount = (e: React.FormEvent) => {
@@ -711,7 +883,7 @@ export const AuditoriaTab: React.FC = () => {
     setFocusMode,
     focusCapabilities,
     triggerAutoFocus,
-  } = useBarcodeDetector((code) => processContinuousBarcode(code));
+  } = useBarcodeDetector((code) => processContinuousBarcode(code, 'camera'));
 
   useEffect(() => {
     stopScanningRef.current = stopScanning;
@@ -921,7 +1093,7 @@ export const AuditoriaTab: React.FC = () => {
   // Dispara a câmera em tela cheia exclusivamente via leitor óptico (sem entrada manual)
   const handleTriggerGoogleBarcodeScanner = () => {
     openScanner((scannedEan) => {
-      processContinuousBarcode(scannedEan);
+      processContinuousBarcode(scannedEan, 'camera');
     }, { cameraOnly: true });
   };
 
@@ -1849,38 +2021,83 @@ export const AuditoriaTab: React.FC = () => {
       {/* =================================================================== */}
       {/* PAINEL DE SESSÃO ATIVA COMPARTILHADO (PRESENÇA E INVENTÁRIO CEGO)   */}
       {/* =================================================================== */}
-      {isAuditing && (
-        (activeInterface === 'presenca' && sessionTipo === 'PRESENCA') ||
-        (activeInterface === 'inventario' && sessionTipo === 'INVENTARIO')
-      ) && (
-            <div className="space-y-4">
-              {sessionTipo === 'INVENTARIO' && (
-                <div className="p-3.5 rounded-2xl bg-amber-500 text-slate-950 font-black text-xs flex items-center justify-between gap-2 shadow-md">
-                  <div className="flex items-center gap-2">
-                    <Lock className="w-4 h-4 shrink-0" />
-                    <span>
-                      MODO RESTRITO ATIVO — Inventário Cego em andamento. Sair, fechar ou trocar de aba está bloqueado até o anfitrião encerrar.
-                    </span>
-                  </div>
-                </div>
-              )}
+      {isSessionActive && (
+        <div className="space-y-4">
+          {/* =================================================================== */}
+          {/* CAMPO DE TEXTO OCULTO PARA COLETORES DE DADOS COM BIPADOR EMBUTIDO  */}
+          {/* Captura bipagens de hardware / keyboard wedge em tempo real         */}
+          {/* =================================================================== */}
+          <input
+            ref={coletorInputRef}
+            type="text"
+            inputMode="none"
+            autoComplete="off"
+            autoCorrect="off"
+            autoCapitalize="off"
+            spellCheck={false}
+            tabIndex={-1}
+            aria-hidden="true"
+            value={coletorInputValue}
+            onChange={handleColetorInputChange}
+            onKeyDown={handleColetorInputKeyDown}
+            onBlur={() => {
+              if (!pendingInventoryCountRef.current && isSessionActiveRef.current && !isScannerOpen) {
+                setTimeout(() => {
+                  if (!pendingInventoryCountRef.current && isSessionActiveRef.current && !isScannerOpen) {
+                    focusColetorInput();
+                  }
+                }, 120);
+              }
+            }}
+            style={{
+              position: 'fixed',
+              top: 0,
+              left: '-9999px',
+              width: '1px',
+              height: '1px',
+              opacity: 0,
+              pointerEvents: 'none',
+              zIndex: -1,
+            }}
+            title="Leitor de Coletor Embutido"
+          />
 
-              {/* Barra de Status e Cabeçalho da Sessão */}
-              <div className="p-4 sm:p-5 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xl space-y-4">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100 dark:border-slate-800">
-                  <div className="flex items-center gap-2.5">
-                    <span className={`w-3 h-3 rounded-full animate-ping ${sessionTipo === 'INVENTARIO' ? 'bg-amber-500' : 'bg-emerald-500'}`} />
-                    <div>
-                      <h3 className="font-black text-sm sm:text-base text-slate-900 dark:text-white flex items-center gap-2">
-                        <span>{sessionTipo === 'INVENTARIO' ? 'Inventário Cego Ativo' : 'Auditoria Ativa'}: Setor {sessionSetor}</span>
-                        <span className={`text-[10px] font-extrabold px-2 py-0.5 rounded-full border ${
-                          sessionTipo === 'INVENTARIO'
-                            ? 'bg-amber-500/15 text-amber-700 border-amber-500/30'
-                            : 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border-emerald-500/30'
-                        }`}>
-                          Ao Vivo
-                        </span>
-                      </h3>
+          {sessionTipo === 'INVENTARIO' && (
+            <div className="p-3.5 rounded-2xl bg-amber-500 text-slate-950 font-black text-xs flex items-center justify-between gap-2 shadow-md">
+              <div className="flex items-center gap-2">
+                <Lock className="w-4 h-4 shrink-0" />
+                <span>
+                  MODO RESTRITO ATIVO — Inventário Cego em andamento. Sair, fechar ou trocar de aba está bloqueado até o anfitrião encerrar.
+                </span>
+              </div>
+            </div>
+          )}
+
+          {/* Barra de Status e Cabeçalho da Sessão */}
+          <div className="p-4 sm:p-5 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xl space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100 dark:border-slate-800">
+              <div className="flex items-center gap-2.5">
+                <span className={`w-3 h-3 rounded-full animate-ping ${sessionTipo === 'INVENTARIO' ? 'bg-amber-500' : 'bg-emerald-500'}`} />
+                <div>
+                  <h3 className="font-black text-sm sm:text-base text-slate-900 dark:text-white flex items-center gap-2 flex-wrap">
+                    <span>{sessionTipo === 'INVENTARIO' ? 'Inventário Cego Ativo' : 'Auditoria Ativa'}: Setor {sessionSetor}</span>
+                    <span className={`text-[10px] font-extrabold px-2 py-0.5 rounded-full border ${
+                      sessionTipo === 'INVENTARIO'
+                        ? 'bg-amber-500/15 text-amber-700 border-amber-500/30'
+                        : 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border-emerald-500/30'
+                    }`}>
+                      Ao Vivo
+                    </span>
+                    <button
+                      type="button"
+                      onClick={focusColetorInput}
+                      className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-300 dark:border-slate-700 inline-flex items-center gap-1 hover:border-emerald-500 transition cursor-pointer"
+                      title="Clique para garantir foco no leitor/bipador do coletor"
+                    >
+                      <Barcode className="w-3 h-3 text-emerald-500" />
+                      <span>Coletor Pronto</span>
+                    </button>
+                  </h3>
                       <p className="text-[11px] text-slate-400">
                         Início: {sessionStartTime} • Anfitrião: {sessionIniciadaPor?.nome || operator.name || 'Operador'} • Auditor: {operator.name || 'Operador'}{operator.code ? ` (${operator.code})` : ''}
                       </p>
@@ -1980,15 +2197,15 @@ export const AuditoriaTab: React.FC = () => {
                       </div>
                       <div>
                         <h4 className="text-xs font-black text-slate-900 dark:text-white flex items-center gap-1.5 flex-wrap">
-                          <span>Leitor Contínuo Exclusivo por Câmera</span>
+                          <span>Leitor Contínuo (Câmera & Bipador do Coletor)</span>
                           <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-500 text-white font-extrabold tracking-wide uppercase">
-                            Somente Bipe Óptico
+                            Bipe Ativo
                           </span>
                         </h4>
                         <p className="text-[10px] text-slate-500 dark:text-slate-400">
                           {sessionTipo === 'INVENTARIO'
-                            ? 'Aponte a câmera para o código de barras e digite a quantidade física encontrada.'
-                            : 'Aponte a câmera para o código de barras na gôndola para confirmar a presença.'}
+                            ? 'Aponte a câmera ou pressione o gatilho do coletor no código de barras e informe a quantidade física.'
+                            : 'Aponte a câmera ou pressione o gatilho do coletor no código de barras para confirmar a presença.'}
                         </p>
                       </div>
                     </div>
