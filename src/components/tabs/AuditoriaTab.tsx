@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { 
   CheckSquare, 
   Boxes, 
@@ -262,6 +262,8 @@ export const AuditoriaTab: React.FC = () => {
 
   // Sub-Aba dentro da auditoria ativa (Pendentes vs Confirmados vs Rupturas)
   const [viewListTab, setViewListTab] = useState<'pendentes' | 'confirmados' | 'rupturas'>('pendentes');
+  const [listSearchQuery, setListSearchQuery] = useState('');
+  const [displayLimit, setDisplayLimit] = useState(40);
 
   // Modal de Detalhes de Auditoria do Relatório
   const [selectedAuditForModal, setSelectedAuditForModal] = useState<AuditItem | null>(null);
@@ -291,6 +293,41 @@ export const AuditoriaTab: React.FC = () => {
   const activeSessionRupturas = products.filter(
     p => p.category?.toUpperCase() === sessionSetor.toUpperCase() && (p.stock <= (p.minStock ?? 5) || p.stock === 0)
   );
+
+  // Listas Otimizadas para Renderização Leve (Zero Lag no DOM)
+  const filteredPendentes = useMemo(() => {
+    if (!listSearchQuery.trim()) return pendentes;
+    const q = listSearchQuery.toLowerCase().trim();
+    return pendentes.filter(p =>
+      (p.name || '').toLowerCase().includes(q) ||
+      (p.ean || '').includes(q) ||
+      (p.reducedCode || '').includes(q) ||
+      (p.supplierCode || '').includes(q)
+    );
+  }, [pendentes, listSearchQuery]);
+
+  const filteredConfirmados = useMemo(() => {
+    if (!listSearchQuery.trim()) return confirmados;
+    const q = listSearchQuery.toLowerCase().trim();
+    return confirmados.filter(c =>
+      (c.name || '').toLowerCase().includes(q) ||
+      (c.ean || '').includes(q) ||
+      (c.reducedCode || '').includes(q) ||
+      (c.supplierCode || '').includes(q) ||
+      (c.scannedBy || '').toLowerCase().includes(q)
+    );
+  }, [confirmados, listSearchQuery]);
+
+  const filteredRupturas = useMemo(() => {
+    if (!listSearchQuery.trim()) return activeSessionRupturas;
+    const q = listSearchQuery.toLowerCase().trim();
+    return activeSessionRupturas.filter(r =>
+      (r.name || '').toLowerCase().includes(q) ||
+      (r.ean || '').includes(q) ||
+      (r.reducedCode || '').includes(q) ||
+      (r.supplierCode || '').includes(q)
+    );
+  }, [activeSessionRupturas, listSearchQuery]);
 
   // Verifica se o operador atual é o criador da sessão ativa
   const myMatricula = operator.code || operator.matricula || '';
@@ -503,7 +540,7 @@ export const AuditoriaTab: React.FC = () => {
     };
     window.addEventListener('offline', handleNetworkOffline);
 
-    // Polling de contingência a cada 3.5 segundos caso realtime webhooks oscilem
+    // Polling de contingência a cada 8 segundos caso realtime webhooks oscilem
     const interval = setInterval(async () => {
       refreshRemoteSessions();
       const activeSessId = currentSessionIdRef.current;
@@ -514,7 +551,7 @@ export const AuditoriaTab: React.FC = () => {
           handleRemoteSessionClosed(activeSessId, sessionIniciadaPor?.nome);
         }
       }
-    }, 3500);
+    }, 8000);
 
     return () => {
       unsubscribe();
@@ -2041,13 +2078,7 @@ export const AuditoriaTab: React.FC = () => {
             onChange={handleColetorInputChange}
             onKeyDown={handleColetorInputKeyDown}
             onBlur={() => {
-              if (!pendingInventoryCountRef.current && isSessionActiveRef.current && !isScannerOpen) {
-                setTimeout(() => {
-                  if (!pendingInventoryCountRef.current && isSessionActiveRef.current && !isScannerOpen) {
-                    focusColetorInput();
-                  }
-                }, 120);
-              }
+              // Foco sob demanda via listener global e botão de coletor pronto, evitando loop travando interação
             }}
             style={{
               position: 'fixed',
@@ -2447,79 +2478,128 @@ export const AuditoriaTab: React.FC = () => {
 
               {/* LISTAS: PENDENTES VS CONFIRMADOS (SEM RUPTURAS/ESTOQUE NO INVENTÁRIO CEGO) */}
               <div className="p-4 sm:p-5 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xl space-y-3">
-                <div className="flex flex-wrap border-b border-slate-100 dark:border-slate-800 text-xs gap-2">
-                  <button
-                    onClick={() => setViewListTab('pendentes')}
-                    className={`py-2 px-3.5 font-bold border-b-2 flex items-center gap-1.5 transition cursor-pointer ${
-                      viewListTab === 'pendentes'
-                        ? 'border-amber-500 text-amber-600 dark:text-amber-400'
-                        : 'border-transparent text-slate-400 hover:text-slate-600'
-                    }`}
-                  >
-                    <Clock className="w-4 h-4 text-amber-500" />
-                    <span>Lista de Pendentes ({pendentes.length})</span>
-                  </button>
-                  <button
-                    onClick={() => setViewListTab('confirmados')}
-                    className={`py-2 px-3.5 font-bold border-b-2 flex items-center gap-1.5 transition cursor-pointer ${
-                      viewListTab === 'confirmados'
-                        ? 'border-emerald-600 text-emerald-600 dark:text-emerald-400'
-                        : 'border-transparent text-slate-400 hover:text-slate-600'
-                    }`}
-                  >
-                    <CheckCircle2 className="w-4 h-4 text-emerald-500" />
-                    <span>{sessionTipo === 'INVENTARIO' ? `Itens Contados (${confirmados.length})` : `Lista de Confirmados (${confirmados.length})`}</span>
-                  </button>
-                  {sessionTipo === 'PRESENCA' && (
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 dark:border-slate-800 pb-2">
+                  <div className="flex flex-wrap text-xs gap-2">
                     <button
-                      onClick={() => setViewListTab('rupturas')}
+                      onClick={() => {
+                        setViewListTab('pendentes');
+                        setDisplayLimit(40);
+                      }}
                       className={`py-2 px-3.5 font-bold border-b-2 flex items-center gap-1.5 transition cursor-pointer ${
-                        viewListTab === 'rupturas'
-                          ? 'border-rose-500 text-rose-600 dark:text-rose-400'
+                        viewListTab === 'pendentes'
+                          ? 'border-amber-500 text-amber-600 dark:text-amber-400'
                           : 'border-transparent text-slate-400 hover:text-slate-600'
                       }`}
                     >
-                      <AlertTriangle className="w-4 h-4 text-rose-500" />
-                      <span>Lista de Rupturas ({activeSessionRupturas.length})</span>
+                      <Clock className="w-4 h-4 text-amber-500" />
+                      <span>Lista de Pendentes ({pendentes.length})</span>
                     </button>
-                  )}
+                    <button
+                      onClick={() => {
+                        setViewListTab('confirmados');
+                        setDisplayLimit(40);
+                      }}
+                      className={`py-2 px-3.5 font-bold border-b-2 flex items-center gap-1.5 transition cursor-pointer ${
+                        viewListTab === 'confirmados'
+                          ? 'border-emerald-600 text-emerald-600 dark:text-emerald-400'
+                          : 'border-transparent text-slate-400 hover:text-slate-600'
+                      }`}
+                    >
+                      <CheckCircle2 className="w-4 h-4 text-emerald-500" />
+                      <span>{sessionTipo === 'INVENTARIO' ? `Itens Contados (${confirmados.length})` : `Lista de Confirmados (${confirmados.length})`}</span>
+                    </button>
+                    {sessionTipo === 'PRESENCA' && (
+                      <button
+                        onClick={() => {
+                          setViewListTab('rupturas');
+                          setDisplayLimit(40);
+                        }}
+                        className={`py-2 px-3.5 font-bold border-b-2 flex items-center gap-1.5 transition cursor-pointer ${
+                          viewListTab === 'rupturas'
+                            ? 'border-rose-500 text-rose-600 dark:text-rose-400'
+                            : 'border-transparent text-slate-400 hover:text-slate-600'
+                        }`}
+                      >
+                        <AlertTriangle className="w-4 h-4 text-rose-500" />
+                        <span>Lista de Rupturas ({activeSessionRupturas.length})</span>
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Campo de Busca Rápida na Lista Ativa */}
+                  <div className="relative min-w-[180px] max-w-xs">
+                    <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                    <input
+                      type="text"
+                      value={listSearchQuery}
+                      onChange={e => {
+                        setListSearchQuery(e.target.value);
+                        setDisplayLimit(40);
+                      }}
+                      placeholder="Filtrar por nome ou EAN..."
+                      className="w-full text-xs pl-8 pr-7 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500/50"
+                    />
+                    {listSearchQuery && (
+                      <button
+                        type="button"
+                        onClick={() => setListSearchQuery('')}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-0.5"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
                 </div>
 
-                {/* Exibição da Lista Pendentes (SEM botão conferir manual e SEM estoque no inventário cego) */}
+                {/* Exibição da Lista Pendentes (Renderização Otimizada com Limite de Nós) */}
                 {viewListTab === 'pendentes' && (
                   <div className="space-y-2 max-h-80 overflow-y-auto pr-1">
-                    {pendentes.length === 0 ? (
+                    {filteredPendentes.length === 0 ? (
                       <div className="p-8 text-center rounded-2xl border border-dashed border-emerald-500/30 bg-emerald-500/5">
                         <CheckCircle2 className="w-10 h-10 text-emerald-500 mx-auto mb-2" />
                         <h4 className="font-bold text-sm text-emerald-800 dark:text-emerald-300">
-                          Todos os produtos do setor foram auditados!
+                          {pendentes.length === 0 ? 'Todos os produtos do setor foram auditados!' : 'Nenhum produto pendente encontrado para este filtro.'}
                         </h4>
                         <p className="text-xs text-slate-400 mt-1">
-                          Nenhum produto pendente.
+                          {pendentes.length === 0 ? 'Nenhum produto pendente.' : 'Verifique o termo digitado.'}
                         </p>
                       </div>
                     ) : (
-                      pendentes.map(item => (
-                        <div
-                          key={item.id}
-                          className="p-3 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-850 flex items-center justify-between gap-3 text-xs"
-                        >
-                          <div className="space-y-0.5">
-                            <h5 className="font-bold text-slate-900 dark:text-white">{item.name}</h5>
-                            <div className="flex items-center gap-2 text-[11px] text-slate-400 font-mono">
-                              <span>EAN: {item.ean}</span>
-                              {item.reducedCode && <span>• Reduzido: {item.reducedCode}</span>}
-                              {item.supplierCode && <span>• Forn: {item.supplierCode}</span>}
+                      <>
+                        {filteredPendentes.slice(0, displayLimit).map(item => (
+                          <div
+                            key={item.id}
+                            className="p-3 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-850 flex items-center justify-between gap-3 text-xs"
+                          >
+                            <div className="space-y-0.5 min-w-0">
+                              <h5 className="font-bold text-slate-900 dark:text-white truncate">{item.name}</h5>
+                              <div className="flex items-center gap-2 text-[11px] text-slate-400 font-mono flex-wrap">
+                                <span>EAN: {item.ean}</span>
+                                {item.reducedCode && <span>• Reduzido: {item.reducedCode}</span>}
+                                {item.supplierCode && <span>• Forn: {item.supplierCode}</span>}
+                              </div>
+                            </div>
+
+                            <div className="flex items-center gap-2 shrink-0">
+                              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20">
+                                Aguardando Bipe
+                              </span>
                             </div>
                           </div>
+                        ))}
 
-                          <div className="flex items-center gap-2 shrink-0">
-                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20">
-                              Aguardando Bipe
-                            </span>
+                        {filteredPendentes.length > displayLimit && (
+                          <div className="pt-2 text-center">
+                            <button
+                              type="button"
+                              onClick={() => setDisplayLimit(prev => prev + 40)}
+                              className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-750 text-slate-700 dark:text-slate-300 text-xs font-bold transition cursor-pointer"
+                            >
+                              Carregar mais (+40) • Restam {filteredPendentes.length - displayLimit} itens
+                            </button>
                           </div>
-                        </div>
-                      ))
+                        )}
+                      </>
                     )}
                   </div>
                 )}
@@ -2527,53 +2607,67 @@ export const AuditoriaTab: React.FC = () => {
                 {/* Exibição da Lista Confirmados */}
                 {viewListTab === 'confirmados' && (
                   <div className="space-y-2 max-h-80 overflow-y-auto pr-1">
-                    {confirmados.length === 0 ? (
+                    {filteredConfirmados.length === 0 ? (
                       <div className="p-8 text-center rounded-2xl border border-dashed border-slate-200 dark:border-slate-800 text-slate-400 text-xs">
-                        Nenhum produto bipado ainda. Aponte a câmera para o código de barras do item.
+                        {confirmados.length === 0 ? 'Nenhum produto bipado ainda. Aponte a câmera para o código de barras do item.' : 'Nenhum item confirmado corresponde ao filtro.'}
                       </div>
                     ) : (
-                      confirmados.map(item => {
-                        const isSelf = !item.scannedBy || item.scannedBy.toLowerCase() === (operator.name || 'Operador').toLowerCase();
-                        return (
-                          <div
-                            key={item.id}
-                            className={`p-3 rounded-2xl border flex items-center justify-between gap-3 text-xs transition-all ${
-                              isSelf 
-                                ? 'border-emerald-500/30 bg-emerald-500/5 dark:bg-emerald-950/20' 
-                                : 'border-amber-500/40 bg-amber-500/10 dark:bg-amber-950/25 shadow-xs'
-                            }`}
-                          >
-                            <div className="space-y-0.5">
-                              <h5 className="font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
-                                <CheckCircle2 className={`w-3.5 h-3.5 ${isSelf ? 'text-emerald-500' : 'text-amber-500'}`} />
-                                <span>{item.name}</span>
-                              </h5>
-                              <div className="flex items-center gap-2 text-[11px] text-slate-400 font-mono">
-                                <span>EAN: {item.ean}</span>
-                                {item.reducedCode && <span>• Red: {item.reducedCode}</span>}
-                                {sessionTipo === 'INVENTARIO' && typeof item.physicalQuantity === 'number' && (
-                                  <span className="text-amber-600 font-black">• Qtd. Física: {item.physicalQuantity} un</span>
+                      <>
+                        {filteredConfirmados.slice(0, displayLimit).map(item => {
+                          const isSelf = !item.scannedBy || item.scannedBy.toLowerCase() === (operator.name || 'Operador').toLowerCase();
+                          return (
+                            <div
+                              key={item.id}
+                              className={`p-3 rounded-2xl border flex items-center justify-between gap-3 text-xs transition-all ${
+                                isSelf 
+                                  ? 'border-emerald-500/30 bg-emerald-500/5 dark:bg-emerald-950/20' 
+                                  : 'border-amber-500/40 bg-amber-500/10 dark:bg-amber-950/25 shadow-xs'
+                              }`}
+                            >
+                              <div className="space-y-0.5 min-w-0">
+                                <h5 className="font-bold text-slate-900 dark:text-white flex items-center gap-1.5 truncate">
+                                  <CheckCircle2 className={`w-3.5 h-3.5 shrink-0 ${isSelf ? 'text-emerald-500' : 'text-amber-500'}`} />
+                                  <span className="truncate">{item.name}</span>
+                                </h5>
+                                <div className="flex items-center gap-2 text-[11px] text-slate-400 font-mono flex-wrap">
+                                  <span>EAN: {item.ean}</span>
+                                  {item.reducedCode && <span>• Red: {item.reducedCode}</span>}
+                                  {sessionTipo === 'INVENTARIO' && typeof item.physicalQuantity === 'number' && (
+                                    <span className="text-amber-600 font-black">• Qtd. Física: {item.physicalQuantity} un</span>
+                                  )}
+                                </div>
+                              </div>
+
+                              <div className="text-right shrink-0 space-y-1">
+                                {isSelf ? (
+                                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30 inline-flex items-center gap-1">
+                                    <Check className="w-3 h-3 text-emerald-500" /> Você • {item.scannedAt}
+                                  </span>
+                                ) : (
+                                  <span className="text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-amber-500/20 text-amber-800 dark:text-amber-200 border border-amber-500/40 inline-flex items-center gap-1">
+                                    <Users className="w-3 h-3 text-amber-500" /> Bipado por: <strong>{item.scannedBy}</strong> • {item.scannedAt}
+                                  </span>
                                 )}
+                                <span className="text-[10px] text-slate-400 block font-mono">
+                                  Realtime Supabase
+                                </span>
                               </div>
                             </div>
+                          );
+                        })}
 
-                            <div className="text-right shrink-0 space-y-1">
-                              {isSelf ? (
-                                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30 inline-flex items-center gap-1">
-                                  <Check className="w-3 h-3 text-emerald-500" /> Você • {item.scannedAt}
-                                </span>
-                              ) : (
-                                <span className="text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-amber-500/20 text-amber-800 dark:text-amber-200 border border-amber-500/40 inline-flex items-center gap-1">
-                                  <Users className="w-3 h-3 text-amber-500" /> Bipado por: <strong>{item.scannedBy}</strong> • {item.scannedAt}
-                                </span>
-                              )}
-                              <span className="text-[10px] text-slate-400 block font-mono">
-                                Realtime Supabase
-                              </span>
-                            </div>
+                        {filteredConfirmados.length > displayLimit && (
+                          <div className="pt-2 text-center">
+                            <button
+                              type="button"
+                              onClick={() => setDisplayLimit(prev => prev + 40)}
+                              className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-750 text-slate-700 dark:text-slate-300 text-xs font-bold transition cursor-pointer"
+                            >
+                              Carregar mais (+40) • Restam {filteredConfirmados.length - displayLimit} itens
+                            </button>
                           </div>
-                        );
-                      })
+                        )}
+                      </>
                     )}
                   </div>
                 )}
@@ -2581,38 +2675,52 @@ export const AuditoriaTab: React.FC = () => {
                 {/* Exibição da Lista de Rupturas (somente Presença) */}
                 {sessionTipo === 'PRESENCA' && viewListTab === 'rupturas' && (
                   <div className="space-y-2 max-h-80 overflow-y-auto pr-1">
-                    {activeSessionRupturas.length === 0 ? (
+                    {filteredRupturas.length === 0 ? (
                       <div className="p-8 text-center rounded-2xl border border-dashed border-slate-200 dark:border-slate-800 text-slate-400 text-xs">
-                        Nenhum produto em ruptura ou estoque crítico no setor {sessionSetor}.
+                        {activeSessionRupturas.length === 0 ? `Nenhum produto em ruptura ou estoque crítico no setor ${sessionSetor}.` : 'Nenhum produto em ruptura corresponde ao filtro.'}
                       </div>
                     ) : (
-                      activeSessionRupturas.map(item => (
-                        <div
-                          key={item.id}
-                          className="p-3 rounded-2xl border border-rose-500/30 bg-rose-500/5 dark:bg-rose-950/20 flex items-center justify-between gap-3 text-xs"
-                        >
-                          <div className="space-y-0.5">
-                            <h5 className="font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
-                              <span className="w-2 h-2 rounded-full bg-rose-500 animate-pulse shrink-0" />
-                              <span>{item.name}</span>
-                            </h5>
-                            <div className="flex items-center gap-2 text-[11px] text-slate-400 font-mono">
-                              <span>EAN: {item.ean}</span>
-                              {item.reducedCode && <span>• Reduzido: {item.reducedCode}</span>}
-                              {item.supplierCode && <span>• Forn: {item.supplierCode}</span>}
+                      <>
+                        {filteredRupturas.slice(0, displayLimit).map(item => (
+                          <div
+                            key={item.id}
+                            className="p-3 rounded-2xl border border-rose-500/30 bg-rose-500/5 dark:bg-rose-950/20 flex items-center justify-between gap-3 text-xs"
+                          >
+                            <div className="space-y-0.5 min-w-0">
+                              <h5 className="font-bold text-slate-900 dark:text-white flex items-center gap-1.5 truncate">
+                                <span className="w-2 h-2 rounded-full bg-rose-500 animate-pulse shrink-0" />
+                                <span className="truncate">{item.name}</span>
+                              </h5>
+                              <div className="flex items-center gap-2 text-[11px] text-slate-400 font-mono flex-wrap">
+                                <span>EAN: {item.ean}</span>
+                                {item.reducedCode && <span>• Reduzido: {item.reducedCode}</span>}
+                                {item.supplierCode && <span>• Forn: {item.supplierCode}</span>}
+                              </div>
+                            </div>
+
+                            <div className="text-right shrink-0 space-y-1">
+                              <span className="text-[11px] font-black text-rose-600 dark:text-rose-400 block">
+                                Saldo: {item.stock} un (Mín: {item.minStock ?? 5} un)
+                              </span>
+                              <span className="text-[9px] font-extrabold uppercase px-2 py-0.5 rounded-full bg-rose-500 text-white inline-block">
+                                {item.stock <= 0 ? 'Zerado' : 'Ruptura Iminente'}
+                              </span>
                             </div>
                           </div>
+                        ))}
 
-                          <div className="text-right shrink-0 space-y-1">
-                            <span className="text-[11px] font-black text-rose-600 dark:text-rose-400 block">
-                              Saldo: {item.stock} un (Mín: {item.minStock ?? 5} un)
-                            </span>
-                            <span className="text-[9px] font-extrabold uppercase px-2 py-0.5 rounded-full bg-rose-500 text-white inline-block">
-                              {item.stock <= 0 ? 'Zerado' : 'Ruptura Iminente'}
-                            </span>
+                        {filteredRupturas.length > displayLimit && (
+                          <div className="pt-2 text-center">
+                            <button
+                              type="button"
+                              onClick={() => setDisplayLimit(prev => prev + 40)}
+                              className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-750 text-slate-700 dark:text-slate-300 text-xs font-bold transition cursor-pointer"
+                            >
+                              Carregar mais (+40) • Restam {filteredRupturas.length - displayLimit} itens
+                            </button>
                           </div>
-                        </div>
-                      ))
+                        )}
+                      </>
                     )}
                   </div>
                 )}

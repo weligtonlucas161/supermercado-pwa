@@ -69,6 +69,29 @@ export function isEncrypted(value: unknown): boolean {
 }
 
 /**
+ * Descriptografa eventuais tokens CryptoJS AES (U2FsdGVk...) embutidos em textos mistos
+ * (ex: mensagens de sistema geradas no banco contendo NEW.nome cifrado).
+ */
+export function decryptEmbeddedCiphertexts(
+  text: string,
+  secretKey = MASTER_KEY
+): string {
+  if (!text || typeof text !== 'string') return '';
+  if (!text.includes('U2FsdGVk')) return text;
+  if (!secretKey) return text;
+
+  return text.replace(/U2FsdGVk[A-Za-z0-9+/=]+/g, (match) => {
+    try {
+      const bytes = CryptoJS.AES.decrypt(match, secretKey);
+      const decrypted = bytes.toString(CryptoJS.enc.Utf8);
+      return decrypted || match;
+    } catch {
+      return match;
+    }
+  });
+}
+
+/**
  * Descriptografa um campo individual em memória RAM usando AES-256
  */
 export function decryptSingleField(
@@ -83,9 +106,12 @@ export function decryptSingleField(
   }
   const trimmed = cipherText.trim();
 
-  // Se não estiver criptografado, retorna o texto original sanitizado
+  // Se não estiver criptografado por inteiro, verifica se há tokens cifrados embutidos no texto
   if (!isEncrypted(trimmed)) {
-    return options?.skipSanitize ? trimmed : sanitizeText(trimmed, 2000);
+    const resolved = trimmed.includes('U2FsdGVk')
+      ? decryptEmbeddedCiphertexts(trimmed, secretKey)
+      : trimmed;
+    return options?.skipSanitize ? resolved : sanitizeText(resolved, 2000);
   }
 
   try {

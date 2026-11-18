@@ -160,6 +160,7 @@ export function useBarcodeDetector(onDetected?: (code: string, format: string) =
     }
 
     scanLockRef.current = false;
+    isProcessingRef.current = false;
     setIsScanning(false);
     setTorchOn(false);
     setTorchAvailable(false);
@@ -267,7 +268,10 @@ export function useBarcodeDetector(onDetected?: (code: string, format: string) =
     return true;
   }, [onDetected]);
 
-  // 5. Motor de Decodificação Avançada (Binarização Extrema + Rotações Digitais)
+  const isProcessingRef = useRef<boolean>(false);
+  const lastScanTimeRef = useRef<number>(0);
+
+  // 5. Motor de Decodificação Otimizado via ZXing (HybridBinarizer com amostragem inteligente)
   const decodeWithFiltersAndRotation = useCallback((video: HTMLVideoElement): boolean => {
     const reader = zxingReaderRef.current;
     if (!reader) return false;
@@ -276,20 +280,21 @@ export function useBarcodeDetector(onDetected?: (code: string, format: string) =
     const ctx = canvas.getContext('2d', { willReadFrequently: true });
     if (!ctx) return false;
 
-    const targetW = 480;
-    const targetH = Math.round((targetW * video.videoHeight) / (video.videoWidth || 1)) || 360;
+    // Resolução otimizada para códigos de barra (384px) - rápida e leve para CPU
+    const targetW = 384;
+    const targetH = Math.round((targetW * video.videoHeight) / (video.videoWidth || 1)) || 288;
 
     if (canvas.width !== targetW || canvas.height !== targetH) {
       canvas.width = targetW;
       canvas.height = targetH;
     }
 
-    // Alternar rotação digital: 0°, 90°, 180°, 270° para ler códigos tortos ou invertidos
-    const rotations = [0, 90, 180, 270];
+    // Alterna rotação digital leve: 0° e 90° a cada amostragem
+    const rotations = [0, 90];
     const currentAngle = rotations[rotationIndexRef.current % rotations.length];
     rotationIndexRef.current = (rotationIndexRef.current + 1) % rotations.length;
 
-    // Aplicar zoom digital óptico no frame decodificado (centralizar e ampliar região de interesse)
+    // Aplicar zoom digital óptico no frame decodificado
     const currentZoom = Math.max(1, zoomRef.current || 1);
     const vw = video.videoWidth || targetW;
     const vh = video.videoHeight || targetH;
@@ -298,16 +303,19 @@ export function useBarcodeDetector(onDetected?: (code: string, format: string) =
     const cropX = (vw - cropW) / 2;
     const cropY = (vh - cropH) / 2;
 
-    if (currentAngle !== 0) {
-      ctx.translate(targetW / 2, targetH / 2);
-      ctx.rotate((currentAngle * Math.PI) / 180);
-      ctx.drawImage(video, cropX, cropY, cropW, cropH, -targetW / 2, -targetH / 2, targetW, targetH);
-    } else {
-      ctx.drawImage(video, cropX, cropY, cropW, cropH, 0, 0, targetW, targetH);
+    ctx.save();
+    try {
+      if (currentAngle !== 0) {
+        ctx.translate(targetW / 2, targetH / 2);
+        ctx.rotate((currentAngle * Math.PI) / 180);
+        ctx.drawImage(video, cropX, cropY, cropW, cropH, -targetW / 2, -targetH / 2, targetW, targetH);
+      } else {
+        ctx.drawImage(video, cropX, cropY, cropW, cropH, 0, 0, targetW, targetH);
+      }
+    } finally {
+      ctx.restore();
     }
-    ctx.restore();
 
-    // 1. Tentar ler frame original
     try {
       const imgData = ctx.getImageData(0, 0, targetW, targetH);
       const luminanceSource = new RGBLuminanceSource(imgData.data, targetW, targetH);
@@ -320,77 +328,60 @@ export function useBarcodeDetector(onDetected?: (code: string, format: string) =
         return processAndValidateCode(result.getText(), fmtName);
       }
     } catch (e: unknown) {
-      // Ignora silenciosamente NotFoundException, ChecksumException, FormatException
+      // Ignora silenciosamente NotFoundException, ChecksumException, FormatException normais em frames sem código
       if (!(e instanceof NotFoundException) && !(e instanceof ChecksumException) && !(e instanceof FormatException)) {
-        // Ignora outros erros temporários de frame
+        // descarte seguro
       }
-    }
-
-    // 2. Aplicar Binarização Extrema (Contraste Máximo Preto e Branco para códigos borrados)
-    try {
-      const imgData = ctx.getImageData(0, 0, targetW, targetH);
-      const d = imgData.data;
-      const len = d.length;
-
-      // Calcular limiar médio
-      let sum = 0;
-      for (let i = 0; i < len; i += 16) {
-        sum += (d[i] * 299 + d[i + 1] * 587 + d[i + 2] * 114) / 1000;
-      }
-      const threshold = (sum / (len / 16)) || 128;
-
-      for (let i = 0; i < len; i += 4) {
-        const lum = (d[i] * 299 + d[i + 1] * 587 + d[i + 2] * 114) / 1000;
-        const val = lum > threshold ? 255 : 0;
-        d[i] = val;
-        d[i + 1] = val;
-        d[i + 2] = val;
-      }
-
-      ctx.putImageData(imgData, 0, 0);
-
-      const binarizedSource = new RGBLuminanceSource(d, targetW, targetH);
-      const binarizer2 = new HybridBinarizer(binarizedSource);
-      const bitmap2 = new BinaryBitmap(binarizer2);
-      const result2 = reader.decode(bitmap2);
-
-      if (result2 && result2.getText()) {
-        const fmtName = result2.getBarcodeFormat ? String(result2.getBarcodeFormat()) : 'EAN-13';
-        return processAndValidateCode(result2.getText(), fmtName);
-      }
-    } catch {
-      // Ignora silenciosamente
     }
 
     return false;
   }, [processAndValidateCode]);
 
-  // 6. Laço de Amostragem Contínua (Stream sem travamento)
-  const scanFrame = useCallback(() => {
-    if (!videoRef.current || !isScanning) return;
+  // 6. Laço de Amostragem Contínua de Alta Performance (com FPS Throttling e Single-Flight)
+  const scanFrame = useCallback(async () => {
+    if (!isScanning) return;
+
+    const now = performance.now();
+    const elapsed = now - lastScanTimeRef.current;
+    const SCAN_INTERVAL_MS = 120; // ~8 amostragens por segundo (fluido, instantâneo e com CPU < 5%)
+
+    if (scanLockRef.current || isProcessingRef.current || elapsed < SCAN_INTERVAL_MS) {
+      if (isScanning) {
+        animationFrameId.current = requestAnimationFrame(scanFrame);
+      }
+      return;
+    }
 
     const video = videoRef.current;
-    if (video.readyState >= 2 && video.videoWidth > 0 && !scanLockRef.current) {
+    if (!video || video.readyState < 2 || video.videoWidth === 0) {
+      if (isScanning) {
+        animationFrameId.current = requestAnimationFrame(scanFrame);
+      }
+      return;
+    }
+
+    isProcessingRef.current = true;
+    lastScanTimeRef.current = now;
+
+    try {
       let detectedInThisFrame = false;
 
-      // 6.1 Primeiro tenta Leitor Nativo (Google Service) se disponível
+      // 6.1 Primeiro tenta Leitor Nativo (Google Service / GPU / C++ assíncrono)
       if (nativeDetectorRef.current) {
-        nativeDetectorRef.current
-          .detect(video)
-          .then(barcodes => {
-            if (barcodes && barcodes.length > 0) {
-              const code = barcodes[0].rawValue;
-              if (code) {
-                detectedInThisFrame = processAndValidateCode(code, barcodes[0].format);
-              }
+        try {
+          const barcodes = await nativeDetectorRef.current.detect(video);
+          if (barcodes && barcodes.length > 0) {
+            const first = barcodes[0];
+            if (first?.rawValue) {
+              detectedInThisFrame = processAndValidateCode(first.rawValue, first.format);
             }
-          })
-          .catch(() => {
-            // Frame skip normal em movimento - não trava
-          });
+          }
+        } catch {
+          // Frame skip normal em movimento
+        }
       }
 
-      // 6.2 Se o nativo não encontrou, executa ZXing Agressivo (tryHarder + binarização + rotações)
+      // 6.2 Se o nativo não encontrou, executa ZXing Otimizado
       if (!detectedInThisFrame && !scanLockRef.current) {
         try {
           decodeWithFiltersAndRotation(video);
@@ -398,11 +389,11 @@ export function useBarcodeDetector(onDetected?: (code: string, format: string) =
           // Descarte silencioso de erro de frame
         }
       }
-    }
-
-    // Mantém o laço contínuo ativo
-    if (isScanning) {
-      animationFrameId.current = requestAnimationFrame(scanFrame);
+    } finally {
+      isProcessingRef.current = false;
+      if (isScanning) {
+        animationFrameId.current = requestAnimationFrame(scanFrame);
+      }
     }
   }, [isScanning, processAndValidateCode, decodeWithFiltersAndRotation]);
 

@@ -107,6 +107,25 @@ try {
   failed = true;
 }
 
+// 5. Teste de mensagens de sistema / chat com tokens criptografados embutidos
+console.log('\n--- Testando decifragem de mensagens do sistema com tokens cifrados embutidos ---');
+try {
+  const encUser = encryptSingleField('WELIGTON LUCAS');
+  const rawWelcome = `👋 Boas-vindas! ${encUser} entrou na loja e agora faz parte do Chat Operacional.`;
+  const decryptedMsg = decryptSingleField(rawWelcome);
+
+  const expected = '👋 Boas-vindas! WELIGTON LUCAS entrou na loja e agora faz parte do Chat Operacional.';
+  if (decryptedMsg === expected) {
+    console.log(`✅ Mensagem de boas-vindas decifrada com sucesso:\n   "${decryptedMsg}"`);
+  } else {
+    console.error(`❌ FALHA na decifragem da mensagem de boas-vindas: Esperado="${expected}", Obtido="${decryptedMsg}"`);
+    failed = true;
+  }
+} catch (err) {
+  console.error('❌ ERRO no teste de mensagem de boas-vindas:', err);
+  failed = true;
+}
+
 if (failed) {
   console.error('\n❌ O teste falhou. Corrija os problemas antes de prosseguir.');
   process.exit(1);

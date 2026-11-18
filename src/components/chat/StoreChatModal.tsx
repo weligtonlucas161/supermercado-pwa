@@ -27,6 +27,7 @@ import {
   resolveFullRoleLabel,
 } from '../../utils/chatUtils';
 import { sanitizeText } from '../../utils/security';
+import { decryptSingleField } from '../../utils/encryptionUtils';
 
 interface MentionOption {
   type: 'setor' | 'usuario';
@@ -493,7 +494,7 @@ export const StoreChatModal: React.FC = () => {
                   <div key={msg.id} className="flex justify-center my-1.5">
                     <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-emerald-500/10 dark:bg-emerald-500/15 border border-emerald-500/25 text-[11px] font-semibold text-emerald-800 dark:text-emerald-200 shadow-2xs max-w-[92%] text-center">
                       <UserPlus className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
-                      <span>{msg.conteudo}</span>
+                      <span>{decryptSingleField(msg.conteudo)}</span>
                       <span className="text-[10px] text-emerald-600/75 dark:text-emerald-400/75 shrink-0">
                         • {formatTime(msg.timestamp)}
                       </span>
