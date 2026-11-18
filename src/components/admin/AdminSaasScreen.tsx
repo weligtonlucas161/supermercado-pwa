@@ -12,28 +12,33 @@ import {
   HardDrive, 
   Lock, 
   X,
-  Search,
-  Check,
-  Zap,
-  Globe,
-  Sliders,
-  Settings2,
-  Eye,
-  EyeOff,
-  Layers,
-  Briefcase,
-  Phone,
-  MapPin,
-  FileText,
-  Save,
-  Activity,
-  Package,
-  RefreshCw,
-  Radio,
-  Trash2
+  Search, 
+  Check, 
+  Zap, 
+  Globe, 
+  Sliders, 
+  Settings2, 
+  Eye, 
+  EyeOff, 
+  Layers, 
+  Briefcase, 
+  Phone, 
+  MapPin, 
+  FileText, 
+  Save, 
+  Activity, 
+  Package, 
+  RefreshCw, 
+  Radio, 
+  Trash2,
+  Edit2,
+  UserPlus,
+  UserCheck,
+  UserX,
+  Filter
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
-import { Store, StoreEmployee } from '../../types';
+import { Store, StoreEmployee, SETORES_DISPONIVEIS } from '../../types';
 import { triggerScanBeep } from '../../utils/haptics';
 import { 
   fetchSaasTelemetry, 
@@ -52,6 +57,8 @@ export const AdminSaasScreen: React.FC = () => {
     updateStoreUserLimit,
     employees, 
     addOrUpdateEmployee, 
+    deleteEmployee,
+    toggleEmployeeStatus,
     effectiveOnline,
     darkMode,
     isDesktop 
@@ -156,7 +163,8 @@ export const AdminSaasScreen: React.FC = () => {
 
   // Modais de Criação
   const [isStoreModalOpen, setIsStoreModalOpen] = useState(false);
-  const [isManagerModalOpen, setIsManagerModalOpen] = useState(false);
+  const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
+  const [editingEmployee, setEditingEmployee] = useState<StoreEmployee | null>(null);
 
   // Form Nova Loja (Registra apenas infraestrutura sem gerentes automáticos)
   const [newStoreId, setNewStoreId] = useState('');
@@ -167,14 +175,34 @@ export const AdminSaasScreen: React.FC = () => {
   const [newStoreUserLimit, setNewStoreUserLimit] = useState(15);
   const [newStoreColor, setNewStoreColor] = useState('#e11d48');
 
-  // Form Novo Gerente de Loja
-  const [managerName, setManagerName] = useState('');
-  const [managerMatricula, setManagerMatricula] = useState('');
-  const [managerPassword, setManagerPassword] = useState('');
-  const [managerStoreId, setManagerStoreId] = useState(stores[0]?.id || '');
+  // Form Novo / Edição de Perfil de Loja
+  const [profileStoreId, setProfileStoreId] = useState(stores[0]?.id || '');
+  const [profileName, setProfileName] = useState('');
+  const [profileMatricula, setProfileMatricula] = useState('');
+  const [profilePassword, setProfilePassword] = useState('');
+  const [profileCargo, setProfileCargo] = useState('Gerente Geral da Loja');
+  const [profileCustomCargo, setProfileCustomCargo] = useState('');
+  const [profileSetor, setProfileSetor] = useState('TODOS');
+  const [profileAtivo, setProfileAtivo] = useState(true);
+  const [isSavingProfile, setIsSavingProfile] = useState(false);
+
+  // Filtros da Aba de Perfis
+  const [profileFilterStore, setProfileFilterStore] = useState<'todas' | string>('todas');
+  const [profileFilterRole, setProfileFilterRole] = useState<'todos' | 'gerentes' | 'operadores'>('todos');
+  const [profileSearchTerm, setProfileSearchTerm] = useState('');
+
+  // Sincroniza profileStoreId caso a lista de lojas mude ou carregue do banco
+  useEffect(() => {
+    if ((!profileStoreId || !stores.some(s => s.id === profileStoreId)) && stores.length > 0) {
+      setProfileStoreId(stores[0].id);
+    }
+  }, [stores, profileStoreId]);
 
   // Feedback
   const [feedbackMessage, setFeedbackMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
+  // Colaboradores que não são saas_admin
+  const nonSaasEmployees = employees.filter(e => e.cargo.toLowerCase() !== 'saas_admin');
 
   // Filtro de gerentes (exclui saas_admin)
   const storeManagers = employees.filter(
@@ -184,6 +212,50 @@ export const AdminSaasScreen: React.FC = () => {
   );
 
   const totalUserCapacity = stores.reduce((acc, s) => acc + (s.limite_usuarios || 0), 0);
+
+  const handleOpenCreateProfile = (targetStoreId?: string, defaultCargo?: string) => {
+    setEditingEmployee(null);
+    setProfileName('');
+    setProfileMatricula('');
+    setProfilePassword('');
+    setProfileCargo(defaultCargo || 'Gerente Geral da Loja');
+    setProfileCustomCargo('');
+    setProfileSetor('TODOS');
+    setProfileAtivo(true);
+    if (targetStoreId) {
+      setProfileStoreId(targetStoreId);
+    } else if (stores.length > 0) {
+      setProfileStoreId(stores[0].id);
+    }
+    setIsProfileModalOpen(true);
+  };
+
+  const handleOpenEditProfile = (emp: StoreEmployee) => {
+    setEditingEmployee(emp);
+    setProfileStoreId(emp.loja_id);
+    setProfileName(emp.nome);
+    setProfileMatricula(emp.matricula);
+    setProfilePassword(emp.senha || '');
+    const standardCargos = [
+      'Gerente Geral da Loja',
+      'Subgerente',
+      'Encarregado de Setor',
+      'Auditor de Validade',
+      'Conferente de Estoque',
+      'Operador de Gôndola',
+      'Fiscal de Prevenção'
+    ];
+    if (standardCargos.includes(emp.cargo)) {
+      setProfileCargo(emp.cargo);
+      setProfileCustomCargo('');
+    } else {
+      setProfileCargo('Outro');
+      setProfileCustomCargo(emp.cargo);
+    }
+    setProfileSetor(emp.setor_restrito || 'TODOS');
+    setProfileAtivo(emp.ativo);
+    setIsProfileModalOpen(true);
+  };
 
   const handleCreateStore = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -211,7 +283,7 @@ export const AdminSaasScreen: React.FC = () => {
       triggerScanBeep(true);
       setFeedbackMessage({ 
         type: 'success', 
-        text: `Loja "${newStore.nome_loja}" cadastrada com sucesso! Cota configurada para ${newStore.limite_usuarios} usuários (sem gerente automático).` 
+        text: `Loja "${newStore.nome_loja}" cadastrada com sucesso! Cota configurada para ${newStore.limite_usuarios} usuários.` 
       });
       setIsStoreModalOpen(false);
       setNewStoreId('');
@@ -226,38 +298,100 @@ export const AdminSaasScreen: React.FC = () => {
     }
   };
 
-  const handleCreateManager = async (e: React.FormEvent) => {
+  const handleSaveProfile = async (e: React.FormEvent) => {
     e.preventDefault();
-    const targetStoreId = managerStoreId || stores[0]?.id || '';
-    if (!managerName.trim() || !managerMatricula.trim() || !managerPassword.trim() || !targetStoreId) {
-      setFeedbackMessage({ type: 'error', text: 'Preencha todos os campos do gerente e selecione uma loja.' });
+    const finalCargo = profileCargo === 'Outro' ? profileCustomCargo.trim() : profileCargo;
+    const targetStoreId = profileStoreId || selectedStoreForDetails?.id || stores[0]?.id || '';
+
+    if (!profileName.trim() || !profileMatricula.trim() || !targetStoreId) {
+      setFeedbackMessage({ type: 'error', text: 'Preencha o nome, a matrícula e selecione uma loja válida.' });
       return;
     }
 
-    const newEmp: StoreEmployee = {
-      id: `usr_mgr_${Date.now()}`,
-      matricula: managerMatricula.trim(),
-      nome: managerName.trim(),
-      senha: managerPassword.trim(),
-      cargo: 'Gerente Geral da Loja',
-      setor_restrito: 'TODOS',
+    if (!editingEmployee && !profilePassword.trim()) {
+      setFeedbackMessage({ type: 'error', text: 'Informe a senha de acesso para o novo perfil.' });
+      return;
+    }
+
+    setIsSavingProfile(true);
+
+    const empToSave: StoreEmployee = {
+      id: editingEmployee ? editingEmployee.id : `usr_emp_${Date.now()}`,
+      matricula: profileMatricula.trim(),
+      nome: profileName.trim(),
+      senha: profilePassword.trim() || (editingEmployee?.senha || ''),
+      cargo: finalCargo || 'Operador',
+      setor_restrito: profileSetor,
       loja_id: targetStoreId,
-      ativo: true,
-      created_at: new Date().toISOString(),
+      ativo: profileAtivo,
+      created_at: editingEmployee?.created_at || new Date().toISOString(),
     };
 
-    const res = await addOrUpdateEmployee(newEmp);
+    const res = await addOrUpdateEmployee(empToSave);
+    setIsSavingProfile(false);
+
     if (res.success) {
       triggerScanBeep(true);
-      setFeedbackMessage({ type: 'success', text: `Gerente "${newEmp.nome}" provisionado com sucesso para a loja selecionada!` });
-      setIsManagerModalOpen(false);
-      setManagerName('');
-      setManagerMatricula('');
-      setManagerPassword('');
+      setFeedbackMessage({ 
+        type: 'success', 
+        text: `Perfil "${empToSave.nome}" (${empToSave.cargo}) salvo com sucesso na loja selecionada!` 
+      });
+      setIsProfileModalOpen(false);
+      setEditingEmployee(null);
+      if (selectedStoreForDetails) {
+        loadStoreDetailsData(selectedStoreForDetails.id);
+      }
+      loadTelemetry();
     } else {
-      setFeedbackMessage({ type: 'error', text: res.error || 'Erro ao salvar gerente.' });
+      setFeedbackMessage({ type: 'error', text: res.error || 'Erro ao salvar perfil no banco de dados.' });
     }
   };
+
+  const handleDeleteProfile = async (emp: StoreEmployee) => {
+    if (!window.confirm(`Deseja realmente remover o perfil de "${emp.nome}" (Matrícula: ${emp.matricula}) da loja?`)) {
+      return;
+    }
+
+    const res = await deleteEmployee(emp.id, emp.matricula);
+    if (res.success) {
+      setFeedbackMessage({ type: 'success', text: `Perfil "${emp.nome}" excluído com sucesso.` });
+      if (selectedStoreForDetails) {
+        loadStoreDetailsData(selectedStoreForDetails.id);
+      }
+      loadTelemetry();
+    } else {
+      setFeedbackMessage({ type: 'error', text: res.error || 'Erro ao excluir perfil.' });
+    }
+  };
+
+  const handleToggleStatus = async (emp: StoreEmployee) => {
+    await toggleEmployeeStatus(emp.id, !emp.ativo);
+    setFeedbackMessage({ 
+      type: 'success', 
+      text: `Status de "${emp.nome}" alterado para ${!emp.ativo ? 'Ativo' : 'Inativo'}.` 
+    });
+    if (selectedStoreForDetails) {
+      loadStoreDetailsData(selectedStoreForDetails.id);
+    }
+    loadTelemetry();
+  };
+
+  // Filtragem na tabela de perfis
+  const filteredProfiles = nonSaasEmployees.filter(emp => {
+    const matchesStore = profileFilterStore === 'todas' || emp.loja_id === profileFilterStore;
+    const isMgr = emp.cargo.toLowerCase().includes('gerente') || emp.cargo.toLowerCase().includes('admin') || emp.cargo.toLowerCase().includes('master');
+    const matchesRole = 
+      profileFilterRole === 'todos' ? true :
+      profileFilterRole === 'gerentes' ? isMgr :
+      !isMgr;
+    const matchesSearch = 
+      emp.nome.toLowerCase().includes(profileSearchTerm.toLowerCase()) ||
+      emp.matricula.toLowerCase().includes(profileSearchTerm.toLowerCase()) ||
+      emp.cargo.toLowerCase().includes(profileSearchTerm.toLowerCase()) ||
+      (stores.find(s => s.id === emp.loja_id)?.nome_loja || '').toLowerCase().includes(profileSearchTerm.toLowerCase());
+
+    return matchesStore && matchesRole && matchesSearch;
+  });
 
   return (
     <div className={`min-h-screen flex flex-col font-sans transition-colors duration-200 ${
@@ -464,8 +598,8 @@ export const AdminSaasScreen: React.FC = () => {
                   : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-800 hover:border-rose-500/40'
               }`}
             >
-              <KeyRound className="w-4 h-4" />
-              <span>Gerentes de Loja ({storeManagers.length})</span>
+              <Users className="w-4 h-4" />
+              <span>Perfis & Usuários ({nonSaasEmployees.length})</span>
             </button>
           </div>
 
@@ -482,11 +616,11 @@ export const AdminSaasScreen: React.FC = () => {
 
             {activeTab === 'gerentes' && (
               <button
-                onClick={() => setIsManagerModalOpen(true)}
+                onClick={() => handleOpenCreateProfile()}
                 className="py-2 px-3.5 rounded-2xl text-xs font-bold bg-rose-600 hover:bg-rose-700 text-white shadow-md shadow-rose-600/25 flex items-center gap-1.5 transition cursor-pointer"
               >
-                <Plus className="w-4 h-4" />
-                <span>Criar Gerente de Loja</span>
+                <UserPlus className="w-4 h-4" />
+                <span>Criar Perfil para Loja</span>
               </button>
             )}
           </div>
@@ -503,7 +637,7 @@ export const AdminSaasScreen: React.FC = () => {
                 <p className="text-sm font-bold text-slate-700 dark:text-slate-200">Nenhuma loja cadastrada no servidor</p>
                 <button
                   onClick={() => setIsStoreModalOpen(true)}
-                  className="mt-3 px-4 py-2 rounded-xl bg-rose-600 text-white text-xs font-bold"
+                  className="mt-3 px-4 py-2 rounded-xl bg-rose-600 text-white text-xs font-bold cursor-pointer"
                 >
                   Criar Primeira Loja
                 </button>
@@ -608,7 +742,7 @@ export const AdminSaasScreen: React.FC = () => {
 
                       {/* Dica de Clique */}
                       <div className="pt-1 flex items-center justify-between text-[11px] text-rose-600 dark:text-rose-400 font-bold group-hover:underline">
-                        <span>Editar cota, ver equipe e senhas</span>
+                        <span>Editar cota, gerenciar perfis e senhas</span>
                         <span>→</span>
                       </div>
                     </div>
@@ -620,73 +754,222 @@ export const AdminSaasScreen: React.FC = () => {
         )}
 
         {/* ================================================================= */}
-        {/* SEÇÃO 2: GERENTES DE LOJA (ADMINISTRADORES DE UNIDADE) */}
+        {/* SEÇÃO 2: PERFIS & COLABORADORES DE TODAS AS LOJAS */}
         {/* ================================================================= */}
         {activeTab === 'gerentes' && (
           <div className="space-y-4">
             <div className="bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 rounded-3xl overflow-hidden shadow-sm">
-              <div className="p-4 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
+              <div className="p-4 border-b border-slate-100 dark:border-slate-800 flex flex-col md:flex-row md:items-center justify-between gap-3">
                 <div>
-                  <h3 className="font-extrabold text-sm text-slate-900 dark:text-white">
-                    Gerentes de Loja Cadastrados
+                  <h3 className="font-extrabold text-sm text-slate-900 dark:text-white flex items-center gap-2">
+                    <Users className="w-4 h-4 text-rose-600" />
+                    <span>Perfis e Usuários das Lojas ({filteredProfiles.length} exibidos de {nonSaasEmployees.length})</span>
                   </h3>
                   <p className="text-[11px] text-slate-400">
-                    Estes usuários possuem acesso ao painel de gestão de equipe e cargos de suas respectivas lojas.
+                    Crie, edite e gerencie gerentes, subgerentes, encarregados, conferentes e operadores de cada loja.
                   </p>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => handleOpenCreateProfile()}
+                  className="self-start md:self-auto px-3.5 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-extrabold text-xs shadow-md shadow-rose-600/20 flex items-center gap-1.5 transition cursor-pointer"
+                >
+                  <UserPlus className="w-3.5 h-3.5" />
+                  <span>Novo Perfil de Loja</span>
+                </button>
+              </div>
+
+              {/* Barra de Filtros e Busca */}
+              <div className="p-3.5 bg-slate-50/70 dark:bg-slate-850/50 border-b border-slate-100 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+                <div className="flex flex-wrap items-center gap-2">
+                  <div className="flex items-center gap-1 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-2.5 py-1.5 shadow-xs">
+                    <Filter className="w-3.5 h-3.5 text-slate-400" />
+                    <select
+                      value={profileFilterStore}
+                      onChange={e => setProfileFilterStore(e.target.value)}
+                      className="bg-transparent font-bold text-slate-700 dark:text-slate-200 focus:outline-none"
+                    >
+                      <option value="todas">Todas as Lojas ({stores.length})</option>
+                      {stores.map(s => (
+                        <option key={s.id} value={s.id}>
+                          {s.nome_loja}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="flex items-center bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-0.5">
+                    <button
+                      type="button"
+                      onClick={() => setProfileFilterRole('todos')}
+                      className={`px-2.5 py-1 rounded-lg font-bold text-[11px] transition ${
+                        profileFilterRole === 'todos' 
+                          ? 'bg-rose-600 text-white' 
+                          : 'text-slate-600 dark:text-slate-300 hover:text-slate-900'
+                      }`}
+                    >
+                      Todos ({nonSaasEmployees.length})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setProfileFilterRole('gerentes')}
+                      className={`px-2.5 py-1 rounded-lg font-bold text-[11px] transition ${
+                        profileFilterRole === 'gerentes' 
+                          ? 'bg-rose-600 text-white' 
+                          : 'text-slate-600 dark:text-slate-300 hover:text-slate-900'
+                      }`}
+                    >
+                      Gerentes ({storeManagers.length})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setProfileFilterRole('operadores')}
+                      className={`px-2.5 py-1 rounded-lg font-bold text-[11px] transition ${
+                        profileFilterRole === 'operadores' 
+                          ? 'bg-rose-600 text-white' 
+                          : 'text-slate-600 dark:text-slate-300 hover:text-slate-900'
+                      }`}
+                    >
+                      Equipe ({Math.max(0, nonSaasEmployees.length - storeManagers.length)})
+                    </button>
+                  </div>
+                </div>
+
+                <div className="relative min-w-[220px]">
+                  <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    placeholder="Buscar nome, matrícula, cargo..."
+                    value={profileSearchTerm}
+                    onChange={e => setProfileSearchTerm(e.target.value)}
+                    className="w-full pl-8 pr-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-medium focus:outline-none focus:ring-1 focus:ring-rose-500"
+                  />
                 </div>
               </div>
 
-              {storeManagers.length === 0 ? (
-                <div className="p-8 text-center text-xs text-slate-400">
-                  Nenhum gerente cadastrado ainda. Clique em "Criar Gerente de Loja" para provisionar o primeiro.
+              {filteredProfiles.length === 0 ? (
+                <div className="p-12 text-center text-xs text-slate-400 space-y-3">
+                  <Users className="w-8 h-8 text-slate-300 mx-auto" />
+                  <p>Nenhum perfil de colaborador encontrado com os filtros atuais.</p>
+                  <button
+                    type="button"
+                    onClick={() => handleOpenCreateProfile()}
+                    className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold inline-flex items-center gap-1.5 transition cursor-pointer"
+                  >
+                    <UserPlus className="w-4 h-4" />
+                    <span>Criar Novo Perfil</span>
+                  </button>
                 </div>
               ) : (
                 <div className="overflow-x-auto">
                   <table className="w-full text-left text-xs">
                     <thead className="bg-slate-50 dark:bg-slate-800/60 text-slate-500 font-bold uppercase text-[10px]">
                       <tr>
-                        <th className="p-3.5">Nome do Gerente</th>
-                        <th className="p-3.5">Matrícula de Login</th>
+                        <th className="p-3.5">Nome do Colaborador</th>
+                        <th className="p-3.5">Matrícula</th>
                         <th className="p-3.5">Senha de Acesso</th>
                         <th className="p-3.5">Loja Vinculada</th>
-                        <th className="p-3.5">Cargo</th>
+                        <th className="p-3.5">Cargo / Perfil</th>
+                        <th className="p-3.5">Setor</th>
                         <th className="p-3.5 text-center">Status</th>
+                        <th className="p-3.5 text-center">Ações</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                      {storeManagers.map(mgr => {
-                        const store = stores.find(s => s.id === mgr.loja_id);
-                        const isRevealed = Boolean(revealedPasswords[mgr.id]);
+                      {filteredProfiles.map(emp => {
+                        const store = stores.find(s => s.id === emp.loja_id);
+                        const isRevealed = Boolean(revealedPasswords[emp.id]);
+                        const isOnline = storeActiveSessions.some(
+                          s => s.matricula.trim().toLowerCase() === emp.matricula.trim().toLowerCase()
+                        );
+                        const isMgr = emp.cargo.toLowerCase().includes('gerente') || emp.cargo.toLowerCase().includes('admin');
 
                         return (
-                          <tr key={mgr.id} className="hover:bg-slate-50/60 dark:hover:bg-slate-800/30">
-                            <td className="p-3.5 font-bold text-slate-900 dark:text-white">
-                              {mgr.nome}
+                          <tr key={emp.id} className="hover:bg-slate-50/60 dark:hover:bg-slate-800/30">
+                            <td className="p-3.5">
+                              <div className="flex items-center gap-2">
+                                <span className="font-bold text-slate-900 dark:text-white">
+                                  {emp.nome}
+                                </span>
+                                {isOnline && (
+                                  <span className="text-[9px] font-bold px-1.5 py-0.2 rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
+                                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                                    Online
+                                  </span>
+                                )}
+                              </div>
                             </td>
                             <td className="p-3.5 font-mono font-semibold text-rose-600 dark:text-rose-400">
-                              {mgr.matricula}
+                              {emp.matricula}
                             </td>
                             <td className="p-3.5">
                               <button
                                 type="button"
-                                onClick={() => togglePasswordReveal(mgr.id)}
+                                onClick={() => togglePasswordReveal(emp.id)}
                                 className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-rose-50 dark:hover:bg-rose-950/30 font-mono text-[11px] text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 transition cursor-pointer"
                                 title="Clique para ver ou ocultar a senha deste usuário"
                               >
                                 {isRevealed ? <EyeOff className="w-3.5 h-3.5 text-rose-500" /> : <Eye className="w-3.5 h-3.5 text-slate-400" />}
-                                <span>{isRevealed ? (mgr.senha || 'Não cadastrada') : '••••••••'}</span>
+                                <span>{isRevealed ? (emp.senha || 'Não cadastrada') : '••••••••'}</span>
                               </button>
                             </td>
-                            <td className="p-3.5 text-slate-600 dark:text-slate-300">
-                              {store ? store.nome_loja : mgr.loja_id}
+                            <td className="p-3.5">
+                              <div className="flex items-center gap-1.5">
+                                <span 
+                                  className="w-2 h-2 rounded-full shrink-0" 
+                                  style={{ backgroundColor: store?.cor_primaria || '#e11d48' }} 
+                                />
+                                <span className="text-slate-700 dark:text-slate-300 font-medium">
+                                  {store ? store.nome_loja : emp.loja_id}
+                                </span>
+                              </div>
                             </td>
-                            <td className="p-3.5 text-slate-500">
-                              {mgr.cargo}
+                            <td className="p-3.5">
+                              <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                                isMgr 
+                                  ? 'bg-rose-500/15 text-rose-600 dark:text-rose-400 border border-rose-500/20' 
+                                  : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300'
+                              }`}>
+                                {emp.cargo}
+                              </span>
+                            </td>
+                            <td className="p-3.5 text-slate-500 text-[11px]">
+                              {emp.setor_restrito || 'TODOS'}
                             </td>
                             <td className="p-3.5 text-center">
-                              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400">
-                                Ativo
-                              </span>
+                              <button
+                                type="button"
+                                onClick={() => handleToggleStatus(emp)}
+                                className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full transition cursor-pointer ${
+                                  emp.ativo 
+                                    ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/25' 
+                                    : 'bg-slate-200 dark:bg-slate-700 text-slate-500 hover:bg-slate-300'
+                                }`}
+                                title={emp.ativo ? 'Clique para desativar usuário' : 'Clique para ativar usuário'}
+                              >
+                                {emp.ativo ? 'Ativo' : 'Inativo'}
+                              </button>
+                            </td>
+                            <td className="p-3.5 text-center">
+                              <div className="flex items-center justify-center gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() => handleOpenEditProfile(emp)}
+                                  className="p-1.5 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 transition cursor-pointer"
+                                  title="Editar perfil"
+                                >
+                                  <Edit2 className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteProfile(emp)}
+                                  className="p-1.5 rounded-xl hover:bg-rose-50 dark:hover:bg-rose-950/30 text-rose-600 transition cursor-pointer"
+                                  title="Excluir perfil permanentemente"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
                             </td>
                           </tr>
                         );
@@ -869,6 +1152,16 @@ export const AdminSaasScreen: React.FC = () => {
                 </p>
               )}
 
+              {/* Botão de Ação Rápida: Criar Perfil para Esta Loja */}
+              <button
+                type="button"
+                onClick={() => handleOpenCreateProfile(selectedStoreForDetails.id)}
+                className="w-full py-2.5 px-4 rounded-2xl bg-rose-600 hover:bg-rose-700 text-white font-extrabold text-xs shadow-md shadow-rose-600/25 flex items-center justify-center gap-2 transition cursor-pointer"
+              >
+                <UserPlus className="w-4 h-4" />
+                <span>Criar Novo Perfil / Colaborador para {selectedStoreForDetails.nome_loja}</span>
+              </button>
+
               {/* Seção de Sessões Ativas e Hierarquia */}
               <div className="flex-1 overflow-y-auto space-y-4 pr-1">
                 {/* 1. SESSÕES ATIVAS SINCRONIZADAS EM TEMPO REAL */}
@@ -943,7 +1236,14 @@ export const AdminSaasScreen: React.FC = () => {
                       <KeyRound className="w-3.5 h-3.5" />
                       <span>2. Gerentes & Lideranças da Loja ({gerentes.length})</span>
                     </h4>
-                    <span className="text-[10px] text-slate-400">Nível Hierárquico 1</span>
+                    <button
+                      type="button"
+                      onClick={() => handleOpenCreateProfile(selectedStoreForDetails.id, 'Gerente Geral da Loja')}
+                      className="text-[11px] font-bold text-rose-600 dark:text-rose-400 hover:underline flex items-center gap-1 cursor-pointer"
+                    >
+                      <Plus className="w-3 h-3" />
+                      <span>Adicionar Gerente</span>
+                    </button>
                   </div>
 
                   {isLoadingStoreDetails && gerentes.length === 0 ? (
@@ -952,8 +1252,16 @@ export const AdminSaasScreen: React.FC = () => {
                       <span>Carregando gerentes da loja...</span>
                     </div>
                   ) : gerentes.length === 0 ? (
-                    <div className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-800 text-xs text-slate-400 text-center">
-                      Nenhum gerente cadastrado nesta loja.
+                    <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800 text-xs text-slate-400 text-center space-y-2 border border-dashed border-slate-200 dark:border-slate-700">
+                      <p>Nenhum gerente cadastrado nesta loja.</p>
+                      <button
+                        type="button"
+                        onClick={() => handleOpenCreateProfile(selectedStoreForDetails.id, 'Gerente Geral da Loja')}
+                        className="px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs inline-flex items-center gap-1.5 transition cursor-pointer"
+                      >
+                        <UserPlus className="w-3.5 h-3.5" />
+                        <span>Cadastrar Gerente para esta Loja</span>
+                      </button>
                     </div>
                   ) : (
                     <div className="space-y-1.5">
@@ -990,16 +1298,47 @@ export const AdminSaasScreen: React.FC = () => {
                               </p>
                             </div>
 
-                            <div className="flex items-center gap-2 self-end sm:self-auto">
+                            <div className="flex items-center gap-1.5 self-end sm:self-auto flex-wrap">
                               <span className="text-[11px] text-slate-400 font-semibold">Senha:</span>
                               <button
                                 type="button"
                                 onClick={() => togglePasswordReveal(emp.id)}
-                                className="px-3 py-1.5 rounded-xl bg-white dark:bg-slate-800 hover:bg-rose-50 dark:hover:bg-slate-700 font-mono text-xs font-bold text-slate-900 dark:text-white border border-rose-300 dark:border-rose-900/50 shadow-xs flex items-center gap-1.5 transition cursor-pointer"
+                                className="px-2.5 py-1 rounded-xl bg-white dark:bg-slate-800 hover:bg-rose-50 dark:hover:bg-slate-700 font-mono text-xs font-bold text-slate-900 dark:text-white border border-rose-300 dark:border-rose-900/50 shadow-xs flex items-center gap-1 transition cursor-pointer"
                                 title="Clique para ver ou ocultar a senha deste usuário"
                               >
                                 {isRevealed ? <EyeOff className="w-3.5 h-3.5 text-rose-500" /> : <Eye className="w-3.5 h-3.5 text-slate-400" />}
                                 <span>{isRevealed ? (emp.senha || 'Não cadastrada') : '••••••••'}</span>
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => handleToggleStatus(emp)}
+                                className={`p-1.5 rounded-xl border text-[11px] font-bold transition cursor-pointer ${
+                                  emp.ativo 
+                                    ? 'bg-emerald-50 dark:bg-emerald-950/30 border-emerald-300 dark:border-emerald-800 text-emerald-600' 
+                                    : 'bg-slate-100 dark:bg-slate-800 border-slate-300 dark:border-slate-700 text-slate-400'
+                                }`}
+                                title={emp.ativo ? 'Usuário ativo (clique para desativar)' : 'Usuário inativo (clique para ativar)'}
+                              >
+                                {emp.ativo ? <UserCheck className="w-3.5 h-3.5" /> : <UserX className="w-3.5 h-3.5" />}
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => handleOpenEditProfile(emp)}
+                                className="p-1.5 rounded-xl bg-white dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700 transition cursor-pointer"
+                                title="Editar dados deste gerente"
+                              >
+                                <Edit2 className="w-3.5 h-3.5" />
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteProfile(emp)}
+                                className="p-1.5 rounded-xl bg-rose-50 dark:bg-rose-950/30 hover:bg-rose-100 dark:hover:bg-rose-900/40 text-rose-600 dark:text-rose-400 border border-rose-200 dark:border-rose-800 transition cursor-pointer"
+                                title="Excluir este gerente permanentemente"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
                               </button>
                             </div>
                           </div>
@@ -1016,7 +1355,14 @@ export const AdminSaasScreen: React.FC = () => {
                       <Users className="w-3.5 h-3.5 text-slate-400" />
                       <span>3. Funcionários & Operadores de Área ({funcionarios.length})</span>
                     </h4>
-                    <span className="text-[10px] text-slate-400">Nível Hierárquico 2</span>
+                    <button
+                      type="button"
+                      onClick={() => handleOpenCreateProfile(selectedStoreForDetails.id, 'Operador de Gôndola')}
+                      className="text-[11px] font-bold text-rose-600 dark:text-rose-400 hover:underline flex items-center gap-1 cursor-pointer"
+                    >
+                      <Plus className="w-3 h-3" />
+                      <span>Adicionar Operador</span>
+                    </button>
                   </div>
 
                   {isLoadingStoreDetails && funcionarios.length === 0 ? (
@@ -1025,8 +1371,16 @@ export const AdminSaasScreen: React.FC = () => {
                       <span>Carregando funcionários da loja...</span>
                     </div>
                   ) : funcionarios.length === 0 ? (
-                    <div className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-800 text-xs text-slate-400 text-center">
-                      Nenhum operador cadastrado nesta loja ainda.
+                    <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800 text-xs text-slate-400 text-center space-y-2 border border-dashed border-slate-200 dark:border-slate-700">
+                      <p>Nenhum operador cadastrado nesta loja ainda.</p>
+                      <button
+                        type="button"
+                        onClick={() => handleOpenCreateProfile(selectedStoreForDetails.id, 'Operador de Gôndola')}
+                        className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs inline-flex items-center gap-1.5 transition cursor-pointer"
+                      >
+                        <UserPlus className="w-3.5 h-3.5" />
+                        <span>Cadastrar Colaborador para esta Loja</span>
+                      </button>
                     </div>
                   ) : (
                     <div className="space-y-1.5">
@@ -1063,16 +1417,47 @@ export const AdminSaasScreen: React.FC = () => {
                               </p>
                             </div>
 
-                            <div className="flex items-center gap-2 self-end sm:self-auto">
+                            <div className="flex items-center gap-1.5 self-end sm:self-auto flex-wrap">
                               <span className="text-[11px] text-slate-400 font-semibold">Senha:</span>
                               <button
                                 type="button"
                                 onClick={() => togglePasswordReveal(emp.id)}
-                                className="px-3 py-1.5 rounded-xl bg-white dark:bg-slate-700 hover:bg-slate-100 dark:hover:bg-slate-650 font-mono text-xs font-bold text-slate-900 dark:text-white border border-slate-200 dark:border-slate-600 shadow-xs flex items-center gap-1.5 transition cursor-pointer"
+                                className="px-2.5 py-1 rounded-xl bg-white dark:bg-slate-700 hover:bg-slate-100 dark:hover:bg-slate-650 font-mono text-xs font-bold text-slate-900 dark:text-white border border-slate-200 dark:border-slate-600 shadow-xs flex items-center gap-1 transition cursor-pointer"
                                 title="Clique para ver ou ocultar a senha deste funcionário"
                               >
                                 {isRevealed ? <EyeOff className="w-3.5 h-3.5 text-rose-500" /> : <Eye className="w-3.5 h-3.5 text-slate-400" />}
                                 <span>{isRevealed ? (emp.senha || 'Não cadastrada') : '••••••••'}</span>
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => handleToggleStatus(emp)}
+                                className={`p-1.5 rounded-xl border text-[11px] font-bold transition cursor-pointer ${
+                                  emp.ativo 
+                                    ? 'bg-emerald-50 dark:bg-emerald-950/30 border-emerald-300 dark:border-emerald-800 text-emerald-600' 
+                                    : 'bg-slate-100 dark:bg-slate-800 border-slate-300 dark:border-slate-700 text-slate-400'
+                                }`}
+                                title={emp.ativo ? 'Usuário ativo (clique para desativar)' : 'Usuário inativo (clique para ativar)'}
+                              >
+                                {emp.ativo ? <UserCheck className="w-3.5 h-3.5" /> : <UserX className="w-3.5 h-3.5" />}
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => handleOpenEditProfile(emp)}
+                                className="p-1.5 rounded-xl bg-white dark:bg-slate-700 hover:bg-slate-100 dark:hover:bg-slate-650 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-600 transition cursor-pointer"
+                                title="Editar dados deste funcionário"
+                              >
+                                <Edit2 className="w-3.5 h-3.5" />
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteProfile(emp)}
+                                className="p-1.5 rounded-xl bg-rose-50 dark:bg-rose-950/30 hover:bg-rose-100 dark:hover:bg-rose-900/40 text-rose-600 dark:text-rose-400 border border-rose-200 dark:border-rose-800 transition cursor-pointer"
+                                title="Excluir este funcionário permanentemente"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
                               </button>
                             </div>
                           </div>
@@ -1290,98 +1675,187 @@ export const AdminSaasScreen: React.FC = () => {
         </div>
       )}
 
-      {/* Modal Criar Gerente */}
-      {isManagerModalOpen && (
+      {/* Modal Criar / Editar Perfil de Loja */}
+      {isProfileModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4 animate-in fade-in duration-200">
-          <div className="w-full max-w-md bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl shadow-2xl p-6 space-y-4">
+          <div className="w-full max-w-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl shadow-2xl p-6 space-y-4 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
               <div className="flex items-center gap-2.5">
                 <div className="p-2.5 rounded-2xl bg-rose-500/10 text-rose-600">
-                  <KeyRound className="w-5 h-5" />
+                  <UserPlus className="w-5 h-5" />
                 </div>
                 <div>
-                  <h3 className="font-extrabold text-sm text-slate-900 dark:text-white">Criar Gerente de Loja</h3>
-                  <p className="text-[11px] text-slate-400">Provisione o administrador da loja selecionada</p>
+                  <h3 className="font-extrabold text-sm text-slate-900 dark:text-white">
+                    {editingEmployee ? 'Editar Perfil de Colaborador' : 'Criar Perfil / Usuário para Loja'}
+                  </h3>
+                  <p className="text-[11px] text-slate-400">
+                    {editingEmployee ? `Atualize os dados e acessos de ${editingEmployee.nome}` : 'Provisione novos acessos de gerentes ou equipe da unidade'}
+                  </p>
                 </div>
               </div>
-              <button onClick={() => setIsManagerModalOpen(false)} className="text-slate-400 hover:text-slate-600">
+              <button 
+                type="button"
+                onClick={() => {
+                  setIsProfileModalOpen(false);
+                  setEditingEmployee(null);
+                }} 
+                className="text-slate-400 hover:text-slate-600 cursor-pointer"
+              >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            <form onSubmit={handleCreateManager} className="space-y-3.5 text-xs">
+            <form onSubmit={handleSaveProfile} className="space-y-3.5 text-xs">
               <div>
                 <label className="font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider text-[10px] block mb-1">
                   Vincular à Loja *
                 </label>
                 <select
-                  value={managerStoreId || stores[0]?.id || ''}
-                  onChange={e => setManagerStoreId(e.target.value)}
-                  className="w-full p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-bold"
+                  value={profileStoreId || stores[0]?.id || ''}
+                  onChange={e => setProfileStoreId(e.target.value)}
+                  className="w-full p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-bold focus:outline-none focus:ring-2 focus:ring-rose-500"
                 >
-                  {stores.map(s => (
-                    <option key={s.id} value={s.id}>
-                      {s.nome_loja} (Limite: {s.limite_usuarios} usuários)
-                    </option>
-                  ))}
+                  {stores.map(s => {
+                    const count = employees.filter(e => e.loja_id === s.id && e.cargo.toLowerCase() !== 'saas_admin').length;
+                    return (
+                      <option key={s.id} value={s.id}>
+                        {s.nome_loja} ({count}/{s.limite_usuarios || 15} usuários contratados)
+                      </option>
+                    );
+                  })}
                 </select>
               </div>
 
-              <div>
-                <label className="font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider text-[10px] block mb-1">
-                  Nome Completo do Gerente *
-                </label>
-                <input
-                  type="text"
-                  required
-                  placeholder="Ex: Mariana Albuquerque"
-                  value={managerName}
-                  onChange={e => setManagerName(e.target.value)}
-                  className="w-full p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-medium"
-                />
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider text-[10px] block mb-1">
+                    Nome Completo *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="Ex: Mariana Albuquerque"
+                    value={profileName}
+                    onChange={e => setProfileName(e.target.value)}
+                    className="w-full p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-medium focus:outline-none focus:ring-2 focus:ring-rose-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider text-[10px] block mb-1">
+                    Matrícula de Login *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="Ex: 5001 ou GER-01"
+                    value={profileMatricula}
+                    onChange={e => setProfileMatricula(e.target.value)}
+                    className="w-full p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-mono font-bold focus:outline-none focus:ring-2 focus:ring-rose-500"
+                  />
+                </div>
               </div>
 
               <div>
                 <label className="font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider text-[10px] block mb-1">
-                  Matrícula de Login *
-                </label>
-                <input
-                  type="text"
-                  required
-                  placeholder="Ex: GER-002 ou 5001"
-                  value={managerMatricula}
-                  onChange={e => setManagerMatricula(e.target.value)}
-                  className="w-full p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-mono font-bold"
-                />
-              </div>
-
-              <div>
-                <label className="font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider text-[10px] block mb-1">
-                  Senha Provisória de Acesso *
+                  {editingEmployee ? 'Nova Senha de Acesso (deixe em branco para manter a atual)' : 'Senha de Acesso *'}
                 </label>
                 <input
                   type="password"
-                  required
-                  placeholder="Digite uma senha forte"
-                  value={managerPassword}
-                  onChange={e => setManagerPassword(e.target.value)}
-                  className="w-full p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-mono"
+                  required={!editingEmployee}
+                  placeholder={editingEmployee ? 'Manter senha atual ou digitar nova' : 'Digite uma senha segura'}
+                  value={profilePassword}
+                  onChange={e => setProfilePassword(e.target.value)}
+                  className="w-full p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-mono focus:outline-none focus:ring-2 focus:ring-rose-500"
                 />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider text-[10px] block mb-1">
+                    Cargo / Função na Loja *
+                  </label>
+                  <select
+                    value={profileCargo}
+                    onChange={e => setProfileCargo(e.target.value)}
+                    className="w-full p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-bold focus:outline-none focus:ring-2 focus:ring-rose-500"
+                  >
+                    <option value="Gerente Geral da Loja">Gerente Geral da Loja</option>
+                    <option value="Subgerente">Subgerente</option>
+                    <option value="Encarregado de Setor">Encarregado de Setor</option>
+                    <option value="Auditor de Validade">Auditor de Validade</option>
+                    <option value="Conferente de Estoque">Conferente de Estoque</option>
+                    <option value="Operador de Gôndola">Operador de Gôndola</option>
+                    <option value="Fiscal de Prevenção">Fiscal de Prevenção</option>
+                    <option value="Outro">Outro (personalizado)</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider text-[10px] block mb-1">
+                    Setor Restrito
+                  </label>
+                  <select
+                    value={profileSetor}
+                    onChange={e => setProfileSetor(e.target.value)}
+                    className="w-full p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-bold focus:outline-none focus:ring-2 focus:ring-rose-500"
+                  >
+                    {SETORES_DISPONIVEIS.map(setor => (
+                      <option key={setor} value={setor}>
+                        {setor}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              {profileCargo === 'Outro' && (
+                <div>
+                  <label className="font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider text-[10px] block mb-1">
+                    Especifique o Cargo *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="Ex: Supervisor Regional, Estoquista Noturno..."
+                    value={profileCustomCargo}
+                    onChange={e => setProfileCustomCargo(e.target.value)}
+                    className="w-full p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-medium focus:outline-none focus:ring-2 focus:ring-rose-500"
+                  />
+                </div>
+              )}
+
+              <div className="flex items-center gap-2 pt-1">
+                <input
+                  type="checkbox"
+                  id="profile-active-check"
+                  checked={profileAtivo}
+                  onChange={e => setProfileAtivo(e.target.checked)}
+                  className="rounded text-rose-600 focus:ring-rose-500 cursor-pointer w-4 h-4"
+                />
+                <label htmlFor="profile-active-check" className="font-bold text-slate-700 dark:text-slate-300 text-xs cursor-pointer">
+                  Perfil Ativo (Permite login e operações no app da loja)
+                </label>
               </div>
 
               <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100 dark:border-slate-800">
                 <button
                   type="button"
-                  onClick={() => setIsManagerModalOpen(false)}
+                  onClick={() => {
+                    setIsProfileModalOpen(false);
+                    setEditingEmployee(null);
+                  }}
                   className="px-4 py-2.5 rounded-xl text-xs font-bold text-slate-500 hover:text-slate-700 cursor-pointer"
                 >
                   Cancelar
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2.5 rounded-xl text-xs font-black bg-rose-600 hover:bg-rose-700 text-white shadow-md shadow-rose-600/25 cursor-pointer"
+                  disabled={isSavingProfile}
+                  className="px-5 py-2.5 rounded-xl text-xs font-black bg-rose-600 hover:bg-rose-700 text-white shadow-md shadow-rose-600/25 flex items-center gap-1.5 transition cursor-pointer disabled:opacity-50"
                 >
-                  Provisionar Gerente
+                  {isSavingProfile ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+                  <span>{isSavingProfile ? 'Salvando...' : (editingEmployee ? 'Atualizar Perfil' : 'Salvar Perfil')}</span>
                 </button>
               </div>
             </form>

@@ -1385,14 +1385,102 @@ export async function saveStoreEmployee(emp: StoreEmployee): Promise<{ success: 
   };
 
   if (!cleanEmp.id || !cleanEmp.matricula || !cleanEmp.nome) {
-    return { success: false, error: 'Dados do funcionário inválidos.' };
+    return { success: false, error: 'Dados do funcionário inválidos. Matrícula e nome são obrigatórios.' };
+  }
+
+  if (!cleanEmp.loja_id) {
+    return { success: false, error: 'Selecione uma loja válida para vincular o perfil.' };
   }
 
   const encryptedNome = encryptSingleField(cleanEmp.nome);
   const encryptedSenha = cleanEmp.senha ? encryptSingleField(cleanEmp.senha, undefined, { skipSanitize: true }) : '';
 
+  if (client && isSupabaseConfigured()) {
+    try {
+      // 1. Verifica se a loja existe no banco de dados para evitar violação de FK
+      const { data: storeRow, error: storeErr } = await client
+        .from('lojas')
+        .select('id, nome_loja, limite_usuarios')
+        .eq('id', cleanEmp.loja_id)
+        .maybeSingle();
+
+      if (storeErr || !storeRow) {
+        return { 
+          success: false, 
+          error: `A loja selecionada (ID: "${cleanEmp.loja_id}") não foi encontrada no banco de dados. Atualize a lista de lojas.` 
+        };
+      }
+
+      // 2. Verifica se o usuário já existe pela matrícula para reaproveitar o ID correto (evita conflito de chave única)
+      const { data: existingUser, error: checkErr } = await client
+        .from('usuarios')
+        .select('id, matricula, loja_id')
+        .eq('matricula', cleanEmp.matricula)
+        .maybeSingle();
+
+      if (checkErr && checkErr.code !== 'PGRST116') {
+        console.warn('Aviso ao consultar usuário existente:', checkErr);
+      }
+
+      const finalId = existingUser?.id || cleanEmp.id;
+      const isNewUser = !existingUser;
+
+      // 3. Verifica o limite de licenças da loja se for um novo usuário
+      if (isNewUser) {
+        const { count: usersCount, error: countErr } = await client
+          .from('usuarios')
+          .select('*', { count: 'exact', head: true })
+          .eq('loja_id', cleanEmp.loja_id)
+          .neq('cargo', 'saas_admin');
+
+        const userLimit = storeRow.limite_usuarios || 15;
+        if (!countErr && usersCount !== null && usersCount >= userLimit) {
+          return {
+            success: false,
+            error: `Limite de licenças (${userLimit}) atingido para a loja "${storeRow.nome_loja}". Amplie a cota antes de cadastrar novos perfis.`
+          };
+        }
+      }
+
+      // 4. Salva no banco de dados Supabase
+      const { error: upsertErr } = await client.from('usuarios').upsert({
+        id: finalId,
+        matricula: cleanEmp.matricula,
+        nome: encryptedNome,
+        senha: encryptedSenha,
+        cargo: cleanEmp.cargo,
+        setor: cleanEmp.setor_restrito,
+        loja_id: cleanEmp.loja_id,
+        ativo: cleanEmp.ativo,
+      });
+
+      if (upsertErr) {
+        console.error('Erro ao salvar funcionário no banco:', upsertErr);
+        return { success: false, error: `Erro no banco de dados: ${upsertErr.message}` };
+      }
+
+      // 5. Sincroniza credencial com auth.users e atualiza senha_hash
+      if (cleanEmp.senha) {
+        try {
+          const { error: syncErr } = await client.rpc('rpc_sync_user_password', {
+            p_matricula: cleanEmp.matricula,
+            p_senha: cleanEmp.senha,
+          });
+          if (syncErr) {
+            console.warn('Aviso ao sincronizar senha com auth.users:', syncErr);
+          }
+        } catch (syncErr) {
+          console.warn('Exceção ao sincronizar senha com auth.users:', syncErr);
+        }
+      }
+    } catch (err: any) {
+      console.error('Exceção ao salvar funcionário no banco:', err);
+      return { success: false, error: err?.message || 'Falha de comunicação com o servidor ao salvar perfil.' };
+    }
+  }
+
+  // Atualização no armazenamento local (cache / offline)
   const allEmps = getStoredEmployees();
-  const isNewEmployee = !allEmps.some(e => e.id === cleanEmp.id || e.matricula === cleanEmp.matricula);
   const storedRecord: StoreEmployee = {
     ...cleanEmp,
     nome: encryptedNome,
@@ -1403,45 +1491,42 @@ export async function saveStoreEmployee(emp: StoreEmployee): Promise<{ success: 
     localStorage.setItem(LOCAL_STORAGE_EMPLOYEES_KEY, JSON.stringify(updated));
   }
 
+  return { success: true };
+}
+
+export async function deleteStoreEmployee(empId: string, matricula?: string): Promise<{ success: boolean; error?: string }> {
+  const cleanId = sanitizeIdentifier(empId, 64);
+  if (!cleanId) return { success: false, error: 'ID de usuário inválido.' };
+
+  const allEmps = getStoredEmployees();
+  const targetEmp = allEmps.find(e => e.id === cleanId || (matricula && e.matricula === matricula));
+  const finalMatricula = targetEmp?.matricula || matricula;
+
+  // Remove do cache local
+  const updated = allEmps.filter(e => e.id !== cleanId && (!finalMatricula || e.matricula !== finalMatricula));
+  if (typeof window !== 'undefined') {
+    localStorage.setItem(LOCAL_STORAGE_EMPLOYEES_KEY, JSON.stringify(updated));
+  }
+
   if (client && isSupabaseConfigured()) {
     try {
-      await client.from('usuarios').upsert({
-        id: cleanEmp.id,
-        matricula: cleanEmp.matricula,
-        nome: encryptedNome,
-        senha: encryptedSenha,
-        cargo: cleanEmp.cargo,
-        setor: cleanEmp.setor_restrito,
-        loja_id: cleanEmp.loja_id,
-        ativo: cleanEmp.ativo,
-      });
+      const { error: delErr } = await client.from('usuarios').delete().eq('id', cleanId);
+      if (delErr) {
+        console.error('Erro ao excluir usuário no banco:', delErr);
+        return { success: false, error: `Erro no banco de dados: ${delErr.message}` };
+      }
 
-      if (cleanEmp.senha) {
+      if (finalMatricula) {
         try {
-          await client.rpc('rpc_sync_user_password', {
-            p_matricula: cleanEmp.matricula,
-            p_senha: cleanEmp.senha,
-          });
-        } catch (syncErr) {
-          console.warn('Aviso ao sincronizar senha com auth.users:', syncErr);
+          await client.from('sessoes_ativas').delete().eq('matricula', finalMatricula);
+        } catch {
+          // ignore
         }
       }
-    } catch (err) {
-      console.warn('Erro ao salvar funcionário no banco:', err);
+    } catch (err: any) {
+      console.error('Erro ao excluir funcionário:', err);
+      return { success: false, error: err?.message || 'Falha de comunicação com o servidor.' };
     }
-  } else if (isNewEmployee && cleanEmp.ativo && cleanEmp.loja_id && cleanEmp.cargo !== 'saas_admin') {
-    saveStoredChatMessage({
-      id: `msg_welcome_${cleanEmp.id}_${Date.now()}`,
-      loja_id: cleanEmp.loja_id,
-      canal_tipo: 'grupo',
-      remetente_matricula: 'SISTEMA',
-      remetente_nome: 'Sistema OpSys',
-      remetente_cargo: 'Boas-Vindas',
-      is_anonimo: false,
-      conteudo: `👋 Boas-vindas! ${cleanEmp.nome} entrou na loja e agora faz parte do Chat Operacional.`,
-      timestamp: Date.now(),
-      created_at: new Date().toISOString(),
-    });
   }
 
   return { success: true };

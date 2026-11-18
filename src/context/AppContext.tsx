@@ -50,6 +50,7 @@ import {
   updateStoreSettingsInDatabase,
   fetchStoreEmployees,
   saveStoreEmployee,
+  deleteStoreEmployee,
   toggleStoreEmployeeActive,
   saveStoreRole,
   getStoredStores,
@@ -121,6 +122,7 @@ interface AppContextType {
   employees: StoreEmployee[];
   refreshEmployees: (lojaId?: string) => Promise<void>;
   addOrUpdateEmployee: (emp: StoreEmployee) => Promise<{ success: boolean; error?: string }>;
+  deleteEmployee: (empId: string, matricula?: string) => Promise<{ success: boolean; error?: string }>;
   toggleEmployeeStatus: (empId: string, active: boolean) => Promise<void>;
   roles: StoreRole[];
   refreshRoles: () => Promise<void>;
@@ -441,7 +443,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const toggleEmployeeStatus = async (empId: string, active: boolean) => {
     await toggleStoreEmployeeActive(empId, active);
-    await refreshEmployees();
+    await refreshEmployees(isSaasAdmin ? 'todas' : operator.loja_id);
+  };
+
+  const deleteEmployee = async (empId: string, matricula?: string) => {
+    const res = await deleteStoreEmployee(empId, matricula);
+    if (res.success) {
+      await refreshEmployees(isSaasAdmin ? 'todas' : operator.loja_id);
+    }
+    return res;
   };
 
   const addOrUpdateRole = async (role: StoreRole) => {
@@ -1454,6 +1464,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         employees,
         refreshEmployees,
         addOrUpdateEmployee,
+        deleteEmployee,
         toggleEmployeeStatus,
         roles,
         refreshRoles,
