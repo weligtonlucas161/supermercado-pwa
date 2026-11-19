@@ -37,8 +37,6 @@ public/assets/
 database/connection.local.*
 config/db.credentials.*
 
-# O projeto usa bun.lock (Bun) como gerenciador de pacotes
-package-lock.json
 
 # Ferramentas locais de manutenção (não fazem parte do app)
 _patch.mjs
