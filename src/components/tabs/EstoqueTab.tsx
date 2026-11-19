@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
   Search,
   Plus,
@@ -15,15 +15,20 @@ import {
   RefreshCw,
   PackageX,
   Tag,
-  CheckCircle2
+  CheckCircle2,
+  Loader2,
+  Clock
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
-import { Product } from '../../types';
+import { Product, SETORES_DISPONIVEIS } from '../../types';
 import { NewProductModal } from '../modals/NewProductModal';
 import { ImportSpreadsheetModal } from '../modals/ImportSpreadsheetModal';
 import { ProductDetailModal } from '../modals/ProductDetailModal';
 import { EstoqueAvariasTab } from './EstoqueAvariasTab';
 import { EstoqueRupturasTab } from './EstoqueRupturasTab';
+import { useDebounce } from '../../hooks/useDebounce';
+import { getEncryptedCache, setEncryptedCache, invalidateEncryptedCache } from '../../utils/encryptedCache';
+import { fetchProductsPaginated } from '../../services/supabaseService';
 
 interface ProductCardProps {
   product: Product;
@@ -341,7 +346,9 @@ export const EstoqueTab: React.FC = () => {
     refreshProductsFromDatabase,
     isSyncingWithDatabase,
     lastDatabaseSyncTime,
-    avarias
+    avarias,
+    currentUser,
+    operator
   } = useApp();
   type SortOption = 'default' | 'qtd-desc' | 'qtd-asc' | 'name-asc' | 'name-desc' | 'forn-asc';
   type MainTab = 'estoque' | 'avarias' | 'rupturas';
@@ -352,6 +359,8 @@ export const EstoqueTab: React.FC = () => {
   const [mainTab, setMainTab] = useState<MainTab>('estoque');
 
   const [searchTerm, setSearchTerm] = useState('');
+  const debouncedSearch = useDebounce(searchTerm, 400);
+
   const [selectedCategory, setSelectedCategory] = useState('all');
   const [sortBy, setSortBy] = useState<SortOption>('default');
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -363,36 +372,174 @@ export const EstoqueTab: React.FC = () => {
   // Modal de Confirmação de Remoção de Produto
   const [productToDelete, setProductToDelete] = useState<Product | null>(null);
 
+  // Estados de Paginação e Rolagem Contínua (50 itens por lote)
+  const PAGE_SIZE = 50;
+  const [displayedProducts, setDisplayedProducts] = useState<Product[]>([]);
+  const [totalCount, setTotalCount] = useState<number>(0);
+  const [page, setPage] = useState<number>(0);
+  const [hasMore, setHasMore] = useState<boolean>(true);
+  const [isLoadingInitial, setIsLoadingInitial] = useState<boolean>(false);
+  const [isLoadingMore, setIsLoadingMore] = useState<boolean>(false);
+  const [isFromCache, setIsFromCache] = useState<boolean>(false);
+
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
+  const lojaId = currentUser?.loja_id || operator?.loja_id || '';
+
+  // Chave de cache criptografado por loja, setor, ordenação e busca
+  const getCacheKey = useCallback((pg: number) => {
+    const cleanSearch = debouncedSearch.trim().toLowerCase();
+    return `estoque_${lojaId}_${selectedCategory}_${sortBy}_q${encodeURIComponent(cleanSearch)}_p${pg}`;
+  }, [lojaId, selectedCategory, sortBy, debouncedSearch]);
+
   // 1. Produtos em Ruptura Iminente (Estoque <= Mínimo ou Zerado)
   const ruptureProducts = products.filter(p => p.stock <= p.minStock || p.stock === 0);
 
-  const categories = ['all', ...Array.from(new Set(products.map(p => p.category)))];
+  const categories = [
+    'all',
+    ...Array.from(new Set([...SETORES_DISPONIVEIS, ...products.map(p => p.category), ...displayedProducts.map(p => p.category)]))
+  ];
 
-  // Base filtrada pela busca e categoria
-  const filtered = products
-    .filter(p => {
-      const term = searchTerm.toLowerCase().trim();
-      const matchesCategory = selectedCategory === 'all' || p.category === selectedCategory;
-      if (!term) return matchesCategory;
+  // Carregamento inicial ao mudar filtros, busca ou aba
+  const loadInitialProducts = useCallback(async (bypassCache = false) => {
+    if (mainTab !== 'estoque') return;
+    setIsLoadingInitial(true);
+    setPage(0);
 
-      const matchesSearch =
-        p.name.toLowerCase().includes(term) ||
-        p.ean.includes(term) ||
-        (p.secondaryEan ? p.secondaryEan.includes(term) : false) ||
-        (p.reducedCode ? p.reducedCode.toLowerCase().includes(term) : false) ||
-        (p.supplierCode ? p.supplierCode.toLowerCase().includes(term) : false) ||
-        (p.location ? p.location.toLowerCase().includes(term) : false);
+    const cacheKey = getCacheKey(0);
 
-      return matchesSearch && matchesCategory;
-    })
-    .sort((a, b) => {
-      if (sortBy === 'qtd-desc') return b.stock - a.stock;
-      if (sortBy === 'qtd-asc') return a.stock - b.stock;
-      if (sortBy === 'name-asc') return a.name.localeCompare(b.name, 'pt-BR');
-      if (sortBy === 'name-desc') return b.name.localeCompare(a.name, 'pt-BR');
-      if (sortBy === 'forn-asc') return (a.supplierCode || '').localeCompare(b.supplierCode || '', 'pt-BR');
-      return 0;
-    });
+    if (!bypassCache) {
+      const cached = await getEncryptedCache<{
+        items: Product[];
+        totalCount: number;
+        hasMore: boolean;
+      }>(cacheKey);
+      if (cached && Array.isArray(cached.items)) {
+        setDisplayedProducts(cached.items);
+        setTotalCount(cached.totalCount);
+        setHasMore(cached.hasMore);
+        setIsFromCache(true);
+        setIsLoadingInitial(false);
+        return;
+      }
+    }
+
+    try {
+      const result = await fetchProductsPaginated({
+        lojaId,
+        from: 0,
+        to: PAGE_SIZE - 1,
+        searchTerm: debouncedSearch,
+        category: selectedCategory,
+        sortBy,
+      });
+
+      const more = result.items.length === PAGE_SIZE && result.items.length < result.totalCount;
+      setDisplayedProducts(result.items);
+      setTotalCount(result.totalCount);
+      setHasMore(more);
+      setIsFromCache(false);
+
+      // Salva no cache criptografado (AES-GCM nativo Web Crypto com expiração de 4 horas)
+      await setEncryptedCache(cacheKey, {
+        items: result.items,
+        totalCount: result.totalCount,
+        hasMore: more,
+      });
+    } catch (err) {
+      console.warn('Erro ao carregar produtos paginados:', err);
+    } finally {
+      setIsLoadingInitial(false);
+    }
+  }, [mainTab, lojaId, debouncedSearch, selectedCategory, sortBy, getCacheKey]);
+
+  useEffect(() => {
+    loadInitialProducts();
+  }, [loadInitialProducts]);
+
+  // Rolagem contínua para carregar os próximos 50 itens com loop visual de ~1 segundo
+  const loadMoreProducts = useCallback(async () => {
+    if (isLoadingMore || isLoadingInitial || !hasMore || mainTab !== 'estoque') return;
+
+    setIsLoadingMore(true);
+    const nextPage = page + 1;
+    const from = nextPage * PAGE_SIZE;
+    const to = from + PAGE_SIZE - 1;
+
+    try {
+      // Loop visual com elemento de carregamento de cerca de 1 segundo a cada rolagem
+      const [result] = await Promise.all([
+        fetchProductsPaginated({
+          lojaId,
+          from,
+          to,
+          searchTerm: debouncedSearch,
+          category: selectedCategory,
+          sortBy,
+        }),
+        new Promise(resolve => setTimeout(resolve, 1000)), // Atraso de 1s para o loop visual suave
+      ]);
+
+      setDisplayedProducts(prev => {
+        const merged = [...prev, ...result.items];
+        const more = result.items.length === PAGE_SIZE && merged.length < result.totalCount;
+        setHasMore(more);
+
+        // Atualiza cache criptografado com a rolagem acumulada
+        const cacheKey = getCacheKey(0);
+        setEncryptedCache(cacheKey, {
+          items: merged,
+          totalCount: result.totalCount,
+          hasMore: more,
+        });
+
+        return merged;
+      });
+
+      setTotalCount(result.totalCount);
+      setPage(nextPage);
+    } catch (err) {
+      console.warn('Erro ao carregar mais itens:', err);
+    } finally {
+      setIsLoadingMore(false);
+    }
+  }, [isLoadingMore, isLoadingInitial, hasMore, mainTab, page, lojaId, debouncedSearch, selectedCategory, sortBy, getCacheKey]);
+
+  // Observer para disparar a rolagem contínua ao atingir o fim da página
+  useEffect(() => {
+    if (!sentinelRef.current || !hasMore || isLoadingMore || isLoadingInitial) return;
+
+    const observer = new IntersectionObserver(
+      entries => {
+        if (entries[0].isIntersecting) {
+          loadMoreProducts();
+        }
+      },
+      { rootMargin: '250px' }
+    );
+
+    observer.observe(sentinelRef.current);
+    return () => observer.disconnect();
+  }, [loadMoreProducts, hasMore, isLoadingMore, isLoadingInitial]);
+
+  const handleUpdateStock = (id: string, update: { delta?: number }) => {
+    setDisplayedProducts(prev =>
+      prev.map(p => (p.id === id ? { ...p, stock: Math.max(0, p.stock + (update.delta || 0)) } : p))
+    );
+    updateProductStock(id, update);
+    invalidateEncryptedCache();
+  };
+
+  const handleToggleRebaixa = (id: string) => {
+    setDisplayedProducts(prev =>
+      prev.map(p => {
+        if (p.id !== id) return p;
+        const nextStatus = p.rebaixaStatus === 'pending' ? 'confirmed' : 'pending';
+        return { ...p, rebaixaStatus: nextStatus };
+      })
+    );
+    toggleProductRebaixa(id);
+    invalidateEncryptedCache();
+  };
 
   const handleScanForSearch = () => {
     openScanner((scannedEan) => {
@@ -402,9 +549,18 @@ export const EstoqueTab: React.FC = () => {
 
   const handleConfirmDelete = () => {
     if (productToDelete) {
+      setDisplayedProducts(prev => prev.filter(p => p.id !== productToDelete.id));
+      setTotalCount(prev => Math.max(0, prev - 1));
       removeProduct(productToDelete.id);
+      invalidateEncryptedCache();
       setProductToDelete(null);
     }
+  };
+
+  const handleSync = async () => {
+    invalidateEncryptedCache();
+    await refreshProductsFromDatabase();
+    await loadInitialProducts(true);
   };
 
   return (
@@ -428,10 +584,15 @@ export const EstoqueTab: React.FC = () => {
                 🟢 Nuvem {lastDatabaseSyncTime}
               </span>
             )}
+            {isFromCache && (
+              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-cyan-500/10 text-cyan-600 dark:text-cyan-400 border border-cyan-500/20 flex items-center gap-1 shadow-xs" title="Carregado do cache criptografado (AES-GCM nativo Web Crypto com expiração de 4 horas)">
+                <ShieldCheck className="w-3 h-3 text-cyan-500" /> Cache Seguro (4h)
+              </span>
+            )}
           </div>
           <p className="text-xs text-slate-500 dark:text-slate-400">
             {mainTab === 'estoque' &&
-              `Localização em gôndola, saldos e consulta de código EAN-13 (${products.length} itens cadastrados).`}
+              `Localização em gôndola, saldos e consulta de código EAN-13 (${totalCount} itens encontrados${displayedProducts.length < totalCount ? `, exibindo ${displayedProducts.length}` : ''}).`}
             {mainTab === 'avarias' &&
               'Perdas, quebras e trocas registradas no estoque para reduzir o desperdício.'}
             {mainTab === 'rupturas' &&
@@ -440,13 +601,13 @@ export const EstoqueTab: React.FC = () => {
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           <button
-            onClick={() => refreshProductsFromDatabase()}
-            disabled={isSyncingWithDatabase}
+            onClick={handleSync}
+            disabled={isSyncingWithDatabase || isLoadingInitial}
             className="border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-750 text-slate-700 dark:text-slate-200 px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition shadow-xs cursor-pointer"
-            title="Atualizar produtos do banco de dados na nuvem"
+            title="Atualizar produtos do banco de dados na nuvem e invalidar cache"
           >
-            <RefreshCw className={`w-3.5 h-3.5 text-emerald-500 ${isSyncingWithDatabase ? 'animate-spin' : ''}`} />
-            <span className="hidden sm:inline">{isSyncingWithDatabase ? 'Sincronizando...' : 'Sincronizar'}</span>
+            <RefreshCw className={`w-3.5 h-3.5 text-emerald-500 ${isSyncingWithDatabase || isLoadingInitial ? 'animate-spin' : ''}`} />
+            <span className="hidden sm:inline">{isSyncingWithDatabase || isLoadingInitial ? 'Sincronizando...' : 'Sincronizar'}</span>
           </button>
           {mainTab === 'estoque' && (
             <>
@@ -623,26 +784,66 @@ export const EstoqueTab: React.FC = () => {
 
           {/* Cards de Produtos com Suporte a Press/Long-Press e Swipe */}
           <div className="space-y-2.5">
-            {filtered.length === 0 ? (
+            {isLoadingInitial ? (
+              <div className="space-y-3 py-4">
+                {[1, 2, 3, 4, 5].map(i => (
+                  <div
+                    key={i}
+                    className="p-4 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white/60 dark:bg-slate-800/60 animate-pulse flex justify-between items-center"
+                  >
+                    <div className="space-y-2 flex-1">
+                      <div className="h-4 bg-slate-200 dark:bg-slate-700 rounded w-1/3"></div>
+                      <div className="h-3 bg-slate-100 dark:bg-slate-750 rounded w-1/2"></div>
+                    </div>
+                    <div className="h-8 bg-slate-200 dark:bg-slate-700 rounded w-16"></div>
+                  </div>
+                ))}
+              </div>
+            ) : displayedProducts.length === 0 ? (
               <div className="text-center py-12 rounded-3xl border border-dashed border-slate-200 dark:border-slate-800">
                 <Package className="w-8 h-8 text-slate-400 mx-auto mb-2" />
                 <p className="text-xs font-bold text-slate-600 dark:text-slate-300">Nenhum produto cadastrado</p>
                 <p className="text-[11px] text-slate-400 mt-0.5">Use o botão "Importar Planilha" ou "Cadastrar Produto" para começar seus testes.</p>
               </div>
             ) : (
-              filtered.map(product => (
+              displayedProducts.map(product => (
                 <ProductCard
                   key={product.id}
                   product={product}
                   darkMode={darkMode}
-                  onUpdateStock={updateProductStock}
-                  onToggleRebaixa={toggleProductRebaixa}
+                  onUpdateStock={handleUpdateStock}
+                  onToggleRebaixa={handleToggleRebaixa}
                   onRequestDelete={(p) => setProductToDelete(p)}
                   onSelectProduct={(p) => setSelectedProductForDetail(p)}
                 />
               ))
             )}
           </div>
+
+          {/* Elemento de carregamento de dados de cerca de 1 segundo a cada rolagem */}
+          {isLoadingMore && (
+            <div className="py-6 flex flex-col items-center justify-center gap-2 animate-in fade-in zoom-in-95 duration-200">
+              <div className="flex items-center gap-2.5 px-4 py-2.5 rounded-2xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300 shadow-sm">
+                <Loader2 className="w-4 h-4 animate-spin text-emerald-600 dark:text-emerald-400" />
+                <span className="text-xs font-black">Carregando mais 50 itens do estoque...</span>
+              </div>
+              <div className="flex items-center gap-1.5 text-[11px] font-medium text-slate-400">
+                <Clock className="w-3.5 h-3.5 text-emerald-500 animate-pulse" />
+                <span>Rolagem contínua • Lote de 50 produtos</span>
+              </div>
+            </div>
+          )}
+
+          {/* Fim da listagem de estoque */}
+          {!hasMore && displayedProducts.length > 0 && !isLoadingInitial && (
+            <div className="py-6 text-center text-xs font-bold text-slate-400 flex items-center justify-center gap-1.5">
+              <CheckCircle2 className="w-4 h-4 text-emerald-500" />
+              <span>Todos os {totalCount} produtos foram carregados</span>
+            </div>
+          )}
+
+          {/* Sentinela invisível para disparar a rolagem contínua */}
+          <div ref={sentinelRef} className="h-4 w-full pointer-events-none" />
         </>
       )}
 
@@ -700,12 +901,27 @@ export const EstoqueTab: React.FC = () => {
         </div>
       )}
 
-      <NewProductModal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} />
-      <ImportSpreadsheetModal isOpen={isSpreadsheetModalOpen} onClose={() => setIsSpreadsheetModalOpen(false)} />
+      <NewProductModal
+        isOpen={isModalOpen}
+        onClose={() => {
+          setIsModalOpen(false);
+          loadInitialProducts(true);
+        }}
+      />
+      <ImportSpreadsheetModal
+        isOpen={isSpreadsheetModalOpen}
+        onClose={() => {
+          setIsSpreadsheetModalOpen(false);
+          loadInitialProducts(true);
+        }}
+      />
       <ProductDetailModal
         isOpen={Boolean(selectedProductForDetail)}
         product={selectedProductForDetail}
-        onClose={() => setSelectedProductForDetail(null)}
+        onClose={() => {
+          setSelectedProductForDetail(null);
+          loadInitialProducts(true);
+        }}
       />
     </div>
   );

@@ -14,7 +14,9 @@ import {
   ChatMessage,
   SpreadsheetProductItem,
   SetorLoja,
-  AvariaItem
+  AvariaItem,
+  StoreColor,
+  SETORES_DISPONIVEIS
 } from '../types';
 import { 
   INITIAL_PRODUCTS, 
@@ -73,8 +75,17 @@ import {
   lockProductInSupabase,
   unlockProductInSupabase,
   updateProductInSupabase,
-  fetchAuditReportsFromDatabase
+  fetchAuditReportsFromDatabase,
+  fetchStoreSectors,
+  saveStoreSectors,
+  fetchStoreColors,
+  saveStoreColor,
+  deleteStoreColor
 } from '../services/supabaseService';
+import {
+  invalidateEncryptedCache,
+  pruneExpiredEncryptedCache,
+} from '../utils/encryptedCache';
 
 interface AppContextType {
   // Navigation & UI
@@ -177,6 +188,7 @@ interface AppContextType {
   isSyncingWithDatabase: boolean;
   lastDatabaseSyncTime: string | null;
   refreshProductsFromDatabase: () => Promise<void>;
+  invalidateEncryptedCache: () => void;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -718,6 +730,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   }, [operator.loja_id, operator.role, operator.setor_restrito, currentUser?.loja_id, currentUser?.cargo, currentUser?.setor]);
 
+  // Limpeza de caches criptografados expirados (> 4h) na inicialização
+  useEffect(() => {
+    pruneExpiredEncryptedCache();
+  }, []);
+
   // Consulta automática do estoque remoto e relatórios no carregamento
   useEffect(() => {
     if (isAuthenticated) {
@@ -734,6 +751,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!lojaId) return;
 
     const unsubscribe = subscribeToProductsRealtime(lojaId, (event) => {
+      invalidateEncryptedCache();
       if (event.type === 'DELETE') {
         const oldLoja = event.oldRow?.loja_id ? String(event.oldRow.loja_id) : '';
         if (oldLoja && oldLoja !== lojaId) return;
@@ -840,6 +858,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       ]);
     }
 
+    invalidateEncryptedCache();
     return newProduct;
   };
 
@@ -897,6 +916,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       const updated = [...otherSectors, ...Array.from(sectorMap.values())];
       saveStoredData(STORAGE_KEYS.PRODUCTS, updated);
+      invalidateEncryptedCache();
       return updated;
     });
   };
@@ -968,10 +988,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     );
 
     const res = await updateProductInSupabase(productId, updates, currentUser?.loja_id || operator.loja_id);
+    invalidateEncryptedCache();
     return res;
   };
 
   const updateProductStock = (id: string, options: { delta?: number; exact?: number }) => {
+    invalidateEncryptedCache();
     setProducts(prev =>
       prev.map(p => {
         if (p.id !== id) return p;
@@ -1022,6 +1044,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     );
 
     triggerScanBeep(true);
+    invalidateEncryptedCache();
     if (nextStatus === 'confirmed') {
       setNotifications(prev => [
         {
@@ -1038,6 +1061,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const removeProduct = (id: string) => {
+    invalidateEncryptedCache();
     setProducts(prev => prev.filter(p => p.id !== id));
   };
 
@@ -1511,6 +1535,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         isSyncingWithDatabase,
         lastDatabaseSyncTime,
         refreshProductsFromDatabase,
+        invalidateEncryptedCache,
       }}
     >
       {children}
