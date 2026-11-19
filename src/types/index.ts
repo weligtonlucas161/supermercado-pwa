@@ -89,21 +89,6 @@ export interface StoreRole {
 }
 
 /**
- * Cores da Loja (paleta persistida com componentes RGB)
- */
-export interface StoreColor {
-  id: string;
-  loja_id: string;
-  nome: string;
-  hex: string;
-  r: number;
-  g: number;
-  b: number;
-  principal?: boolean;
-  created_at?: string;
-}
-
-/**
  * Funcionários cadastrados pelo Gerente da Loja
  */
 export interface StoreEmployee {

@@ -154,36 +154,16 @@ export const LoginScreen: React.FC = () => {
                 <input
                   type="text"
                   value={matricula}
-                  onChange={e => setMatricula(e.target.value.toUpperCase())}
-                  onPaste={e => {
-                    const text = e.clipboardData.getData('text');
-                    e.preventDefault();
-                    setMatricula(prev => (prev + text).toUpperCase());
-                  }}
-                  onFocus={e => {
-                    // Trava a matrícula em caixa alta mesmo para valor já existente
-                    if (e.target.value !== e.target.value.toUpperCase()) {
-                      setMatricula(e.target.value.toUpperCase());
-                    }
-                  }}
+                  onChange={e => setMatricula(e.target.value)}
                   placeholder={isSaasAdminLogin ? "@200309" : "Digite sua matrícula (ex: operador, admin ou @200309)"}
                   required
                   autoFocus
-                  spellCheck={false}
-                  autoCapitalize="characters"
-                  autoComplete="username"
-                  className={`w-full pl-10 pr-4 py-3 rounded-2xl border bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none font-medium transition uppercase tracking-wider ${
-                    isSaasAdminLogin
-                      ? 'border-rose-400 dark:border-rose-600 focus:ring-2 focus:ring-rose-500'
+                  className={`w-full pl-10 pr-4 py-3 rounded-2xl border bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none font-medium transition ${
+                    isSaasAdminLogin 
+                      ? 'border-rose-400 dark:border-rose-600 focus:ring-2 focus:ring-rose-500' 
                       : 'border-slate-200 dark:border-slate-700 focus:ring-2 focus:ring-emerald-500'
                   }`}
                 />
-              </div>
-
-              {/* Indicador de Caixa Alta Travada (Caps Lock) */}
-              <div className="flex items-center justify-center gap-1.5 text-[10px] font-bold text-slate-400 dark:text-slate-500 select-none">
-                <Lock className="w-3 h-3 text-emerald-500" />
-                <span>Caixa alta travada — matrícula sempre em MAIÚSCULAS</span>
               </div>
             </div>
 

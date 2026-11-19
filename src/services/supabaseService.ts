@@ -10,13 +10,11 @@ import {
   Store,
   StoreEmployee,
   StoreRole,
-  StoreColor,
   ChatMessage,
   AvariaItem,
   SETORES_DISPONIVEIS,
   TIPOS_AVARIA
 } from '../types';
-import { STORAGE_KEYS } from '../data/mockData';
 import { decryptSingleField, encryptSingleField, isEncrypted } from '../utils/encryptionUtils';
 import { hashEan, hashEanBatch } from '../utils/productHash';
 import {
@@ -47,12 +45,12 @@ export { SUPABASE_STORAGE_KEYS };
 
 /**
  * Cliente do banco (singleton centralizado em ./db/client).
- * Retorna null quando o banco nÃ£o estÃ¡ configurado â nenhuma credencial
- * padrÃ£o Ã© embarcada no bundle do front-end.
+ * Retorna null quando o banco não está configurado — nenhuma credencial
+ * padrão é embarcada no bundle do front-end.
  */
 let client: SupabaseClient | null = getDbClient();
 
-/** Re-sincroniza o espelho local do cliente apÃ³s troca de configuraÃ§Ã£o. */
+/** Re-sincroniza o espelho local do cliente após troca de configuração. */
 function syncClient(): void {
   client = getDbClient();
 }
@@ -80,7 +78,7 @@ export function setCustomSupabaseConfig(url: string, key: string): { success: bo
 }
 
 /**
- * Remove a configuraÃ§Ã£o customizada do banco
+ * Remove a configuração customizada do banco
  */
 export function clearCustomSupabaseConfig() {
   clearCustomDbConfig();
@@ -128,7 +126,7 @@ export function getStoredStores(): Store[] {
   return defaultStores;
 }
 
-// Obter funcionÃ¡rios locais
+// Obter funcionários locais
 export function getStoredEmployees(): StoreEmployee[] {
   if (typeof window === 'undefined') return [];
   try {
@@ -221,7 +219,7 @@ export function getStoredEmployees(): StoreEmployee[] {
       }
     }
   } catch (e) {
-    console.warn('Erro ao ler funcionÃ¡rios locais:', e);
+    console.warn('Erro ao ler funcionários locais:', e);
   }
 
   const defaultEmployees: StoreEmployee[] = [
@@ -289,11 +287,11 @@ export function getStoredRoles(): StoreRole[] {
 }
 
 /**
- * Altera a senha do usuÃ¡rio e marca primeiro_login como false.
+ * Altera a senha do usuário e marca primeiro_login como false.
  *
- * O usuÃ¡rio pode existir APENAS no Supabase (criado pelo Gerente em outro
- * dispositivo). Por isso, quando a matrÃ­cula nÃ£o Ã© encontrada no cache local,
- * consultamos a tabela `usuarios` antes de concluir que ela nÃ£o existe.
+ * O usuário pode existir APENAS no Supabase (criado pelo Gerente em outro
+ * dispositivo). Por isso, quando a matrícula não é encontrada no cache local,
+ * consultamos a tabela `usuarios` antes de concluir que ela não existe.
  */
 export async function changeUserPassword(
   matricula: string,
@@ -303,7 +301,7 @@ export async function changeUserPassword(
   const cleanPassword = typeof newPassword === 'string' ? newPassword.trim() : '';
 
   if (!cleanMatricula) {
-    return { success: false, message: 'MatrÃ­cula invÃ¡lida.' };
+    return { success: false, message: 'Matrícula inválida.' };
   }
   if (cleanPassword.length < 7 || cleanPassword.length > 128) {
     return { success: false, message: 'A nova senha deve ter entre 7 e 128 caracteres.' };
@@ -311,7 +309,7 @@ export async function changeUserPassword(
 
   const encryptedPassword = encryptSingleField(cleanPassword, undefined, { skipSanitize: true });
 
-  // FuncionÃ¡rios e Gerentes de Loja
+  // Funcionários e Gerentes de Loja
   const emps = getStoredEmployees();
   const normCleanMat = cleanMatricula.toLowerCase().replace(/^@/, '');
   const idx = emps.findIndex(e => {
@@ -326,7 +324,7 @@ export async function changeUserPassword(
       localStorage.setItem(LOCAL_STORAGE_EMPLOYEES_KEY, JSON.stringify(emps));
     }
 
-    // Sincroniza tambÃ©m no Supabase se cliente estiver ativo.
+    // Sincroniza também no Supabase se cliente estiver ativo.
     // O PostgrestBuilder NUNCA rejeita: o erro vem dentro do valor resolvido.
     if (client) {
       const effectiveMatricula = (normCleanMat === '200309') ? '@200309' : emps[idx].matricula;
@@ -342,8 +340,8 @@ export async function changeUserPassword(
     return { success: true, message: 'Senha alterada com sucesso!' };
   }
 
-  // 3. FALLBACK: usuÃ¡rio existe apenas no Supabase (criado em outro dispositivo).
-  // A RPC `rpc_sync_user_password` valida a existÃªncia do usuÃ¡rio e atualiza auth.users e usuarios
+  // 3. FALLBACK: usuário existe apenas no Supabase (criado em outro dispositivo).
+  // A RPC `rpc_sync_user_password` valida a existência do usuário e atualiza auth.users e usuarios
   if (client && isSupabaseConfigured()) {
     try {
       const { data: remoteUser, error: findError } = await client
@@ -362,7 +360,7 @@ export async function changeUserPassword(
           console.warn('Erro ao alterar senha no servidor:', rpcError.message);
           return {
             success: false,
-            message: 'NÃ£o foi possÃ­vel alterar a senha no servidor. Tente novamente com internet.',
+            message: 'Não foi possível alterar a senha no servidor. Tente novamente com internet.',
           };
         }
 
@@ -370,11 +368,11 @@ export async function changeUserPassword(
         if (rpcResult && rpcResult.success === false) {
           return {
             success: false,
-            message: rpcResult.message || 'NÃ£o foi possÃ­vel alterar a senha no servidor.',
+            message: rpcResult.message || 'Não foi possível alterar a senha no servidor.',
           };
         }
 
-        // Atualiza o cache local para que os prÃ³ximos acessos funcionem offline.
+        // Atualiza o cache local para que os próximos acessos funcionem offline.
         const cached = emps.filter(
           e => e.matricula.toLowerCase() !== cleanMatricula.toLowerCase()
         );
@@ -401,11 +399,11 @@ export async function changeUserPassword(
     }
   }
 
-  return { success: false, message: 'UsuÃ¡rio nÃ£o encontrado para alteraÃ§Ã£o de senha.' };
+  return { success: false, message: 'Usuário não encontrado para alteração de senha.' };
 }
 
 /**
- * ValidaÃ§Ã£o de SeguranÃ§a Ativa: Verifica se o usuÃ¡rio ainda existe e estÃ¡ ativo no servidor
+ * Validação de Segurança Ativa: Verifica se o usuário ainda existe e está ativo no servidor
  */
 export function verifyUserStillActive(matricula: string, lojaId?: string): { active: boolean; companyName?: string } {
   const cleanMatricula = sanitizeIdentifier(matricula, 64);
@@ -418,7 +416,7 @@ export function verifyUserStillActive(matricula: string, lojaId?: string): { act
 
   const emp = emps.find(e => e.matricula.toLowerCase() === cleanMatricula.toLowerCase());
 
-  // Se o usuÃ¡rio foi encontrado e estÃ¡ explicitamente inativo
+  // Se o usuário foi encontrado e está explicitamente inativo
   if (emp && emp.ativo === false) {
     const stores = getStoredStores();
     const store = stores.find(s => s.id === (lojaId || emp?.loja_id));
@@ -428,7 +426,7 @@ export function verifyUserStillActive(matricula: string, lojaId?: string): { act
     };
   }
 
-  // Se a lista de funcionÃ¡rios tem registros mas este foi removido e estamos estritamente offline
+  // Se a lista de funcionários tem registros mas este foi removido e estamos estritamente offline
   if (!emp && (!client || !isSupabaseConfigured())) {
     const stores = getStoredStores();
     const store = stores.find(s => s.id === lojaId);
@@ -442,8 +440,8 @@ export function verifyUserStillActive(matricula: string, lojaId?: string): { act
 }
 
 /**
- * VerificaÃ§Ã£o remota direta no banco Supabase: desconecta instantaneamente se o usuÃ¡rio
- * for excluÃ­do da tabela 'usuarios' ou tiver 'ativo = false'.
+ * Verificação remota direta no banco Supabase: desconecta instantaneamente se o usuário
+ * for excluído da tabela 'usuarios' ou tiver 'ativo = false'.
  */
 export async function verifyUserStillActiveRemote(
   matricula: string,
@@ -452,7 +450,7 @@ export async function verifyUserStillActiveRemote(
   const cleanMatricula = sanitizeIdentifier(matricula, 64);
   if (!cleanMatricula) return { active: false, companyName: 'Sua Loja' };
 
-  // 1. Consulta remota no Supabase via RPC com SECURITY DEFINER (imune a restriÃ§Ãµes de RLS anÃ´nimo)
+  // 1. Consulta remota no Supabase via RPC com SECURITY DEFINER (imune a restrições de RLS anônimo)
   if (client && isSupabaseConfigured()) {
     try {
       const { data, error } = await client.rpc('rpc_verify_usuario_ativo', {
@@ -470,23 +468,23 @@ export async function verifyUserStillActiveRemote(
         return { active: true };
       }
 
-      // Se ocorreu erro de comunicaÃ§Ã£o/timeout, NÃO desloga por falso positivo
+      // Se ocorreu erro de comunicação/timeout, NÃO desloga por falso positivo
       if (error) {
-        console.warn('Aviso de verificaÃ§Ã£o remota no Supabase:', error.message);
+        console.warn('Aviso de verificação remota no Supabase:', error.message);
         return { active: true };
       }
     } catch (err) {
-      console.warn('Aviso de rede ao consultar status do usuÃ¡rio:', err);
+      console.warn('Aviso de rede ao consultar status do usuário:', err);
       return { active: true };
     }
   }
 
-  // 2. Fallback de verificaÃ§Ã£o local
+  // 2. Fallback de verificação local
   return verifyUserStillActive(matricula, lojaId);
 }
 
 /**
- * Assina o canal Realtime da tabela 'usuarios' para desconectar o usuÃ¡rio
+ * Assina o canal Realtime da tabela 'usuarios' para desconectar o usuário
  * instantaneamente no milissegundo em que ele for deletado ou desativado.
  */
 export function subscribeToUserStatusRealtime(
@@ -524,14 +522,14 @@ export function subscribeToUserStatusRealtime(
       client?.removeChannel(channel);
     };
   } catch (err) {
-    console.warn('Aviso ao registrar canal realtime de watchdog do usuÃ¡rio:', err);
+    console.warn('Aviso ao registrar canal realtime de watchdog do usuário:', err);
     return () => {};
   }
 }
 
 /**
- * Assina o canal Realtime para detectar exclusÃ£o ou encerramento imediato da loja do usuÃ¡rio
- * (via postgres_changes na tabela 'lojas' / 'sessoes_ativas' e via broadcast instantÃ¢neo).
+ * Assina o canal Realtime para detectar exclusão ou encerramento imediato da loja do usuário
+ * (via postgres_changes na tabela 'lojas' / 'sessoes_ativas' e via broadcast instantâneo).
  */
 export function subscribeToStoreDeletionRealtime(
   lojaId: string | undefined,
@@ -602,22 +600,22 @@ export function subscribeToStoreDeletionRealtime(
 }
 
 /**
- * AutenticaÃ§Ã£o Segura por MatrÃ­cula e Senha (Script 03 & SaaS Admin)
+ * Autenticação Segura por Matrícula e Senha (Script 03 & SaaS Admin)
  */
 export async function loginUser(matricula: string, senha: string): Promise<LoginResult> {
   const cleanMatricula = sanitizeIdentifier(matricula, 64);
   const cleanSenha = typeof senha === 'string' ? senha.trim() : '';
 
   if (!cleanMatricula || !cleanSenha) {
-    return { success: false, message: 'MatrÃ­cula ou senha invÃ¡lida.' };
+    return { success: false, message: 'Matrícula ou senha inválida.' };
   }
 
-  // NormalizaÃ§Ã£o para suportar variaÃ§Ãµes com ou sem '@' (Admin SaaS)
+  // Normalização para suportar variações com ou sem '@' (Admin SaaS)
   const normInput = cleanMatricula.toLowerCase().replace(/^@/, '');
   const isSaasMatricula = normInput === '200309' || cleanMatricula === '111111';
   const effectiveMatricula = (normInput === '200309') ? '@200309' : cleanMatricula;
 
-  // 1. Checagem em funcionÃ¡rios/gerentes cadastrados localmente (offline)
+  // 1. Checagem em funcionários/gerentes cadastrados localmente (offline)
   const localEmployees = getStoredEmployees();
   const matchedEmp = localEmployees.find(e => {
     const normEmpMat = (e.matricula || '').toLowerCase().replace(/^@/, '');
@@ -631,7 +629,7 @@ export async function loginUser(matricula: string, senha: string): Promise<Login
 
   if (matchedEmp) {
     if (!matchedEmp.ativo) {
-      return { success: false, message: 'UsuÃ¡rio inativo. Contate o gerente da sua loja.' };
+      return { success: false, message: 'Usuário inativo. Contate o gerente da sua loja.' };
     }
     const isSaas = matchedEmp.cargo === 'saas_admin' || matchedEmp.cargo.toLowerCase().includes('saas') || isSaasMatricula;
     const isGerente = !isSaas && (matchedEmp.cargo.toLowerCase().includes('gerente') || matchedEmp.cargo.toLowerCase().includes('admin'));
@@ -639,7 +637,7 @@ export async function loginUser(matricula: string, senha: string): Promise<Login
     const stores = getStoredStores();
     const matchedStore = stores.find(s => s.id === matchedEmp.loja_id);
 
-    // Se o cliente Supabase estiver ativo, garante autenticaÃ§Ã£o no Supabase Auth para emitir JWT com loja_id
+    // Se o cliente Supabase estiver ativo, garante autenticação no Supabase Auth para emitir JWT com loja_id
     if (client && isSupabaseConfigured()) {
       const authEmail = `${normInput}@superpwa.app`;
       try {
@@ -649,7 +647,7 @@ export async function loginUser(matricula: string, senha: string): Promise<Login
         });
 
         if (authErr) {
-          // Auto-repara a senha em auth.users e usuarios.senha_hash caso tenha havido descompasso de migraÃ§Ã£o
+          // Auto-repara a senha em auth.users e usuarios.senha_hash caso tenha havido descompasso de migração
           try {
             await client.rpc('rpc_sync_user_password', {
               p_matricula: effectiveMatricula,
@@ -660,11 +658,11 @@ export async function loginUser(matricula: string, senha: string): Promise<Login
               password: cleanSenha,
             });
           } catch (syncErr) {
-            console.warn('SincronizaÃ§Ã£o de credencial em auth.users:', syncErr);
+            console.warn('Sincronização de credencial em auth.users:', syncErr);
           }
         }
       } catch (err) {
-        console.warn('Aviso de conexÃ£o Supabase Auth no login local:', err);
+        console.warn('Aviso de conexão Supabase Auth no login local:', err);
       }
     }
 
@@ -685,7 +683,7 @@ export async function loginUser(matricula: string, senha: string): Promise<Login
     };
   }
 
-  // Fallback direto de seguranÃ§a para credenciais iniciais do banco local
+  // Fallback direto de segurança para credenciais iniciais do banco local
   if (cleanMatricula.toLowerCase() === 'operador' && (cleanSenha === 'operador' || cleanSenha === '123456')) {
     return {
       success: true,
@@ -731,7 +729,7 @@ export async function loginUser(matricula: string, senha: string): Promise<Login
           password: cleanSenha,
         });
       } catch (err) {
-        console.warn('ConexÃ£o Supabase Auth no fallback SaaS:', err);
+        console.warn('Conexão Supabase Auth no fallback SaaS:', err);
       }
     }
 
@@ -752,7 +750,7 @@ export async function loginUser(matricula: string, senha: string): Promise<Login
     };
   }
 
-  // Fallback Admin SaaS SecundÃ¡rio (111111 com admin123)
+  // Fallback Admin SaaS Secundário (111111 com admin123)
   if (cleanMatricula === '111111' && cleanSenha === 'admin123') {
     if (client && isSupabaseConfigured()) {
       try {
@@ -761,7 +759,7 @@ export async function loginUser(matricula: string, senha: string): Promise<Login
           password: cleanSenha,
         });
       } catch (err) {
-        console.warn('ConexÃ£o Supabase Auth no fallback SaaS secundÃ¡rio:', err);
+        console.warn('Conexão Supabase Auth no fallback SaaS secundário:', err);
       }
     }
 
@@ -771,7 +769,7 @@ export async function loginUser(matricula: string, senha: string): Promise<Login
       user: {
         id: 'emp-saas-sec',
         matricula: '111111',
-        nome: 'Admin SaaS SecundÃ¡rio',
+        nome: 'Admin SaaS Secundário',
         cargo: 'saas_admin',
         cargoCompleto: 'Administrador SaaS',
         setor: 'Geral',
@@ -875,18 +873,18 @@ export async function loginUser(matricula: string, senha: string): Promise<Login
         } else {
           return {
             success: false,
-            message: 'Senha incorreta para a matrÃ­cula informada.',
+            message: 'Senha incorreta para a matrícula informada.',
           };
         }
       }
     } catch (err) {
-      console.warn('Erro ao autenticar com Supabase, recorrendo Ã  contingÃªncia local:', err);
+      console.warn('Erro ao autenticar com Supabase, recorrendo à contingência local:', err);
     }
   }
 
   return {
     success: false,
-    message: 'MatrÃ­cula ou senha incorreta. Verifique os dados digitados.',
+    message: 'Matrícula ou senha incorreta. Verifique os dados digitados.',
   };
 }
 
@@ -901,7 +899,7 @@ export async function logoutUser(): Promise<void> {
 }
 
 /**
- * OperaÃ§Ãµes do Administrador de SaaS: GestÃ£o de Lojas & Limites
+ * Operações do Administrador de SaaS: Gestão de Lojas & Limites
  */
 export async function fetchStoresFromDatabase(): Promise<Store[]> {
   const localStores = getStoredStores();
@@ -951,7 +949,7 @@ export async function createStoreInDatabase(store: Store): Promise<{ success: bo
   };
 
   if (!cleanStore.id || !cleanStore.nome_loja) {
-    return { success: false, error: 'Dados da loja invÃ¡lidos.' };
+    return { success: false, error: 'Dados da loja inválidos.' };
   }
 
   const localStores = getStoredStores();
@@ -993,7 +991,7 @@ export async function updateStoreSettingsInDatabase(
   updates: { nome_loja?: string; cor_primaria?: string }
 ): Promise<{ success: boolean; error?: string }> {
   const cleanStoreId = sanitizeIdentifier(storeId, 64);
-  if (!cleanStoreId) return { success: false, error: 'Loja invÃ¡lida.' };
+  if (!cleanStoreId) return { success: false, error: 'Loja inválida.' };
 
   const safeNome = updates.nome_loja !== undefined ? sanitizeText(updates.nome_loja, 120) : undefined;
   const safeColor = updates.cor_primaria !== undefined ? validateHexColor(updates.cor_primaria, '#059669') : undefined;
@@ -1020,12 +1018,12 @@ export async function updateStoreSettingsInDatabase(
         .eq('id', cleanStoreId);
 
       if (error) {
-        console.warn('Erro ao atualizar configuraÃ§Ãµes da loja no banco:', error.message);
+        console.warn('Erro ao atualizar configurações da loja no banco:', error.message);
         return { success: false, error: error.message };
       }
     } catch (err: any) {
-      console.warn('Erro de conexÃ£o ao atualizar loja:', err);
-      return { success: false, error: err?.message || 'Falha de conexÃ£o com o banco.' };
+      console.warn('Erro de conexão ao atualizar loja:', err);
+      return { success: false, error: err?.message || 'Falha de conexão com o banco.' };
     }
   }
 
@@ -1033,7 +1031,7 @@ export async function updateStoreSettingsInDatabase(
 }
 
 /**
- * Atualiza o limite de usuÃ¡rios de uma loja diretamente no banco e localmente
+ * Atualiza o limite de usuários de uma loja diretamente no banco e localmente
  */
 export async function updateStoreUserLimitInDatabase(
   storeId: string, 
@@ -1041,7 +1039,7 @@ export async function updateStoreUserLimitInDatabase(
 ): Promise<{ success: boolean; error?: string }> {
   const cleanStoreId = sanitizeIdentifier(storeId, 64);
   const safeLimit = validatePositiveInt(newLimit, 15, 10000);
-  if (!cleanStoreId) return { success: false, error: 'Loja invÃ¡lida.' };
+  if (!cleanStoreId) return { success: false, error: 'Loja inválida.' };
 
   const localStores = getStoredStores();
   const index = localStores.findIndex(s => s.id === cleanStoreId);
@@ -1060,12 +1058,12 @@ export async function updateStoreUserLimitInDatabase(
         .eq('id', cleanStoreId);
 
       if (error) {
-        console.error('Erro ao atualizar limite de usuÃ¡rios na loja:', error.message);
+        console.error('Erro ao atualizar limite de usuários na loja:', error.message);
         return { success: false, error: error.message };
       }
     } catch (err: any) {
-      console.error('Erro de conexÃ£o ao atualizar limite:', err);
-      return { success: false, error: err?.message || 'Falha de conexÃ£o com o banco.' };
+      console.error('Erro de conexão ao atualizar limite:', err);
+      return { success: false, error: err?.message || 'Falha de conexão com o banco.' };
     }
   }
 
@@ -1074,7 +1072,7 @@ export async function updateStoreUserLimitInDatabase(
 
 /**
  * Exclui definitivamente uma loja no banco de dados Supabase e localmente,
- * removendo usuÃ¡rios, produtos, auditorias e encerrando todas as sessÃµes ativas da unidade.
+ * removendo usuários, produtos, auditorias e encerrando todas as sessões ativas da unidade.
  */
 export async function deleteStoreFromDatabase(
   storeId: string,
@@ -1082,12 +1080,12 @@ export async function deleteStoreFromDatabase(
 ): Promise<{ success: boolean; message?: string; lojaNome?: string }> {
   const cleanStoreId = sanitizeIdentifier(storeId, 64);
   if (!cleanStoreId) {
-    return { success: false, message: 'ID da loja invÃ¡lido.' };
+    return { success: false, message: 'ID da loja inválido.' };
   }
 
   let deletedStoreName = '';
 
-  // 1. Executa exclusÃ£o atÃ´mica via RPC no Supabase
+  // 1. Executa exclusão atômica via RPC no Supabase
   if (client && isSupabaseConfigured()) {
     try {
       const { data, error } = await client.rpc('rpc_excluir_loja', {
@@ -1107,7 +1105,7 @@ export async function deleteStoreFromDatabase(
 
       deletedStoreName = res?.loja_nome || '';
 
-      // 2. Emite broadcast instantÃ¢neo para desconectar abas e dispositivos conectados nessa loja
+      // 2. Emite broadcast instantâneo para desconectar abas e dispositivos conectados nessa loja
       try {
         const broadcastChannel = client.channel(`realtime_store_lifecycle_${cleanStoreId}`);
         await broadcastChannel.subscribe(async (status) => {
@@ -1130,11 +1128,11 @@ export async function deleteStoreFromDatabase(
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      return { success: false, message: msg || 'Falha de conexÃ£o com o banco.' };
+      return { success: false, message: msg || 'Falha de conexão com o banco.' };
     }
   }
 
-  // 3. Limpeza completa do cache local (lojas, funcionÃ¡rios, produtos, avarias, chats)
+  // 3. Limpeza completa do cache local (lojas, funcionários, produtos, avarias, chats)
   if (typeof window !== 'undefined') {
     try {
       const localStores = getStoredStores();
@@ -1168,7 +1166,7 @@ export async function deleteStoreFromDatabase(
         }
       }
     } catch (err) {
-      console.warn('Aviso ao limpar cache local da loja excluÃ­da:', err);
+      console.warn('Aviso ao limpar cache local da loja excluída:', err);
     }
   }
 
@@ -1294,7 +1292,7 @@ export interface ActiveSession {
 }
 
 /**
- * Consulta sessÃµes ativas da tabela 'sessoes_ativas' no Supabase
+ * Consulta sessões ativas da tabela 'sessoes_ativas' no Supabase
  */
 export async function fetchStoreActiveSessions(lojaId?: string): Promise<ActiveSession[]> {
   if (!client) return [];
@@ -1319,14 +1317,14 @@ export async function fetchStoreActiveSessions(lojaId?: string): Promise<ActiveS
       }));
     }
   } catch (err) {
-    console.debug('Aviso ao consultar sessÃµes ativas no Supabase:', err);
+    console.debug('Aviso ao consultar sessões ativas no Supabase:', err);
   }
 
   return [];
 }
 
 /**
- * OperaÃ§Ãµes do Gerente de Loja: GestÃ£o de FuncionÃ¡rios & PermissÃµes de Setor
+ * Operações do Gerente de Loja: Gestão de Funcionários & Permissões de Setor
  */
 export async function fetchStoreEmployees(lojaId?: string): Promise<StoreEmployee[]> {
   const cleanLojaId = lojaId && lojaId !== 'todas' ? sanitizeIdentifier(lojaId, 64) : lojaId;
@@ -1367,7 +1365,7 @@ export async function fetchStoreEmployees(lojaId?: string): Promise<StoreEmploye
       return mapped;
     }
   } catch (err) {
-    console.debug('Aviso ao consultar funcionÃ¡rios da loja:', err);
+    console.debug('Aviso ao consultar funcionários da loja:', err);
   }
 
   return filtered;
@@ -1387,11 +1385,11 @@ export async function saveStoreEmployee(emp: StoreEmployee): Promise<{ success: 
   };
 
   if (!cleanEmp.id || !cleanEmp.matricula || !cleanEmp.nome) {
-    return { success: false, error: 'Dados do funcionÃ¡rio invÃ¡lidos. MatrÃ­cula e nome sÃ£o obrigatÃ³rios.' };
+    return { success: false, error: 'Dados do funcionário inválidos. Matrícula e nome são obrigatórios.' };
   }
 
   if (!cleanEmp.loja_id) {
-    return { success: false, error: 'Selecione uma loja vÃ¡lida para vincular o perfil.' };
+    return { success: false, error: 'Selecione uma loja válida para vincular o perfil.' };
   }
 
   const encryptedNome = encryptSingleField(cleanEmp.nome);
@@ -1399,7 +1397,7 @@ export async function saveStoreEmployee(emp: StoreEmployee): Promise<{ success: 
 
   if (client && isSupabaseConfigured()) {
     try {
-      // 1. Verifica se a loja existe no banco de dados para evitar violaÃ§Ã£o de FK
+      // 1. Verifica se a loja existe no banco de dados para evitar violação de FK
       const { data: storeRow, error: storeErr } = await client
         .from('lojas')
         .select('id, nome_loja, limite_usuarios')
@@ -1409,11 +1407,11 @@ export async function saveStoreEmployee(emp: StoreEmployee): Promise<{ success: 
       if (storeErr || !storeRow) {
         return { 
           success: false, 
-          error: `A loja selecionada (ID: "${cleanEmp.loja_id}") nÃ£o foi encontrada no banco de dados. Atualize a lista de lojas.` 
+          error: `A loja selecionada (ID: "${cleanEmp.loja_id}") não foi encontrada no banco de dados. Atualize a lista de lojas.` 
         };
       }
 
-      // 2. Verifica se o usuÃ¡rio jÃ¡ existe pela matrÃ­cula para reaproveitar o ID correto (evita conflito de chave Ãºnica)
+      // 2. Verifica se o usuário já existe pela matrícula para reaproveitar o ID correto (evita conflito de chave única)
       const { data: existingUser, error: checkErr } = await client
         .from('usuarios')
         .select('id, matricula, loja_id')
@@ -1421,13 +1419,13 @@ export async function saveStoreEmployee(emp: StoreEmployee): Promise<{ success: 
         .maybeSingle();
 
       if (checkErr && checkErr.code !== 'PGRST116') {
-        console.warn('Aviso ao consultar usuÃ¡rio existente:', checkErr);
+        console.warn('Aviso ao consultar usuário existente:', checkErr);
       }
 
       const finalId = existingUser?.id || cleanEmp.id;
       const isNewUser = !existingUser;
 
-      // 3. Verifica o limite de licenÃ§as da loja se for um novo usuÃ¡rio
+      // 3. Verifica o limite de licenças da loja se for um novo usuário
       if (isNewUser) {
         const { count: usersCount, error: countErr } = await client
           .from('usuarios')
@@ -1439,7 +1437,7 @@ export async function saveStoreEmployee(emp: StoreEmployee): Promise<{ success: 
         if (!countErr && usersCount !== null && usersCount >= userLimit) {
           return {
             success: false,
-            error: `Limite de licenÃ§as (${userLimit}) atingido para a loja "${storeRow.nome_loja}". Amplie a cota antes de cadastrar novos perfis.`
+            error: `Limite de licenças (${userLimit}) atingido para a loja "${storeRow.nome_loja}". Amplie a cota antes de cadastrar novos perfis.`
           };
         }
       }
@@ -1457,7 +1455,7 @@ export async function saveStoreEmployee(emp: StoreEmployee): Promise<{ success: 
       });
 
       if (upsertErr) {
-        console.error('Erro ao salvar funcionÃ¡rio no banco:', upsertErr);
+        console.error('Erro ao salvar funcionário no banco:', upsertErr);
         return { success: false, error: `Erro no banco de dados: ${upsertErr.message}` };
       }
 
@@ -1472,16 +1470,16 @@ export async function saveStoreEmployee(emp: StoreEmployee): Promise<{ success: 
             console.warn('Aviso ao sincronizar senha com auth.users:', syncErr);
           }
         } catch (syncErr) {
-          console.warn('ExceÃ§Ã£o ao sincronizar senha com auth.users:', syncErr);
+          console.warn('Exceção ao sincronizar senha com auth.users:', syncErr);
         }
       }
     } catch (err: any) {
-      console.error('ExceÃ§Ã£o ao salvar funcionÃ¡rio no banco:', err);
-      return { success: false, error: err?.message || 'Falha de comunicaÃ§Ã£o com o servidor ao salvar perfil.' };
+      console.error('Exceção ao salvar funcionário no banco:', err);
+      return { success: false, error: err?.message || 'Falha de comunicação com o servidor ao salvar perfil.' };
     }
   }
 
-  // AtualizaÃ§Ã£o no armazenamento local (cache / offline)
+  // Atualização no armazenamento local (cache / offline)
   const allEmps = getStoredEmployees();
   const storedRecord: StoreEmployee = {
     ...cleanEmp,
@@ -1498,7 +1496,7 @@ export async function saveStoreEmployee(emp: StoreEmployee): Promise<{ success: 
 
 export async function deleteStoreEmployee(empId: string, matricula?: string): Promise<{ success: boolean; error?: string }> {
   const cleanId = sanitizeIdentifier(empId, 64);
-  if (!cleanId) return { success: false, error: 'ID de usuÃ¡rio invÃ¡lido.' };
+  if (!cleanId) return { success: false, error: 'ID de usuário inválido.' };
 
   const allEmps = getStoredEmployees();
   const targetEmp = allEmps.find(e => e.id === cleanId || (matricula && e.matricula === matricula));
@@ -1514,7 +1512,7 @@ export async function deleteStoreEmployee(empId: string, matricula?: string): Pr
     try {
       const { error: delErr } = await client.from('usuarios').delete().eq('id', cleanId);
       if (delErr) {
-        console.error('Erro ao excluir usuÃ¡rio no banco:', delErr);
+        console.error('Erro ao excluir usuário no banco:', delErr);
         return { success: false, error: `Erro no banco de dados: ${delErr.message}` };
       }
 
@@ -1526,8 +1524,8 @@ export async function deleteStoreEmployee(empId: string, matricula?: string): Pr
         }
       }
     } catch (err: any) {
-      console.error('Erro ao excluir funcionÃ¡rio:', err);
-      return { success: false, error: err?.message || 'Falha de comunicaÃ§Ã£o com o servidor.' };
+      console.error('Erro ao excluir funcionário:', err);
+      return { success: false, error: err?.message || 'Falha de comunicação com o servidor.' };
     }
   }
 
@@ -1548,7 +1546,7 @@ export async function toggleStoreEmployeeActive(empId: string, active: boolean):
     try {
       await client.from('usuarios').update({ ativo: Boolean(active) }).eq('id', cleanEmpId);
     } catch (err) {
-      console.warn('Erro ao alterar status de funcionÃ¡rio:', err);
+      console.warn('Erro ao alterar status de funcionário:', err);
     }
   }
 
@@ -1565,13 +1563,13 @@ export async function saveStoreRole(role: StoreRole): Promise<boolean> {
 }
 
 /**
- * Valida a conexÃ£o com o banco de dados oficial Synk (tabela lojas ou produtos)
+ * Valida a conexão com o banco de dados oficial Synk (tabela lojas ou produtos)
  */
 export async function testSupabaseConnection(): Promise<{ success: boolean; message: string }> {
   if (!client || !isSupabaseConfigured()) {
     return {
       success: false,
-      message: 'Supabase operando em modo local/offline. Configure a URL e a Anon Key nas configuraÃ§Ãµes para conectar seu banco de dados na nuvem.',
+      message: 'Supabase operando em modo local/offline. Configure a URL e a Anon Key nas configurações para conectar seu banco de dados na nuvem.',
     };
   }
 
@@ -1583,7 +1581,7 @@ export async function testSupabaseConnection(): Promise<{ success: boolean; mess
       .limit(1);
 
     if (lojasError) {
-      // Se a tabela lojas nÃ£o existir ou der RLS error, tenta produtos
+      // Se a tabela lojas não existir ou der RLS error, tenta produtos
       const { error: prodError } = await client.from('produtos').select('id').limit(1);
       if (prodError) {
         throw new Error(`Falha ao acessar tabelas: ${lojasError.message || prodError.message}`);
@@ -1593,19 +1591,19 @@ export async function testSupabaseConnection(): Promise<{ success: boolean; mess
     const storeName = lojasData && lojasData[0] ? lojasData[0].nome_loja : 'Synk 2026.1';
     return {
       success: true,
-      message: `ConexÃ£o bem-sucedida com o Supabase! Banco pronto para gravaÃ§Ã£o (${storeName}).`,
+      message: `Conexão bem-sucedida com o Supabase! Banco pronto para gravação (${storeName}).`,
     };
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     return {
       success: false,
-      message: `Erro na conexÃ£o com as tabelas do Supabase: ${msg}`,
+      message: `Erro na conexão com as tabelas do Supabase: ${msg}`,
     };
   }
 }
 
 /**
- * Garante que a loja padrÃ£o exista na tabela 'lojas' para nÃ£o quebrar a chave estrangeira
+ * Garante que a loja padrão exista na tabela 'lojas' para não quebrar a chave estrangeira
  */
 async function ensureStoreExists(lojaId: string): Promise<void> {
   if (!client || !lojaId) return;
@@ -1626,12 +1624,12 @@ async function ensureStoreExists(lojaId: string): Promise<void> {
       });
     }
   } catch (err) {
-    console.debug('Aviso verificaÃ§Ã£o de loja:', err);
+    console.debug('Aviso verificação de loja:', err);
   }
 }
 
 /**
- * Upload em Realtime dos Produtos Criptografados ajustado Ã  estrutura oficial Synk 2026.1:
+ * Upload em Realtime dos Produtos Criptografados ajustado à estrutura oficial Synk 2026.1:
  * - Alimenta tabela 'produtos' (isolada por loja_id com setor especificado)
  * - Alimenta tabela 'produtos_catalogo_universal' (compartilhada universalmente)
  * - Registra log em 'app_logs' para auditoria e rastreabilidade
@@ -1653,7 +1651,7 @@ export async function uploadEncryptedProductsRealtime(
   const matricula = sanitizeIdentifier(options?.operatorMatricula || 'SISTEMA', 64);
   const nomeOperador = sanitizeText(options?.operatorNome || 'Operador', 120);
 
-  // Se o Supabase nÃ£o estiver configurado, persiste diretamente no banco local
+  // Se o Supabase não estiver configurado, persiste diretamente no banco local
   if (!client || !isSupabaseConfigured()) {
     console.log('[uploadEncryptedProductsRealtime] Banco local ativo. Persistindo produtos localmente.');
     // Simula o progresso visual para fluidez da UI
@@ -1704,7 +1702,7 @@ export async function uploadEncryptedProductsRealtime(
               minStock: 10,
               price: 9.90,
               category: cleanSetor,
-              location: `GÃ´ndola - ${cleanSetor}`,
+              location: `Gôndola - ${cleanSetor}`,
               loja_id: lojaId,
               lastUpdated: new Date().toISOString(),
             });
@@ -1730,8 +1728,8 @@ export async function uploadEncryptedProductsRealtime(
     // 0. Garante que a loja exista no banco para satisfazer a FK
     await ensureStoreExists(lojaId);
 
-    // 1. Ãndice determinÃ­stico da loja (EAN -> id) construÃ­do a partir do
-    //    `ean_hash`. Evita decifrar a tabela inteira a cada importaÃ§Ã£o.
+    // 1. Índice determinístico da loja (EAN -> id) construído a partir do
+    //    `ean_hash`. Evita decifrar a tabela inteira a cada importação.
     const index = await loadProductIndex(client, lojaId, { force: true });
     const catalogHashes = await loadCatalogIndex(client);
 
@@ -1739,7 +1737,7 @@ export async function uploadEncryptedProductsRealtime(
     let uploaded = 0;
     const defaultDueDate = new Date(Date.now() + 60 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
 
-    // PrÃ©-calcula os hashes de todos os itens do lote em paralelo.
+    // Pré-calcula os hashes de todos os itens do lote em paralelo.
     const prepared = items.map(c => {
       const cleanEan = sanitizeBarcode(c.original.ean, 32);
       const cleanName = sanitizeText(c.original.name, 200);
@@ -1774,8 +1772,8 @@ export async function uploadEncryptedProductsRealtime(
       const chunk = prepared.slice(i, i + batchSize);
       const chunkHashes = hashes.slice(i, i + batchSize);
 
-      // 2. Uma Ãºnica requisiÃ§Ã£o de upsert por lote.
-      //    Linhas com `id` sÃ£o atualizadas; linhas sem `id` sÃ£o inseridas.
+      // 2. Uma única requisição de upsert por lote.
+      //    Linhas com `id` são atualizadas; linhas sem `id` são inseridas.
       const rows: ProductWriteRow[] = [];
       const seenIds = new Set<string>();
       const seenHashes = new Set<string>();
@@ -1787,8 +1785,8 @@ export async function uploadEncryptedProductsRealtime(
         const eanHash = chunkHashes[j];
         if (!entry.cleanEan || !entry.cleanName || !eanHash) continue;
 
-        // EAN repetido dentro do mesmo lote: mantÃ©m apenas a primeira
-        // ocorrÃªncia (evita conflito de ON CONFLICT e produtos duplicados).
+        // EAN repetido dentro do mesmo lote: mantém apenas a primeira
+        // ocorrência (evita conflito de ON CONFLICT e produtos duplicados).
         if (seenHashes.has(eanHash)) continue;
         seenHashes.add(eanHash);
 
@@ -1800,7 +1798,7 @@ export async function uploadEncryptedProductsRealtime(
         }
         rows.push(row);
 
-        // CatÃ¡logo universal: sÃ³ entra o que ainda nÃ£o existe.
+        // Catálogo universal: só entra o que ainda não existe.
         if (!catalogHashes.has(eanHash)) {
           newCatalogRows.push({
             codigo_barras: encryptSingleField(entry.cleanEan),
@@ -1814,7 +1812,7 @@ export async function uploadEncryptedProductsRealtime(
       if (rows.length > 0) {
         const savedRows = await upsertProductRows(client, rows);
 
-        // Atualiza o Ã­ndice com os ids gerados para os produtos novos.
+        // Atualiza o índice com os ids gerados para os produtos novos.
         savedRows.forEach(saved => {
           if (!saved?.id || !saved.ean_hash) return;
           if (!index.hashToId.has(saved.ean_hash)) {
@@ -1829,7 +1827,7 @@ export async function uploadEncryptedProductsRealtime(
           await upsertCatalogRows(client, newCatalogRows as Array<{ codigo_barras: string; nome: string; ean_hash: string }>);
           newCatalogHashes.forEach(hash => catalogHashes.add(hash));
         } catch (catErr) {
-          console.debug('Aviso catÃ¡logo universal:', catErr);
+          console.debug('Aviso catálogo universal:', catErr);
         }
       }
 
@@ -1847,7 +1845,7 @@ export async function uploadEncryptedProductsRealtime(
         usuario_nome: encryptSingleField(nomeOperador),
         loja_id: lojaId,
         acao: 'IMPORTACAO_PLANILHA_ESTOQUE',
-        detalhes: encryptSingleField(`ImportaÃ§Ã£o de ${total} produtos criptografados gravados no banco com sucesso.`),
+        detalhes: encryptSingleField(`Importação de ${total} produtos criptografados gravados no banco com sucesso.`),
         timestamp: Date.now(),
       });
     } catch (logErr) {
@@ -1863,15 +1861,15 @@ export async function uploadEncryptedProductsRealtime(
 }
 
 /**
- * Consulta de produtos no banco Synk com conversÃ£o para o modelo do aplicativo
- * e suporte completo a mÃºltiplas sessÃµes (Session A -> Session B).
+ * Consulta de produtos no banco Synk com conversão para o modelo do aplicativo
+ * e suporte completo a múltiplas sessões (Session A -> Session B).
  * Se os dados estiverem criptografados no banco (Zero-Knowledge AES),
- * descriptografa temporariamente em RAM para exibiÃ§Ã£o correta em todas as sessÃµes.
+ * descriptografa temporariamente em RAM para exibição correta em todas as sessões.
  */
 /**
- * Leitura paginada em blocos: mantÃ©m a resposta da API limitada (memÃ³ria e
- * latÃªncia estÃ¡veis) mesmo com dezenas de milhares de registros, sem alterar
- * o resultado final para o usuÃ¡rio.
+ * Leitura paginada em blocos: mantém a resposta da API limitada (memória e
+ * latência estáveis) mesmo com dezenas de milhares de registros, sem alterar
+ * o resultado final para o usuário.
  */
 const PAGE_SIZE = 1000;
 const FALLBACK_PRODUCT_LIMIT = 2000;
@@ -1911,7 +1909,7 @@ async function fetchPaginated(
 }
 
 /**
- * Converte uma linha da tabela `produtos` no modelo de domÃ­nio.
+ * Converte uma linha da tabela `produtos` no modelo de domínio.
  * Compartilhado entre a leitura completa e o delta do Realtime para que
  * os dois caminhos nunca produzam formatos divergentes.
  */
@@ -1939,7 +1937,7 @@ export function mapProductRow(
     stock: validatePositiveInt(row.quantidade, 0),
     minStock: 10,
     price: 0,
-    location: `GÃ´ndola - ${sanitizeText(row.setor || 'Estoque', 64)}`,
+    location: `Gôndola - ${sanitizeText(row.setor || 'Estoque', 64)}`,
     loja_id: sanitizeIdentifier(row.loja_id || fallbackLojaId || '', 64),
     data_vencimento: sanitizeText(row.data_vencimento || '', 20),
     isLockedForEdit: Boolean(row.is_locked_for_edit),
@@ -1981,12 +1979,12 @@ export async function fetchProductsFromSupabase(lojaId?: string): Promise<Produc
   }
 
   try {
-    // ProjeÃ§Ã£o explÃ­cita: evita trafegar colunas desnecessÃ¡rias (o payload
-    // encolhe de forma significativa em catÃ¡logos grandes).
+    // Projeção explícita: evita trafegar colunas desnecessárias (o payload
+    // encolhe de forma significativa em catálogos grandes).
     const PRODUCT_COLUMNS =
       'id, nome, codigo_barras, codigo_barras_secundario, plu, codigo_fornecedor, setor, quantidade, data_vencimento, loja_id, is_encrypted, ciphertext, iv, is_locked_for_edit, locked_by, locked_at, criado_em';
 
-    // Busca estritamente pela loja especÃ­fica (paginado em blocos), garantindo
+    // Busca estritamente pela loja específica (paginado em blocos), garantindo
     // isolamento total de estoque entre lojas.
     const data = await fetchPaginated(client, 'produtos', PRODUCT_COLUMNS, cleanLojaId);
 
@@ -2002,142 +2000,8 @@ export async function fetchProductsFromSupabase(lojaId?: string): Promise<Produc
   }
 }
 
-export interface FetchProductsPaginatedOptions {
-  lojaId: string;
-  from: number;
-  to: number;
-  searchTerm?: string;
-  category?: string;
-  sortBy?: 'default' | 'qtd-desc' | 'qtd-asc' | 'name-asc' | 'name-desc' | 'forn-asc';
-  isRuptura?: boolean;
-}
-
-export interface FetchProductsPaginatedResult {
-  items: Product[];
-  totalCount: number;
-}
-
 /**
- * Consulta de produtos com paginação nativa (.range), projeção enxuta de colunas,
- * filtros no PostgreSQL e contagem exata para estoque escalável.
- */
-export async function fetchProductsPaginated(
-  options: FetchProductsPaginatedOptions
-): Promise<FetchProductsPaginatedResult> {
-  const { lojaId, from, to, searchTerm, category, sortBy = 'default', isRuptura } = options;
-  const cleanLojaId = sanitizeIdentifier(lojaId, 64);
-  if (!cleanLojaId) return { items: [], totalCount: 0 };
-
-  if (!client || !isSupabaseConfigured()) {
-    const localScoped = typeof window !== 'undefined'
-      ? (JSON.parse(localStorage.getItem(`superpwa_products_${cleanLojaId}`) || '[]') as Product[])
-      : [];
-    let filtered = localScoped.filter(p => !p.loja_id || p.loja_id === cleanLojaId);
-    if (isRuptura) {
-      filtered = filtered.filter(p => p.stock <= p.minStock || p.stock === 0);
-    }
-    if (category && category !== 'all') {
-      filtered = filtered.filter(p => p.category === category);
-    }
-    if (searchTerm) {
-      const term = searchTerm.toLowerCase().trim();
-      filtered = filtered.filter(p =>
-        p.name.toLowerCase().includes(term) ||
-        p.ean.includes(term) ||
-        (p.secondaryEan ? p.secondaryEan.includes(term) : false) ||
-        (p.reducedCode ? p.reducedCode.toLowerCase().includes(term) : false) ||
-        (p.supplierCode ? p.supplierCode.toLowerCase().includes(term) : false)
-      );
-    }
-    switch (sortBy) {
-      case 'qtd-desc':
-        filtered.sort((a, b) => b.stock - a.stock);
-        break;
-      case 'qtd-asc':
-        filtered.sort((a, b) => a.stock - b.stock);
-        break;
-      case 'name-asc':
-        filtered.sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
-        break;
-      case 'name-desc':
-        filtered.sort((a, b) => b.name.localeCompare(a.name, 'pt-BR'));
-        break;
-      case 'forn-asc':
-        filtered.sort((a, b) => (a.supplierCode || '').localeCompare(b.supplierCode || '', 'pt-BR'));
-        break;
-      case 'default':
-      default:
-        break;
-    }
-    const totalCount = filtered.length;
-    const items = filtered.slice(from, to + 1);
-    return { items, totalCount };
-  }
-
-  try {
-    const PRODUCT_COLUMNS =
-      'id, nome, codigo_barras, codigo_barras_secundario, plu, codigo_fornecedor, setor, quantidade, data_vencimento, loja_id, is_locked_for_edit, locked_by, locked_at, is_encrypted, ciphertext, iv, criado_em';
-
-    let query = client
-      .from('produtos')
-      .select(PRODUCT_COLUMNS, { count: 'exact' })
-      .eq('loja_id', cleanLojaId);
-
-    if (category && category !== 'all') {
-      query = query.eq('setor', sanitizeText(category, 64));
-    }
-
-    if (isRuptura) {
-      query = query.or('quantidade.lte.10,quantidade.eq.0');
-    }
-
-    if (searchTerm && searchTerm.trim()) {
-      const term = sanitizeText(searchTerm.trim(), 100);
-      query = query.or(
-        `nome.ilike.%${term}%,codigo_barras.ilike.%${term}%,codigo_barras_secundario.ilike.%${term}%,plu.ilike.%${term}%,codigo_fornecedor.ilike.%${term}%`
-      );
-    }
-
-    switch (sortBy) {
-      case 'qtd-desc':
-        query = query.order('quantidade', { ascending: false });
-        break;
-      case 'qtd-asc':
-        query = query.order('quantidade', { ascending: true });
-        break;
-      case 'name-asc':
-        query = query.order('nome', { ascending: true });
-        break;
-      case 'name-desc':
-        query = query.order('nome', { ascending: false });
-        break;
-      case 'forn-asc':
-        query = query.order('codigo_fornecedor', { ascending: true, nullsFirst: false });
-        break;
-      case 'default':
-      default:
-        query = query.order('criado_em', { ascending: false }).order('id', { ascending: true });
-        break;
-    }
-
-    query = query.range(from, to);
-
-    const { data, count, error } = await query;
-    if (error) {
-      console.warn('[supabaseService] Erro ao buscar produtos paginados:', error.message);
-      return { items: [], totalCount: 0 };
-    }
-
-    const items = (data || []).map((row: Record<string, unknown>) => mapProductRow(row, cleanLojaId));
-    return { items, totalCount: count ?? items.length };
-  } catch (err) {
-    console.warn('[supabaseService] Falha inesperada ao paginar produtos:', err);
-    return { items: [], totalCount: 0 };
-  }
-}
-
-/**
- * Evento de alteraÃ§Ã£o na tabela `produtos` emitido pelo Realtime.
+ * Evento de alteração na tabela `produtos` emitido pelo Realtime.
  * Permite aplicar apenas o delta na tela, em vez de recarregar a loja inteira.
  */
 export interface ProductRealtimeEvent {
@@ -2147,8 +2011,8 @@ export interface ProductRealtimeEvent {
 }
 
 /**
- * Inscreve no canal Realtime do Supabase para atualizar todas as sessÃµes conectadas
- * daquela loja especÃ­fica assim que um produto for criado, alterado ou excluÃ­do.
+ * Inscreve no canal Realtime do Supabase para atualizar todas as sessões conectadas
+ * daquela loja específica assim que um produto for criado, alterado ou excluído.
  */
 export function subscribeToProductsRealtime(
   lojaId: string | undefined,
@@ -2170,8 +2034,8 @@ export function subscribeToProductsRealtime(
           filter: `loja_id=eq.${cleanLojaId}`,
         },
         (payload: { eventType: string; new: Record<string, unknown>; old: Record<string, unknown> }) => {
-          // O Ã­ndice determinÃ­stico e o catÃ¡logo podem ter mudado: invalida
-          // para que a prÃ³xima importaÃ§Ã£o use dados frescos.
+          // O índice determinístico e o catálogo podem ter mudado: invalida
+          // para que a próxima importação use dados frescos.
           invalidateProductIndex(cleanLojaId);
           invalidateCatalogIndex();
 
@@ -2202,7 +2066,7 @@ export function subscribeToProductsRealtime(
 }
 
 /**
- * Sincroniza a fila de aÃ§Ãµes offline com o Supabase quando restabelecida a internet
+ * Sincroniza a fila de ações offline com o Supabase quando restabelecida a internet
  */
 export async function syncOfflineQueueToSupabase(
   actions: OfflineAction[],
@@ -2215,8 +2079,8 @@ export async function syncOfflineQueueToSupabase(
   const cleanLojaId = sanitizeIdentifier(lojaId, 64);
   let synced = 0;
   try {
-    // Agrega as aÃ§Ãµes por tipo para enviar em lotes (antes era 1 requisiÃ§Ã£o
-    // por aÃ§Ã£o, o que tornava a fila offline lenta em grandes volumes).
+    // Agrega as ações por tipo para enviar em lotes (antes era 1 requisição
+    // por ação, o que tornava a fila offline lenta em grandes volumes).
     const stockUpdates: Array<{ id: string; quantity: number }> = [];
     const newProducts: Array<Record<string, unknown>> = [];
 
@@ -2251,7 +2115,7 @@ export async function syncOfflineQueueToSupabase(
       }
     }
 
-    // 1) AtualizaÃ§Ãµes de estoque: uma leitura + um upsert por lote (isolado por loja_id).
+    // 1) Atualizações de estoque: uma leitura + um upsert por lote (isolado por loja_id).
     if (stockUpdates.length > 0) {
       const ids = stockUpdates.map(u => u.id);
       let query = client
@@ -2290,14 +2154,14 @@ export async function syncOfflineQueueToSupabase(
       }
     }
 
-    // 2) Produtos novos: inserÃ§Ã£o em lote.
+    // 2) Produtos novos: inserção em lote.
     for (let i = 0; i < newProducts.length; i += 500) {
       const chunk = newProducts.slice(i, i + 500);
       const { error: insertError } = await client.from('produtos').insert(chunk);
       if (insertError) throw insertError;
     }
 
-    // O Ã­ndice determinÃ­stico mudou: invalida para a prÃ³xima importaÃ§Ã£o.
+    // O índice determinístico mudou: invalida para a próxima importação.
     invalidateProductIndex();
     invalidateCatalogIndex();
 
@@ -2309,11 +2173,11 @@ export async function syncOfflineQueueToSupabase(
 }
 
 // ============================================================================
-// GESTÃO EM TEMPO REAL DAS 4 TABELAS DE AUDITORIA (MULTI-USUÃRIOS / REALTIME)
-// 1. auditoria_presenca_sessoes (sessÃµes ativas no setor - PresenÃ§a e InventÃ¡rio)
+// GESTÃO EM TEMPO REAL DAS 4 TABELAS DE AUDITORIA (MULTI-USUÁRIOS / REALTIME)
+// 1. auditoria_presenca_sessoes (sessões ativas no setor - Presença e Inventário)
 // 2. auditoria_presenca_bips (produtos bipados ao vivo por cada membro)
 // 3. produtos (produtos do setor a serem conferidos)
-// 4. auditorias_finalizadas & auditoria_produtos (histÃ³rico permanente e relatÃ³rios)
+// 4. auditorias_finalizadas & auditoria_produtos (histórico permanente e relatórios)
 // ============================================================================
 
 export type AuditSessionTipo = 'PRESENCA' | 'INVENTARIO' | 'VALIDADE';
@@ -2366,7 +2230,7 @@ const LOCAL_AUDIT_BIPS_KEY = 'superpwa_audit_bips_';
 export const AUDIT_SESSION_MAX_INACTIVITY_MS = 5 * 60 * 60 * 1000; // 5 horas
 
 /**
- * Consulta sessÃµes ativas de auditoria (isoladas por loja, ordenadas cronologicamente)
+ * Consulta sessões ativas de auditoria (isoladas por loja, ordenadas cronologicamente)
  */
 export async function fetchActiveAuditSessions(lojaId: string): Promise<DbActiveAuditSession[]> {
   const cleanLojaId = sanitizeIdentifier(lojaId, 64);
@@ -2405,7 +2269,7 @@ export async function fetchActiveAuditSessions(lojaId: string): Promise<DbActive
         return active;
       }
     } catch (err) {
-      console.debug('Aviso ao consultar sessÃµes ativas no banco:', err);
+      console.debug('Aviso ao consultar sessões ativas no banco:', err);
     }
   }
 
@@ -2424,7 +2288,7 @@ export async function fetchActiveAuditSessions(lojaId: string): Promise<DbActive
 }
 
 /**
- * Verifica o status atual de uma sessÃ£o especÃ­fica para detectar encerramento do anfitriÃ£o
+ * Verifica o status atual de uma sessão específica para detectar encerramento do anfitrião
  */
 export async function checkAuditSessionStatus(
   sessaoId: string,
@@ -2448,7 +2312,7 @@ export async function checkAuditSessionStatus(
 }
 
 /**
- * Inicia uma nova sessÃ£o de auditoria com chave composta (loja + setor + data + hora)
+ * Inicia uma nova sessão de auditoria com chave composta (loja + setor + data + hora)
  */
 export async function startAuditSessionInDatabase(data: {
   lojaId: string;
@@ -2502,7 +2366,7 @@ export async function startAuditSessionInDatabase(data: {
         console.warn('Aviso insert sessao auditoria:', error.message);
       }
     } catch (err) {
-      console.warn('Erro ao salvar sessÃ£o de auditoria no Supabase:', err);
+      console.warn('Erro ao salvar sessão de auditoria no Supabase:', err);
     }
   }
 
@@ -2516,7 +2380,7 @@ export async function startAuditSessionInDatabase(data: {
 }
 
 /**
- * Consulta todos os bips em tempo real de uma sessÃ£o ativa
+ * Consulta todos os bips em tempo real de uma sessão ativa
  */
 export async function fetchSessionBipsFromDatabase(sessaoId: string): Promise<DbAuditBip[]> {
   const cleanSessaoId = sanitizeIdentifier(sessaoId, 128);
@@ -2638,7 +2502,7 @@ export async function insertAuditBipInDatabase(bip: DbAuditBip): Promise<{ succe
 }
 
 /**
- * Finaliza a sessÃ£o no Supabase, transmite fechamento automÃ¡tico e arquiva o relatÃ³rio na nuvem
+ * Finaliza a sessão no Supabase, transmite fechamento automático e arquiva o relatório na nuvem
  */
 export async function finalizeAuditSessionInDatabase(data: {
   sessaoId: string;
@@ -2695,7 +2559,7 @@ export async function finalizeAuditSessionInDatabase(data: {
         .eq('id', data.sessaoId)
         .eq('loja_id', data.lojaId);
 
-      // 1.1 Notifica imediatamente via Broadcast todos os participantes conectados para fechamento automÃ¡tico
+      // 1.1 Notifica imediatamente via Broadcast todos os participantes conectados para fechamento automático
       if (activeAuditChannelRef && activeAuditChannelRef.lojaId === data.lojaId) {
         try {
           await activeAuditChannelRef.ready;
@@ -2715,7 +2579,7 @@ export async function finalizeAuditSessionInDatabase(data: {
         }
       }
 
-      // 2. Grava na tabela auditorias_finalizadas (fonte Ãºnica de verdade â sem armazenamento local)
+      // 2. Grava na tabela auditorias_finalizadas (fonte única de verdade — sem armazenamento local)
       await client.from('auditorias_finalizadas').upsert({
         id: sanitizeIdentifier(data.sessaoId, 128),
         loja_id: sanitizeIdentifier(data.lojaId, 64),
@@ -2813,7 +2677,7 @@ export async function finalizeAuditSessionInDatabase(data: {
     }
   }
 
-  // PersistÃªncia local do relatÃ³rio de auditoria (banco local)
+  // Persistência local do relatório de auditoria (banco local)
   const localAuditReport: AuditItem = {
     id: data.sessaoId,
     lojaId: data.lojaId,
@@ -2872,7 +2736,7 @@ export async function finalizeAuditSessionInDatabase(data: {
     }
   }
 
-  // Remove caches temporÃ¡rios da sessÃ£o encerrada
+  // Remove caches temporários da sessão encerrada
   if (typeof window !== 'undefined') {
     try {
       const raw = localStorage.getItem(LOCAL_ACTIVE_SESSIONS_KEY);
@@ -2890,8 +2754,8 @@ export async function finalizeAuditSessionInDatabase(data: {
 }
 
 /**
- * Carrega relatÃ³rios de auditoria diretamente do Supabase (sem armazenamento local),
- * com isolamento por loja, ordenaÃ§Ã£o cronolÃ³gica e restriÃ§Ã£o de setor para nÃ£o-gerentes.
+ * Carrega relatórios de auditoria diretamente do Supabase (sem armazenamento local),
+ * com isolamento por loja, ordenação cronológica e restrição de setor para não-gerentes.
  */
 export async function fetchAuditReportsFromDatabase(
   lojaId: string,
@@ -2927,7 +2791,7 @@ export async function fetchAuditReportsFromDatabase(
   }
 
   try {
-    // ProjeÃ§Ã£o explÃ­cita: somente as colunas realmente consumidas.
+    // Projeção explícita: somente as colunas realmente consumidas.
     let query = client
       .from('auditorias_finalizadas')
       .select('id, loja_id, setor, tipo, data_auditoria, hora_auditoria, iniciada_em, finalizada_em, chave_auditoria, total_esperado, total_auditado, total_divergentes, iniciada_por_nome, iniciada_por_matricula, finalizada_por_nome, finalizada_por_matricula, participantes, duracao_label, camera_scans_count')
@@ -2949,7 +2813,7 @@ export async function fetchAuditReportsFromDatabase(
 
     const { data: rows, error } = await query;
     if (error || !rows) {
-      console.warn('[RelatÃ³rios] Erro ao buscar auditorias finalizadas:', error?.message);
+      console.warn('[Relatórios] Erro ao buscar auditorias finalizadas:', error?.message);
       return null;
     }
 
@@ -3050,13 +2914,13 @@ export async function fetchAuditReportsFromDatabase(
       } satisfies AuditItem;
     });
   } catch (err) {
-    console.warn('[RelatÃ³rios] Falha ao carregar relatÃ³rios da nuvem:', err);
+    console.warn('[Relatórios] Falha ao carregar relatórios da nuvem:', err);
     return null;
   }
 }
 
 /**
- * Atualiza item bipado pÃ³s-auditoria no relatÃ³rio (somente via cÃ¢mera) diretamente no banco
+ * Atualiza item bipado pós-auditoria no relatório (somente via câmera) diretamente no banco
  */
 export async function confirmMissingAuditProductInDatabase(data: {
   sessaoId: string;
@@ -3095,14 +2959,14 @@ export async function confirmMissingAuditProductInDatabase(data: {
       .eq('id', cleanSessaoId)
       .eq('loja_id', cleanLojaId);
   } catch (err) {
-    console.warn('[RelatÃ³rios] Erro ao atualizar bip pÃ³s-auditoria:', err);
+    console.warn('[Relatórios] Erro ao atualizar bip pós-auditoria:', err);
   }
 }
 
 let activeAuditChannelRef: { lojaId: string; channel: ReturnType<NonNullable<typeof client>['channel']>; ready: Promise<void> } | null = null;
 
 /**
- * Notifica via Broadcast que um operador entrou em uma sessÃ£o de auditoria ativa
+ * Notifica via Broadcast que um operador entrou em uma sessão de auditoria ativa
  */
 export async function notifySessionJoinRealtime(data: {
   lojaId: string;
@@ -3123,13 +2987,13 @@ export async function notifySessionJoinRealtime(data: {
     }
     return false;
   } catch (err) {
-    console.warn('Aviso ao notificar entrada na sessÃ£o:', err);
+    console.warn('Aviso ao notificar entrada na sessão:', err);
     return false;
   }
 }
 
 /**
- * Assina as alteraÃ§Ãµes em tempo real de auditoria (isolada por loja_id)
+ * Assina as alterações em tempo real de auditoria (isolada por loja_id)
  */
 export function subscribeToAuditRealtime(
   lojaId: string,
@@ -3239,7 +3103,7 @@ export function subscribeToAuditRealtime(
               online_at: Date.now(),
             });
           } catch (e) {
-            console.warn('[Presence] Erro ao registrar presenÃ§a:', e);
+            console.warn('[Presence] Erro ao registrar presença:', e);
           }
         }
       }
@@ -3258,7 +3122,7 @@ export function subscribeToAuditRealtime(
 }
 
 // ============================================================================
-// 12. SISTEMA DE CHAT OPERACIONAL (GRUPO DA LOJA E CANAL DIRETO COM LÃDERES)
+// 12. SISTEMA DE CHAT OPERACIONAL (GRUPO DA LOJA E CANAL DIRETO COM LÍDERES)
 // ============================================================================
 
 export const LOCAL_STORAGE_CHAT_KEY = 'superpwa_chat_messages_v1';
@@ -3307,9 +3171,9 @@ export function saveStoredChatMessage(message: ChatMessage): void {
 }
 
 /**
- * Consulta mensagens de chat diretamente no banco de dados (fonte Ãºnica de verdade).
+ * Consulta mensagens de chat diretamente no banco de dados (fonte única de verdade).
  * Retorna `null` somente em caso de falha de rede/consulta; quando retorna `[]`,
- * significa que o banco estÃ¡ vazio e a interface deve refletir isso imediatamente.
+ * significa que o banco está vazio e a interface deve refletir isso imediatamente.
  */
 export async function fetchChatMessagesFromSupabase(lojaId: string): Promise<ChatMessage[] | null> {
   const cleanLojaId = sanitizeIdentifier(lojaId, 64);
@@ -3317,7 +3181,7 @@ export async function fetchChatMessagesFromSupabase(lojaId: string): Promise<Cha
     return getStoredChatMessages(cleanLojaId);
   }
 
-  // Elimina qualquer cache local obsoleto para evitar ressuscitar mensagens excluÃ­das
+  // Elimina qualquer cache local obsoleto para evitar ressuscitar mensagens excluídas
   clearObsoleteChatCache();
 
   try {
@@ -3342,12 +3206,12 @@ export async function fetchChatMessagesFromSupabase(lojaId: string): Promise<Cha
 }
 
 /**
- * Nome ESTÃVEL do canal Realtime do chat da loja.
+ * Nome ESTÁVEL do canal Realtime do chat da loja.
  */
 export const getChatChannelName = (lojaId: string): string => `realtime_chat_${sanitizeIdentifier(lojaId, 64)}`;
 
 /**
- * Converte uma linha da tabela `chat_mensagens` no modelo da aplicaÃ§Ã£o (descriptografando em RAM).
+ * Converte uma linha da tabela `chat_mensagens` no modelo da aplicação (descriptografando em RAM).
  */
 function mapChatRow(row: Record<string, unknown>): ChatMessage {
   return {
@@ -3367,9 +3231,9 @@ function mapChatRow(row: Record<string, unknown>): ChatMessage {
 }
 
 /**
- * Registro de canais de chat abertos, indexado pelo nome estÃ¡vel do canal.
- * MantÃ©m UM Ãºnico canal por loja para que todos os dispositivos (enviar e
- * receber) compartilhem o mesmo endereÃ§o.
+ * Registro de canais de chat abertos, indexado pelo nome estável do canal.
+ * Mantém UM único canal por loja para que todos os dispositivos (enviar e
+ * receber) compartilhem o mesmo endereço.
  */
 interface ChatChannelEntry {
   channel: RealtimeChannel;
@@ -3392,8 +3256,8 @@ function getOrCreateChatChannel(lojaId: string): ChatChannelEntry {
   const listeners = new Set<(msg: ChatMessage) => void>();
   const deleteListeners = new Set<(deletedId: string) => void>();
 
-  // Canal 1: BROADCAST â entrega instantÃ¢nea e NÃO depende da tabela estar
-  // publicada em `supabase_realtime`. Ã o caminho que garante latÃªncia baixa.
+  // Canal 1: BROADCAST — entrega instantânea e NÃO depende da tabela estar
+  // publicada em `supabase_realtime`. É o caminho que garante latência baixa.
   channel.on('broadcast', { event: 'new_message' }, (payload: { payload?: unknown }) => {
     if (!payload?.payload) return;
     try {
@@ -3412,7 +3276,7 @@ function getOrCreateChatChannel(lojaId: string): ChatChannelEntry {
     deleteListeners.forEach((listener) => listener(String(data.id)));
   });
 
-  // Canal 2: POSTGRES CHANGES â entrega INSERT, UPDATE e DELETE via tabela
+  // Canal 2: POSTGRES CHANGES — entrega INSERT, UPDATE e DELETE via tabela
   channel.on(
     'postgres_changes',
     {
@@ -3468,7 +3332,7 @@ function getOrCreateChatChannel(lojaId: string): ChatChannelEntry {
       clearTimeout(timer);
       resolve();
     };
-    // Rede lenta ou canal travado nÃ£o pode bloquear o envio de mensagens.
+    // Rede lenta ou canal travado não pode bloquear o envio de mensagens.
     const timer = setTimeout(finish, 3000);
     channel.subscribe((status) => {
       if (status === 'SUBSCRIBED') {
@@ -3486,8 +3350,8 @@ function getOrCreateChatChannel(lojaId: string): ChatChannelEntry {
 }
 
 /**
- * Envia a mensagem via BROADCAST para entrega instantÃ¢nea aos demais
- * dispositivos da loja. NÃ£o depende da publicaÃ§Ã£o `supabase_realtime`.
+ * Envia a mensagem via BROADCAST para entrega instantânea aos demais
+ * dispositivos da loja. Não depende da publicação `supabase_realtime`.
  */
 export async function broadcastChatMessage(msg: ChatMessage): Promise<boolean> {
   if (!client || !isSupabaseConfigured()) return false;
@@ -3507,7 +3371,7 @@ export async function broadcastChatMessage(msg: ChatMessage): Promise<boolean> {
 }
 
 /**
- * Envia mensagem para o canal do chat (grupo da loja ou direto com lÃ­deres)
+ * Envia mensagem para o canal do chat (grupo da loja ou direto com líderes)
  */
 export async function sendChatMessageToSupabase(
   msg: Omit<ChatMessage, 'id' | 'timestamp' | 'created_at'>
@@ -3515,7 +3379,7 @@ export async function sendChatMessageToSupabase(
   const cleanLojaId = sanitizeIdentifier(msg.loja_id, 64);
   const cleanConteudo = sanitizeText(msg.conteudo, 1000);
   if (!cleanConteudo) {
-    return { success: false, error: 'Mensagem vazia ou invÃ¡lida.' };
+    return { success: false, error: 'Mensagem vazia ou inválida.' };
   }
 
   const newMsg: ChatMessage = {
@@ -3570,7 +3434,7 @@ export async function sendChatMessageToSupabase(
       return { success: false, error: error.message };
     }
 
-    // Broadcast instantÃ¢neo criptografado para os demais dispositivos da loja.
+    // Broadcast instantâneo criptografado para os demais dispositivos da loja.
     await broadcastChatMessage(encryptedPayload);
 
     return { success: true, data: newMsg };
@@ -3584,9 +3448,9 @@ export async function sendChatMessageToSupabase(
 /**
  * Assina o canal de chat da loja em tempo real.
  *
- * Retorna uma funÃ§Ã£o de cancelamento. O canal fÃ­sico sÃ³ Ã© destruÃ­do quando
- * nÃ£o restam mais escutantes, evitando que abrir/fechar o modal derrube a
- * conexÃ£o dos demais dispositivos.
+ * Retorna uma função de cancelamento. O canal físico só é destruído quando
+ * não restam mais escutantes, evitando que abrir/fechar o modal derrube a
+ * conexão dos demais dispositivos.
  */
 export function subscribeToChatRealtime(
   lojaId: string,
@@ -3630,7 +3494,7 @@ export function subscribeToChatRealtime(
 export const LOCAL_STORAGE_AVARIAS_KEY = 'superpwa_avarias_estoque_v1';
 
 /**
- * LÃª as avarias salvas localmente no dispositivo.
+ * Lê as avarias salvas localmente no dispositivo.
  */
 export function getStoredAvarias(lojaId?: string): AvariaItem[] {
   if (typeof window === 'undefined') return [];
@@ -3665,7 +3529,7 @@ export function saveStoredAvaria(avaria: AvariaItem): void {
 
 /**
  * Verifica se a tabela `avarias_estoque` existe no projeto Supabase.
- * O app funciona em modo local quando ela ainda nÃ£o foi criada.
+ * O app funciona em modo local quando ela ainda não foi criada.
  */
 let avariasTableAvailable: boolean | null = null;
 export async function isAvariaTableAvailable(): Promise<boolean> {
@@ -3683,9 +3547,9 @@ export async function isAvariaTableAvailable(): Promise<boolean> {
 /**
  * Registra uma avaria: grava localmente (garantido) e sincroniza com a nuvem.
  *
- * `synced` indica se a gravaÃ§Ã£o chegou ao banco. Quando a tabela ainda nÃ£o
- * existe, o registro Ã© preservado no dispositivo e pode ser sincronizado
- * depois que a migraÃ§Ã£o for aplicada.
+ * `synced` indica se a gravação chegou ao banco. Quando a tabela ainda não
+ * existe, o registro é preservado no dispositivo e pode ser sincronizado
+ * depois que a migração for aplicada.
  */
 export async function saveAvariaInDatabase(
   avariaData: Omit<AvariaItem, 'id' | 'registrado_em' | 'timestamp'>
@@ -3696,7 +3560,7 @@ export async function saveAvariaInDatabase(
   const cleanQty = validatePositiveInt(avariaData.quantidade, 1);
 
   if (!cleanBarcode || !cleanProdName || cleanQty <= 0) {
-    return { success: false, synced: false, error: 'Dados da avaria invÃ¡lidos.' };
+    return { success: false, synced: false, error: 'Dados da avaria inválidos.' };
   }
 
   const avaria: AvariaItem = {
@@ -3715,10 +3579,10 @@ export async function saveAvariaInDatabase(
     timestamp: nowMs,
   };
 
-  // 1. PersistÃªncia local garantida (mesmo offline)
+  // 1. Persistência local garantida (mesmo offline)
   saveStoredAvaria(avaria);
 
-  // 2. SincronizaÃ§Ã£o com a nuvem (criptografado)
+  // 2. Sincronização com a nuvem (criptografado)
   if (!client || !isSupabaseConfigured()) {
     return { success: true, data: avaria, synced: false };
   }
@@ -3757,7 +3621,7 @@ export async function saveAvariaInDatabase(
 }
 
 /**
- * Carrega as avarias da loja. Se a tabela nÃ£o existir, mantÃ©m o cache local.
+ * Carrega as avarias da loja. Se a tabela não existir, mantém o cache local.
  */
 export async function fetchAvariasFromDatabase(lojaId: string): Promise<AvariaItem[]> {
   const cleanLojaId = sanitizeIdentifier(lojaId, 64);
@@ -3800,7 +3664,7 @@ export async function fetchAvariasFromDatabase(lojaId: string): Promise<AvariaIt
       timestamp: Number(row.timestamp) || Date.now(),
     }));
 
-    // Consolida o banco como fonte de verdade, preservando o que sÃ³ existe local
+    // Consolida o banco como fonte de verdade, preservando o que só existe local
     const merged = [...mapped];
     localList.forEach(local => {
       if (!merged.some(m => m.id === local.id)) merged.push(local);
@@ -3823,7 +3687,7 @@ export async function fetchAvariasFromDatabase(lojaId: string): Promise<AvariaIt
 /**
  * Assina as avarias da loja em tempo real.
  *
- * Usa BROADCAST (nÃ£o depende da publicaÃ§Ã£o `supabase_realtime`) e completa
+ * Usa BROADCAST (não depende da publicação `supabase_realtime`) e completa
  * com `postgres_changes` quando a tabela estiver publicada.
  */
 export function subscribeToAvariasRealtime(
@@ -3898,7 +3762,7 @@ export function subscribeToAvariasRealtime(
 }
 
 // ============================================================================
-// 14. BLOQUEIO E ATUALIZAÃÃO DE PRODUTOS (CONCORRÃNCIA E 2Âº CÃDIGO DE BARRAS)
+// 14. BLOQUEIO E ATUALIZAÇÃO DE PRODUTOS (CONCORRÊNCIA E 2º CÓDIGO DE BARRAS)
 // ============================================================================
 
 export async function lockProductInSupabase(
@@ -3965,7 +3829,7 @@ export async function updateProductInSupabase(
 ): Promise<{ success: boolean; error?: string }> {
   const cleanId = sanitizeIdentifier(productId, 64);
   const cleanLojaId = lojaId ? sanitizeIdentifier(lojaId, 64) : '';
-  if (!cleanId) return { success: false, error: 'ID de produto invÃ¡lido.' };
+  if (!cleanId) return { success: false, error: 'ID de produto inválido.' };
   if (!client || !isSupabaseConfigured()) return { success: true };
 
   try {
@@ -3979,15 +3843,15 @@ export async function updateProductInSupabase(
 
     if (updates.name !== undefined) {
       const cleanName = sanitizeText(updates.name, 200);
-      if (!cleanName) return { success: false, error: 'Nome do produto invÃ¡lido.' };
+      if (!cleanName) return { success: false, error: 'Nome do produto inválido.' };
       payload.nome = encryptSingleField(cleanName);
     }
     if (updates.ean !== undefined) {
       const cleanEan = sanitizeBarcode(updates.ean, 32);
-      if (!cleanEan) return { success: false, error: 'CÃ³digo de barras invÃ¡lido.' };
+      if (!cleanEan) return { success: false, error: 'Código de barras inválido.' };
       payload.codigo_barras = encryptSingleField(cleanEan);
-      // MantÃ©m o hash determinÃ­stico em sincronia com o EAN (evita duplicar
-      // o produto na prÃ³xima importaÃ§Ã£o).
+      // Mantém o hash determinístico em sincronia com o EAN (evita duplicar
+      // o produto na próxima importação).
       payload.ean_hash = await hashEan(cleanEan);
     }
     if (updates.secondaryEan !== undefined) {
@@ -4026,256 +3890,3 @@ export async function updateProductInSupabase(
 }
 
 
-
-// ============================================================================
-// CARGOS, SETORES e CORES DA LOJA (persistidos no Supabase)
-// ============================================================================
-
-const LOCAL_STORAGE_SECTORS_KEY = 'superpwa_sectors_data';
-const LOCAL_STORAGE_COLORS_KEY = 'superpwa_store_colors_data';
-
-function getLojaIdAtual(): string | null {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEYS.AUTH_USER);
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      const lojaId = parsed?.loja_id || parsed?.lojaId;
-      if (lojaId) return String(lojaId);
-    }
-  } catch {
-    // ignore
-  }
-  const stores = getStoredStores();
-  return stores[0]?.id || null;
-}
-
-function readLocalStrings(key: string): string[] | null {
-  try {
-    const raw = localStorage.getItem(key);
-    const parsed = raw ? JSON.parse(raw) : null;
-    return Array.isArray(parsed) ? parsed.map(String) : null;
-  } catch {
-    return null;
-  }
-}
-
-/** Busca os setores da loja (DB com cache local offline). */
-export async function fetchStoreSectors(): Promise<string[]> {
-  const local = readLocalStrings(LOCAL_STORAGE_SECTORS_KEY);
-
-  if (client && isSupabaseConfigured()) {
-    try {
-      const lojaId = getLojaIdAtual();
-      let query = client
-        .from('setores_loja')
-        .select('nome, ordem')
-        .eq('ativo', true)
-        .order('ordem', { ascending: true });
-      if (lojaId) query = query.eq('loja_id', lojaId);
-      const { data, error } = await query;
-      if (!error && Array.isArray(data) && data.length > 0) {
-        const nomes = data.map(r => String(r.nome));
-        localStorage.setItem(LOCAL_STORAGE_SECTORS_KEY, JSON.stringify(nomes));
-        return nomes;
-      }
-    } catch (e) {
-      console.warn('Erro ao buscar setores no banco:', e);
-    }
-  }
-  return local || [...SETORES_DISPONIVEIS];
-}
-
-/** Salva a lista completa de setores da loja no banco. */
-export async function saveStoreSectors(sectors: string[]): Promise<{ success: boolean; error?: string }> {
-  const nomes = sectors.map(s => String(s).trim()).filter(Boolean);
-  localStorage.setItem(LOCAL_STORAGE_SECTORS_KEY, JSON.stringify(nomes));
-
-  if (client && isSupabaseConfigured()) {
-    try {
-      const lojaId = getLojaIdAtual();
-      if (!lojaId) return { success: false, error: 'Loja não identificada.' };
-
-      const { data: existentes, error: errRead } = await client
-        .from('setores_loja')
-        .select('id, nome')
-        .eq('loja_id', lojaId);
-      if (errRead) return { success: false, error: errRead.message };
-
-      const existentesMap = new Map(
-        (existentes || []).map(r => [String(r.nome).trim().toUpperCase(), String(r.id)])
-      );
-
-      const paraDesativar = (existentes || [])
-        .filter(r => !nomes.some(n => n.trim().toUpperCase() === String(r.nome).trim().toUpperCase()))
-        .map(r => String(r.id));
-      if (paraDesativar.length > 0) {
-        await client.from('setores_loja').update({ ativo: false }).in('id', paraDesativar);
-      }
-
-      const rows = nomes.map((nome, idx) => ({
-        id: existentesMap.get(nome.trim().toUpperCase()) || undefined,
-        loja_id: lojaId,
-        nome: nome.trim(),
-        ordem: idx,
-        ativo: true,
-      }));
-      const { error: errUpsert } = await client.from('setores_loja').upsert(rows, {
-        onConflict: 'id',
-        ignoreDuplicates: false,
-      });
-      if (errUpsert) return { success: false, error: errUpsert.message };
-      return { success: true };
-    } catch (e) {
-      return { success: false, error: e instanceof Error ? e.message : 'Erro desconhecido' };
-    }
-  }
-  return { success: true };
-}
-
-/** Busca as cores salvas da loja. */
-export async function fetchStoreColors(): Promise<StoreColor[] | null> {
-  let local: StoreColor[] | null = null;
-  try {
-    const raw = localStorage.getItem(LOCAL_STORAGE_COLORS_KEY);
-    const parsed = raw ? JSON.parse(raw) : null;
-    if (Array.isArray(parsed)) local = parsed as StoreColor[];
-  } catch {
-    local = null;
-  }
-
-  if (client && isSupabaseConfigured()) {
-    try {
-      const lojaId = getLojaIdAtual();
-      if (lojaId) {
-        const { data, error } = await client
-          .from('cores_loja')
-          .select('id, loja_id, nome, hex, r, g, b, principal')
-          .eq('loja_id', lojaId)
-          .order('created_at', { ascending: true });
-        if (!error && Array.isArray(data) && data.length > 0) {
-          const cores: StoreColor[] = data.map(row => ({
-            id: String(row.id),
-            loja_id: String(row.loja_id),
-            nome: String(row.nome),
-            hex: String(row.hex),
-            r: Number(row.r),
-            g: Number(row.g),
-            b: Number(row.b),
-            principal: Boolean(row.principal),
-          }));
-          localStorage.setItem(LOCAL_STORAGE_COLORS_KEY, JSON.stringify(cores));
-          return cores;
-        }
-      }
-    } catch (e) {
-      console.warn('Erro ao buscar cores no banco:', e);
-    }
-  }
-  return local;
-}
-
-/** Converte hexadecimal em componentes RGB. */
-export function hexToRgb(hex: string): { r: number; g: number; b: number } | null {
-  const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(String(hex).trim());
-  if (!m) return null;
-  return { r: parseInt(m[1], 16), g: parseInt(m[2], 16), b: parseInt(m[3], 16) };
-}
-
-/** Converte componentes RGB em hexadecimal. */
-export function rgbToHex(r: number, g: number, b: number): string {
-  const clamp = (v: number) => Math.max(0, Math.min(255, Math.round(v)));
-  return `#${[clamp(r), clamp(g), clamp(b)]
-    .map(v => v.toString(16).padStart(2, '0'))
-    .join('')}`;
-}
-
-/** Salva (upsert) uma cor da loja no banco. */
-export async function saveStoreColor(
-  color: Partial<StoreColor> & { loja_id: string; hex: string }
-): Promise<{ success: boolean; error?: string; color?: StoreColor }> {
-  const rgb = hexToRgb(color.hex) || { r: 0, g: 0, b: 0 };
-  const row = {
-    id: color.id || undefined,
-    loja_id: color.loja_id,
-    nome: color.nome || 'Cor da Loja',
-    hex: color.hex,
-    r: rgb.r,
-    g: rgb.g,
-    b: rgb.b,
-    principal: color.principal ?? false,
-  };
-
-  if (client && isSupabaseConfigured()) {
-    try {
-      const { data, error } = await client
-        .from('cores_loja')
-        .upsert(row, { onConflict: 'id' })
-        .select('id, loja_id, nome, hex, r, g, b, principal')
-        .single();
-      if (error) return { success: false, error: error.message };
-      if (data) {
-        const saved: StoreColor = {
-          id: String(data.id),
-          loja_id: String(data.loja_id),
-          nome: String(data.nome),
-          hex: String(data.hex),
-          r: Number(data.r),
-          g: Number(data.g),
-          b: Number(data.b),
-          principal: Boolean(data.principal),
-        };
-        const all = await fetchStoreColors();
-        localStorage.setItem(LOCAL_STORAGE_COLORS_KEY, JSON.stringify(all || [saved]));
-        return { success: true, color: saved };
-      }
-    } catch (e) {
-      return { success: false, error: e instanceof Error ? e.message : 'Erro desconhecido' };
-    }
-  }
-
-  const localColor: StoreColor = {
-    id: color.id || `cor-${Date.now()}`,
-    loja_id: color.loja_id,
-    nome: row.nome,
-    hex: row.hex,
-    r: row.r,
-    g: row.g,
-    b: row.b,
-    principal: row.principal,
-  };
-  let existing: StoreColor[] = [];
-  try {
-    existing = JSON.parse(localStorage.getItem(LOCAL_STORAGE_COLORS_KEY) || '[]');
-  } catch {
-    existing = [];
-  }
-  const idx = existing.findIndex(c => c.id === localColor.id);
-  if (idx >= 0) existing[idx] = localColor;
-  else existing.push(localColor);
-  localStorage.setItem(LOCAL_STORAGE_COLORS_KEY, JSON.stringify(existing));
-  return { success: true, color: localColor };
-}
-
-/** Remove uma cor da loja. */
-export async function deleteStoreColor(colorId: string): Promise<{ success: boolean; error?: string }> {
-  const cleanId = sanitizeIdentifier(colorId, 64);
-  if (!cleanId) return { success: false, error: 'ID de cor inválido.' };
-
-  let existing: StoreColor[] = [];
-  try {
-    existing = JSON.parse(localStorage.getItem(LOCAL_STORAGE_COLORS_KEY) || '[]');
-  } catch {
-    existing = [];
-  }
-  localStorage.setItem(LOCAL_STORAGE_COLORS_KEY, JSON.stringify(existing.filter(c => c.id !== cleanId)));
-
-  if (client && isSupabaseConfigured()) {
-    try {
-      const { error } = await client.from('cores_loja').delete().eq('id', cleanId);
-      if (error) return { success: false, error: error.message };
-    } catch (e) {
-      return { success: false, error: e instanceof Error ? e.message : 'Erro desconhecido' };
-    }
-  }
-  return { success: true };
-}
