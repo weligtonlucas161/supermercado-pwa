@@ -32,6 +32,7 @@ import {
   validateEnum,
   validateHexColor,
 } from '../utils/security';
+import { invalidateStockCache } from '../utils/encryptedCache';
 import {
   SUPABASE_STORAGE_KEYS,
   getDbClient,
@@ -2000,6 +2001,176 @@ export async function fetchProductsFromSupabase(lojaId?: string): Promise<Produc
   }
 }
 
+export interface FetchStockPaginatedParams {
+  lojaId: string;
+  page: number; // 0-based
+  pageSize?: number; // padrão 50
+  searchTerm?: string;
+  category?: string;
+  sortBy?: 'default' | 'qtd-desc' | 'qtd-asc' | 'name-asc' | 'name-desc' | 'forn-asc';
+  onlyRuptures?: boolean;
+}
+
+export interface FetchStockPaginatedResult {
+  items: Product[];
+  totalCount: number;
+  page: number;
+  pageSize: number;
+  hasMore: boolean;
+}
+
+/**
+ * Consulta o estoque com paginação (.range), projeção estrita de colunas
+ * e filtros aplicados diretamente no Supabase / PostgreSQL.
+ */
+export async function fetchStockPaginatedFromSupabase(
+  params: FetchStockPaginatedParams
+): Promise<FetchStockPaginatedResult> {
+  const cleanLojaId = params.lojaId ? sanitizeIdentifier(params.lojaId, 64) : '';
+  const pageSize = Math.max(1, Math.min(100, params.pageSize || 50));
+  const page = Math.max(0, params.page || 0);
+
+  if (!cleanLojaId) {
+    return { items: [], totalCount: 0, page, pageSize, hasMore: false };
+  }
+
+  // Fallback offline / local
+  if (!client || !isSupabaseConfigured()) {
+    if (typeof window !== 'undefined') {
+      try {
+        const scopedKey = `superpwa_products_${cleanLojaId}`;
+        const raw = localStorage.getItem(scopedKey) || localStorage.getItem('superpwa_products_v1');
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed)) {
+            let filtered = parsed.filter((p: any) => (!p.loja_id || p.loja_id === cleanLojaId));
+            if (params.category && params.category !== 'all') {
+              filtered = filtered.filter((p: any) => (p.category || p.setor) === params.category);
+            }
+            if (params.onlyRuptures) {
+              filtered = filtered.filter((p: any) => (p.stock ?? p.quantidade ?? 0) <= (p.minStock ?? 10));
+            }
+            if (params.searchTerm && params.searchTerm.trim()) {
+              const term = params.searchTerm.toLowerCase().trim();
+              filtered = filtered.filter((p: any) => {
+                const name = (p.name || p.nome || '').toLowerCase();
+                const ean = (p.ean || p.codigo_barras || '').toLowerCase();
+                const plu = (p.reducedCode || p.plu || '').toLowerCase();
+                const forn = (p.supplierCode || p.codigo_fornecedor || '').toLowerCase();
+                return name.includes(term) || ean.includes(term) || plu.includes(term) || forn.includes(term);
+              });
+            }
+            // Sort
+            if (params.sortBy === 'qtd-desc') {
+              filtered.sort((a: any, b: any) => (b.stock ?? b.quantidade ?? 0) - (a.stock ?? a.quantidade ?? 0));
+            } else if (params.sortBy === 'qtd-asc') {
+              filtered.sort((a: any, b: any) => (a.stock ?? a.quantidade ?? 0) - (b.stock ?? b.quantidade ?? 0));
+            } else if (params.sortBy === 'name-asc') {
+              filtered.sort((a: any, b: any) => String(a.name || a.nome || '').localeCompare(String(b.name || b.nome || ''), 'pt-BR'));
+            } else if (params.sortBy === 'name-desc') {
+              filtered.sort((a: any, b: any) => String(b.name || b.nome || '').localeCompare(String(a.name || a.nome || ''), 'pt-BR'));
+            } else if (params.sortBy === 'forn-asc') {
+              filtered.sort((a: any, b: any) => String(a.supplierCode || a.codigo_fornecedor || '').localeCompare(String(b.supplierCode || b.codigo_fornecedor || ''), 'pt-BR'));
+            }
+
+            const totalCount = filtered.length;
+            const from = page * pageSize;
+            const sliced = filtered.slice(from, from + pageSize);
+            const items = sliced.map((p: any) => (p.stock !== undefined ? p : mapProductRow(p, cleanLojaId)));
+            return {
+              items,
+              totalCount,
+              page,
+              pageSize,
+              hasMore: from + sliced.length < totalCount,
+            };
+          }
+        }
+      } catch {
+        // ignore
+      }
+    }
+    return { items: [], totalCount: 0, page, pageSize, hasMore: false };
+  }
+
+  try {
+    const PRODUCT_COLUMNS =
+      'id, nome, codigo_barras, codigo_barras_secundario, plu, codigo_fornecedor, setor, quantidade, data_vencimento, loja_id, is_encrypted, ciphertext, iv, is_locked_for_edit, locked_by, locked_at, criado_em';
+
+    let query = client
+      .from('produtos')
+      .select(PRODUCT_COLUMNS, { count: 'exact' })
+      .eq('loja_id', cleanLojaId);
+
+    if (params.category && params.category !== 'all') {
+      query = query.eq('setor', params.category);
+    }
+
+    if (params.onlyRuptures) {
+      query = query.lte('quantidade', 10);
+    }
+
+    if (params.searchTerm && params.searchTerm.trim()) {
+      const cleanTerm = params.searchTerm.trim().replace(/[%_,()]/g, '');
+      if (cleanTerm) {
+        query = query.or(
+          `nome.ilike.%${cleanTerm}%,codigo_barras.ilike.%${cleanTerm}%,plu.ilike.%${cleanTerm}%,codigo_fornecedor.ilike.%${cleanTerm}%`
+        );
+      }
+    }
+
+    switch (params.sortBy) {
+      case 'qtd-desc':
+        query = query.order('quantidade', { ascending: false }).order('id', { ascending: true });
+        break;
+      case 'qtd-asc':
+        query = query.order('quantidade', { ascending: true }).order('id', { ascending: true });
+        break;
+      case 'name-asc':
+        query = query.order('nome', { ascending: true }).order('id', { ascending: true });
+        break;
+      case 'name-desc':
+        query = query.order('nome', { ascending: false }).order('id', { ascending: true });
+        break;
+      case 'forn-asc':
+        query = query.order('codigo_fornecedor', { ascending: true }).order('id', { ascending: true });
+        break;
+      case 'default':
+      default:
+        query = query.order('criado_em', { ascending: false }).order('id', { ascending: true });
+        break;
+    }
+
+    const from = page * pageSize;
+    const to = from + pageSize - 1;
+
+    query = query.range(from, to);
+
+    const { data, count, error } = await query;
+
+    if (error) {
+      console.warn('Erro ao consultar estoque paginado no Supabase:', error.message);
+      return { items: [], totalCount: 0, page, pageSize, hasMore: false };
+    }
+
+    const rows = (data || []) as Record<string, unknown>[];
+    const items = rows.map(r => mapProductRow(r, cleanLojaId));
+    const totalCount = typeof count === 'number' ? count : items.length;
+    const hasMore = from + items.length < totalCount;
+
+    return {
+      items,
+      totalCount,
+      page,
+      pageSize,
+      hasMore,
+    };
+  } catch (err) {
+    console.warn('Exceção ao consultar estoque paginado:', err);
+    return { items: [], totalCount: 0, page, pageSize, hasMore: false };
+  }
+}
+
 /**
  * Evento de alteração na tabela `produtos` emitido pelo Realtime.
  * Permite aplicar apenas o delta na tela, em vez de recarregar a loja inteira.
@@ -2038,6 +2209,7 @@ export function subscribeToProductsRealtime(
           // para que a próxima importação use dados frescos.
           invalidateProductIndex(cleanLojaId);
           invalidateCatalogIndex();
+          invalidateStockCache(cleanLojaId);
 
           const type = (
             payload.eventType === 'DELETE'

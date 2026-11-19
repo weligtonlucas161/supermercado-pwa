@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
   Search,
   Plus,
@@ -15,15 +15,21 @@ import {
   RefreshCw,
   PackageX,
   Tag,
-  CheckCircle2
+  CheckCircle2,
+  Shield,
+  Database,
+  Sparkles
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
-import { Product } from '../../types';
+import { Product, SETORES_DISPONIVEIS } from '../../types';
 import { NewProductModal } from '../modals/NewProductModal';
 import { ImportSpreadsheetModal } from '../modals/ImportSpreadsheetModal';
 import { ProductDetailModal } from '../modals/ProductDetailModal';
 import { EstoqueAvariasTab } from './EstoqueAvariasTab';
 import { EstoqueRupturasTab } from './EstoqueRupturasTab';
+import { useDebounce } from '../../hooks/useDebounce';
+import { getEncryptedCache, setEncryptedCache, invalidateStockCache } from '../../utils/encryptedCache';
+import { fetchStockPaginatedFromSupabase } from '../../services/supabaseService';
 
 interface ProductCardProps {
   product: Product;
@@ -341,7 +347,9 @@ export const EstoqueTab: React.FC = () => {
     refreshProductsFromDatabase,
     isSyncingWithDatabase,
     lastDatabaseSyncTime,
-    avarias
+    avarias,
+    operator,
+    currentUser
   } = useApp();
   type SortOption = 'default' | 'qtd-desc' | 'qtd-asc' | 'name-asc' | 'name-desc' | 'forn-asc';
   type MainTab = 'estoque' | 'avarias' | 'rupturas';
@@ -352,6 +360,8 @@ export const EstoqueTab: React.FC = () => {
   const [mainTab, setMainTab] = useState<MainTab>('estoque');
 
   const [searchTerm, setSearchTerm] = useState('');
+  const debouncedSearchTerm = useDebounce(searchTerm, 400);
+
   const [selectedCategory, setSelectedCategory] = useState('all');
   const [sortBy, setSortBy] = useState<SortOption>('default');
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -363,36 +373,156 @@ export const EstoqueTab: React.FC = () => {
   // Modal de Confirmação de Remoção de Produto
   const [productToDelete, setProductToDelete] = useState<Product | null>(null);
 
+  // =========================================================================
+  // ESTADO DE PAGINAÇÃO CONTÍNUA (50 itens por bloco) E CACHE CRIPTOGRAFADO (4h)
+  // =========================================================================
+  const [stockItems, setStockItems] = useState<Product[]>([]);
+  const [page, setPage] = useState(0);
+  const [hasMore, setHasMore] = useState(true);
+  const [totalCount, setTotalCount] = useState(0);
+  const [isLoadingInitial, setIsLoadingInitial] = useState(false);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [isFromEncryptedCache, setIsFromEncryptedCache] = useState(false);
+  const [cacheTimestamp, setCacheTimestamp] = useState<number | null>(null);
+
+  const activeLojaId = currentUser?.loja_id || operator?.loja_id || '';
+  const cacheKey = `${activeLojaId}_${mainTab}_${selectedCategory}_${debouncedSearchTerm.trim().toLowerCase()}_${sortBy}`;
+
   // 1. Produtos em Ruptura Iminente (Estoque <= Mínimo ou Zerado)
   const ruptureProducts = products.filter(p => p.stock <= p.minStock || p.stock === 0);
 
-  const categories = ['all', ...Array.from(new Set(products.map(p => p.category)))];
+  // Categorias disponíveis
+  const categories = ['all', ...SETORES_DISPONIVEIS];
 
-  // Base filtrada pela busca e categoria
-  const filtered = products
-    .filter(p => {
-      const term = searchTerm.toLowerCase().trim();
-      const matchesCategory = selectedCategory === 'all' || p.category === selectedCategory;
-      if (!term) return matchesCategory;
+  // Carregamento inicial ou ao mudar filtros
+  const loadInitialData = useCallback(async (forceRefresh = false) => {
+    if (!activeLojaId) return;
 
-      const matchesSearch =
-        p.name.toLowerCase().includes(term) ||
-        p.ean.includes(term) ||
-        (p.secondaryEan ? p.secondaryEan.includes(term) : false) ||
-        (p.reducedCode ? p.reducedCode.toLowerCase().includes(term) : false) ||
-        (p.supplierCode ? p.supplierCode.toLowerCase().includes(term) : false) ||
-        (p.location ? p.location.toLowerCase().includes(term) : false);
+    if (!forceRefresh) {
+      // Tenta recuperar do cache criptografado (expira em 4h automaticamente)
+      const cached = await getEncryptedCache<{ items: Product[]; totalCount: number; hasMore: boolean; page: number }>(cacheKey);
+      if (cached && cached.data && Array.isArray(cached.data.items)) {
+        setStockItems(cached.data.items);
+        setTotalCount(cached.data.totalCount);
+        setHasMore(cached.data.hasMore);
+        setPage(cached.data.page);
+        setIsFromEncryptedCache(true);
+        setCacheTimestamp(cached.timestamp);
+        setIsLoadingInitial(false);
+        return;
+      }
+    }
 
-      return matchesSearch && matchesCategory;
-    })
-    .sort((a, b) => {
-      if (sortBy === 'qtd-desc') return b.stock - a.stock;
-      if (sortBy === 'qtd-asc') return a.stock - b.stock;
-      if (sortBy === 'name-asc') return a.name.localeCompare(b.name, 'pt-BR');
-      if (sortBy === 'name-desc') return b.name.localeCompare(a.name, 'pt-BR');
-      if (sortBy === 'forn-asc') return (a.supplierCode || '').localeCompare(b.supplierCode || '', 'pt-BR');
-      return 0;
-    });
+    setIsLoadingInitial(true);
+    setIsFromEncryptedCache(false);
+
+    try {
+      const res = await fetchStockPaginatedFromSupabase({
+        lojaId: activeLojaId,
+        page: 0,
+        pageSize: 50,
+        searchTerm: debouncedSearchTerm,
+        category: selectedCategory,
+        sortBy,
+        onlyRuptures: mainTab === 'rupturas',
+      });
+
+      setStockItems(res.items);
+      setTotalCount(res.totalCount);
+      setHasMore(res.hasMore);
+      setPage(0);
+      const now = Date.now();
+      setCacheTimestamp(now);
+
+      // Salva lote criptografado com AES-GCM 256-bit
+      await setEncryptedCache(cacheKey, {
+        items: res.items,
+        totalCount: res.totalCount,
+        hasMore: res.hasMore,
+        page: 0,
+      });
+    } catch (err) {
+      console.warn('Erro ao carregar estoque paginado:', err);
+    } finally {
+      setIsLoadingInitial(false);
+    }
+  }, [activeLojaId, cacheKey, debouncedSearchTerm, selectedCategory, sortBy, mainTab]);
+
+  useEffect(() => {
+    loadInitialData();
+  }, [loadInitialData]);
+
+  // Carregamento contínuo durante a rolagem com elemento de loading de cerca de 1 segundo
+  const loadMoreItems = useCallback(async () => {
+    if (isLoadingMore || isLoadingInitial || !hasMore || !activeLojaId) return;
+
+    setIsLoadingMore(true);
+
+    const nextPage = page + 1;
+
+    try {
+      // Loop visual de ~1 segundo exigido pelo usuário para feedback claro a cada rolagem de 50 itens
+      const [res] = await Promise.all([
+        fetchStockPaginatedFromSupabase({
+          lojaId: activeLojaId,
+          page: nextPage,
+          pageSize: 50,
+          searchTerm: debouncedSearchTerm,
+          category: selectedCategory,
+          sortBy,
+          onlyRuptures: mainTab === 'rupturas',
+        }),
+        new Promise(resolve => setTimeout(resolve, 1000)),
+      ]);
+
+      setStockItems(prev => {
+        const existingIds = new Set(prev.map(p => p.id));
+        const uniqueIncoming = res.items.filter(p => !existingIds.has(p.id));
+        const combined = [...prev, ...uniqueIncoming];
+
+        // Atualiza cache criptografado com o conjunto acumulado
+        setEncryptedCache(cacheKey, {
+          items: combined,
+          totalCount: res.totalCount,
+          hasMore: res.hasMore,
+          page: nextPage,
+        });
+
+        return combined;
+      });
+
+      setTotalCount(res.totalCount);
+      setHasMore(res.hasMore);
+      setPage(nextPage);
+    } catch (err) {
+      console.warn('Erro ao carregar mais itens:', err);
+    } finally {
+      setIsLoadingMore(false);
+    }
+  }, [isLoadingMore, isLoadingInitial, hasMore, activeLojaId, page, debouncedSearchTerm, selectedCategory, sortBy, mainTab, cacheKey]);
+
+  // Observer do elemento sentinela no fim da lista
+  const observerTargetRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const currentTarget = observerTargetRef.current;
+    if (!currentTarget) return;
+
+    const observer = new IntersectionObserver(
+      entries => {
+        if (entries[0].isIntersecting && hasMore && !isLoadingMore && !isLoadingInitial) {
+          loadMoreItems();
+        }
+      },
+      { threshold: 0.1, rootMargin: '250px' }
+    );
+
+    observer.observe(currentTarget);
+
+    return () => {
+      observer.unobserve(currentTarget);
+    };
+  }, [hasMore, isLoadingMore, isLoadingInitial, loadMoreItems]);
 
   const handleScanForSearch = () => {
     openScanner((scannedEan) => {
@@ -400,11 +530,46 @@ export const EstoqueTab: React.FC = () => {
     });
   };
 
+  const handleUpdateStock = (id: string, update: { delta?: number; exact?: number }) => {
+    setStockItems(prev =>
+      prev.map(p => {
+        if (p.id !== id) return p;
+        let newStock = p.stock;
+        if (typeof update.exact === 'number') newStock = Math.max(0, update.exact);
+        else if (typeof update.delta === 'number') newStock = Math.max(0, p.stock + (update.delta || 0));
+        return { ...p, stock: newStock };
+      })
+    );
+    updateProductStock(id, update);
+    invalidateStockCache(activeLojaId);
+  };
+
+  const handleToggleRebaixa = (id: string) => {
+    setStockItems(prev =>
+      prev.map(p => {
+        if (p.id !== id) return p;
+        const nextStatus = p.rebaixaStatus === 'pending' ? 'confirmed' : 'pending';
+        return { ...p, rebaixaStatus: nextStatus };
+      })
+    );
+    toggleProductRebaixa(id);
+    invalidateStockCache(activeLojaId);
+  };
+
   const handleConfirmDelete = () => {
     if (productToDelete) {
+      setStockItems(prev => prev.filter(p => p.id !== productToDelete.id));
+      setTotalCount(prev => Math.max(0, prev - 1));
       removeProduct(productToDelete.id);
+      invalidateStockCache(activeLojaId);
       setProductToDelete(null);
     }
+  };
+
+  const handleManualSync = async () => {
+    invalidateStockCache(activeLojaId);
+    await refreshProductsFromDatabase();
+    await loadInitialData(true);
   };
 
   return (
@@ -423,15 +588,22 @@ export const EstoqueTab: React.FC = () => {
               {mainTab === 'avarias' && 'Avarias do Estoque'}
               {mainTab === 'rupturas' && 'Controle de Rupturas'}
             </h2>
-            {lastDatabaseSyncTime && (
+            {isFromEncryptedCache ? (
+              <span
+                className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30 flex items-center gap-1"
+                title={`Cache criptografado (AES-GCM com expiração de 4h). Salvo às ${cacheTimestamp ? new Date(cacheTimestamp).toLocaleTimeString('pt-BR') : ''}`}
+              >
+                <ShieldCheck className="w-3 h-3 text-emerald-500" /> Cache Seguro (4h)
+              </span>
+            ) : lastDatabaseSyncTime ? (
               <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20" title={`Sincronizado com Supabase às ${lastDatabaseSyncTime}`}>
                 🟢 Nuvem {lastDatabaseSyncTime}
               </span>
-            )}
+            ) : null}
           </div>
           <p className="text-xs text-slate-500 dark:text-slate-400">
             {mainTab === 'estoque' &&
-              `Localização em gôndola, saldos e consulta de código EAN-13 (${products.length} itens cadastrados).`}
+              `Localização em gôndola, saldos e consulta de código EAN-13 (${totalCount || products.length} itens no banco | Exibindo ${stockItems.length}).`}
             {mainTab === 'avarias' &&
               'Perdas, quebras e trocas registradas no estoque para reduzir o desperdício.'}
             {mainTab === 'rupturas' &&
@@ -440,13 +612,13 @@ export const EstoqueTab: React.FC = () => {
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           <button
-            onClick={() => refreshProductsFromDatabase()}
-            disabled={isSyncingWithDatabase}
+            onClick={handleManualSync}
+            disabled={isSyncingWithDatabase || isLoadingInitial}
             className="border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-750 text-slate-700 dark:text-slate-200 px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition shadow-xs cursor-pointer"
             title="Atualizar produtos do banco de dados na nuvem"
           >
-            <RefreshCw className={`w-3.5 h-3.5 text-emerald-500 ${isSyncingWithDatabase ? 'animate-spin' : ''}`} />
-            <span className="hidden sm:inline">{isSyncingWithDatabase ? 'Sincronizando...' : 'Sincronizar'}</span>
+            <RefreshCw className={`w-3.5 h-3.5 text-emerald-500 ${isSyncingWithDatabase || isLoadingInitial ? 'animate-spin' : ''}`} />
+            <span className="hidden sm:inline">{isSyncingWithDatabase || isLoadingInitial ? 'Sincronizando...' : 'Sincronizar'}</span>
           </button>
           {mainTab === 'estoque' && (
             <>
@@ -493,7 +665,7 @@ export const EstoqueTab: React.FC = () => {
               mainTab === 'estoque' ? 'text-emerald-100' : 'text-slate-400'
             }`}
           >
-            {products.length} {products.length === 1 ? 'item' : 'itens'}
+            {totalCount > 0 ? totalCount : products.length} {(totalCount || products.length) === 1 ? 'item' : 'itens'}
           </div>
         </button>
 
@@ -621,26 +793,61 @@ export const EstoqueTab: React.FC = () => {
             ))}
           </div>
 
-          {/* Cards de Produtos com Suporte a Press/Long-Press e Swipe */}
+          {/* Cards de Produtos com Suporte a Rolagem Contínua (50 itens por bloco), Press/Long-Press e Swipe */}
           <div className="space-y-2.5">
-            {filtered.length === 0 ? (
+            {isLoadingInitial ? (
+              <div className="text-center py-16 rounded-3xl border border-dashed border-slate-200 dark:border-slate-800 space-y-3">
+                <RefreshCw className="w-8 h-8 text-emerald-500 animate-spin mx-auto" />
+                <p className="text-xs font-bold text-slate-700 dark:text-slate-200">
+                  Carregando produtos do banco de dados...
+                </p>
+                <p className="text-[11px] text-slate-400">
+                  Consulta paginada no Supabase via .range(0, 49) com projeção estrita
+                </p>
+              </div>
+            ) : stockItems.length === 0 ? (
               <div className="text-center py-12 rounded-3xl border border-dashed border-slate-200 dark:border-slate-800">
                 <Package className="w-8 h-8 text-slate-400 mx-auto mb-2" />
-                <p className="text-xs font-bold text-slate-600 dark:text-slate-300">Nenhum produto cadastrado</p>
-                <p className="text-[11px] text-slate-400 mt-0.5">Use o botão "Importar Planilha" ou "Cadastrar Produto" para começar seus testes.</p>
+                <p className="text-xs font-bold text-slate-600 dark:text-slate-300">Nenhum produto encontrado</p>
+                <p className="text-[11px] text-slate-400 mt-0.5">Tente alterar os filtros de busca ou cadastre novos itens.</p>
               </div>
             ) : (
-              filtered.map(product => (
-                <ProductCard
-                  key={product.id}
-                  product={product}
-                  darkMode={darkMode}
-                  onUpdateStock={updateProductStock}
-                  onToggleRebaixa={toggleProductRebaixa}
-                  onRequestDelete={(p) => setProductToDelete(p)}
-                  onSelectProduct={(p) => setSelectedProductForDetail(p)}
-                />
-              ))
+              <>
+                {stockItems.map(product => (
+                  <ProductCard
+                    key={product.id}
+                    product={product}
+                    darkMode={darkMode}
+                    onUpdateStock={handleUpdateStock}
+                    onToggleRebaixa={handleToggleRebaixa}
+                    onRequestDelete={(p) => setProductToDelete(p)}
+                    onSelectProduct={(p) => setSelectedProductForDetail(p)}
+                  />
+                ))}
+
+                {/* Elemento de carregamento de rolagem contínua (loop visual de ~1 segundo a cada 50 itens) */}
+                {isLoadingMore && (
+                  <div className="py-6 flex flex-col items-center justify-center gap-2 animate-in fade-in duration-300">
+                    <div className="flex items-center gap-2.5 px-4 py-2.5 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-600 dark:text-emerald-400 text-xs font-bold shadow-xs">
+                      <RefreshCw className="w-4 h-4 animate-spin text-emerald-500" />
+                      <span>Carregando mais 50 produtos...</span>
+                    </div>
+                    <p className="text-[10px] text-slate-400 font-mono">
+                      Rolagem contínua • Lote: {stockItems.length} a {Math.min(totalCount, stockItems.length + 50)} de {totalCount}
+                    </p>
+                  </div>
+                )}
+
+                {/* Sentinela invisível para o IntersectionObserver disparar a próxima página */}
+                <div ref={observerTargetRef} className="h-6 w-full" aria-hidden="true" />
+
+                {/* Indicador de fim de rolagem */}
+                {!hasMore && stockItems.length > 0 && !isLoadingMore && (
+                  <div className="py-4 text-center text-[11px] font-bold text-slate-400 border-t border-slate-100 dark:border-slate-800/60">
+                    ✓ Todos os {totalCount} produtos foram carregados no estoque
+                  </div>
+                )}
+              </>
             )}
           </div>
         </>
@@ -700,12 +907,27 @@ export const EstoqueTab: React.FC = () => {
         </div>
       )}
 
-      <NewProductModal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} />
-      <ImportSpreadsheetModal isOpen={isSpreadsheetModalOpen} onClose={() => setIsSpreadsheetModalOpen(false)} />
+      <NewProductModal
+        isOpen={isModalOpen}
+        onClose={() => {
+          setIsModalOpen(false);
+          loadInitialData(true);
+        }}
+      />
+      <ImportSpreadsheetModal
+        isOpen={isSpreadsheetModalOpen}
+        onClose={() => {
+          setIsSpreadsheetModalOpen(false);
+          loadInitialData(true);
+        }}
+      />
       <ProductDetailModal
         isOpen={Boolean(selectedProductForDetail)}
         product={selectedProductForDetail}
-        onClose={() => setSelectedProductForDetail(null)}
+        onClose={() => {
+          setSelectedProductForDetail(null);
+          loadInitialData(true);
+        }}
       />
     </div>
   );

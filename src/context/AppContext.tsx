@@ -29,6 +29,7 @@ import {
 import { useOnlineStatus } from '../pwa/useOnlineStatus';
 import { useBackgroundSync } from '../pwa/useBackgroundSync';
 import { triggerScanBeep } from '../utils/haptics';
+import { invalidateStockCache } from '../utils/encryptedCache';
 import {
   censorProfanity,
   resolveFullRoleLabel,
@@ -840,6 +841,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       ]);
     }
 
+    invalidateStockCache(currentUser?.loja_id || operator.loja_id);
     return newProduct;
   };
 
@@ -897,6 +899,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       const updated = [...otherSectors, ...Array.from(sectorMap.values())];
       saveStoredData(STORAGE_KEYS.PRODUCTS, updated);
+      invalidateStockCache(lojaId);
       return updated;
     });
   };
@@ -968,6 +971,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     );
 
     const res = await updateProductInSupabase(productId, updates, currentUser?.loja_id || operator.loja_id);
+    invalidateStockCache(currentUser?.loja_id || operator.loja_id);
     return res;
   };
 
@@ -988,6 +992,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         };
       })
     );
+
+    invalidateStockCache(currentUser?.loja_id || operator.loja_id);
 
     if (!effectiveOnline) {
       setOfflineQueue(prev => [
@@ -1021,6 +1027,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       )
     );
 
+    invalidateStockCache(currentUser?.loja_id || operator.loja_id);
+
     triggerScanBeep(true);
     if (nextStatus === 'confirmed') {
       setNotifications(prev => [
@@ -1039,6 +1047,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const removeProduct = (id: string) => {
     setProducts(prev => prev.filter(p => p.id !== id));
+    invalidateStockCache(currentUser?.loja_id || operator.loja_id);
   };
 
   const addValidity = (newValidityData: Omit<ValidityItem, 'id'>): ValidityItem => {
