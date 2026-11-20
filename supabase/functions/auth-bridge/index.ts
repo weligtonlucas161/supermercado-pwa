@@ -30,11 +30,88 @@ Deno.serve(async (req: Request) => {
     return json({ error: "Serviço de autenticação não configurado." }, 503);
   }
 
-  let body: { matricula?: unknown; senha?: unknown };
+  let body: { action?: unknown; matricula?: unknown; senha?: unknown; userId?: unknown; primeiroLogin?: unknown };
   try {
     body = await req.json();
   } catch {
     return json({ error: "Requisição inválida." }, 400);
+  }
+
+  const action = body.action === "provision" ? "provision" : "login";
+  const legacyClient = createClient(supabaseUrl, anonKey, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+  const adminClient = createClient(supabaseUrl, serviceRoleKey, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+
+  if (action === "provision") {
+    const authHeader = req.headers.get("Authorization") || "";
+    const accessToken = authHeader.replace(/^Bearer\s+/i, "");
+    const userId = typeof body.userId === "string" ? body.userId.trim() : "";
+    const senha = typeof body.senha === "string" ? body.senha : "";
+    if (!accessToken || !userId || senha.length < 7 || senha.length > 128) {
+      return json({ error: "Dados para provisionamento inválidos." }, 400);
+    }
+
+    const { data: callerData, error: callerError } = await adminClient.auth.getUser(accessToken);
+    if (callerError || !callerData.user) return json({ error: "Sessão expirada. Entre novamente." }, 401);
+
+    const { data: actor, error: actorError } = await adminClient
+      .from("usuarios")
+      .select("id, cargo, loja_id, ativo")
+      .eq("auth_user_id", callerData.user.id)
+      .maybeSingle();
+    if (actorError || !actor || !actor.ativo) return json({ error: "Usuário responsável não autorizado." }, 403);
+
+    const actorRole = String(actor.cargo || "").toLowerCase();
+    const isSaasAdmin = actorRole === "saas_admin";
+    const isManager = actorRole.includes("gerente") || actorRole.includes("admin");
+    if (!isSaasAdmin && !isManager) return json({ error: "Somente administradores podem cadastrar acessos." }, 403);
+
+    const { data: target, error: targetError } = await adminClient
+      .from("usuarios")
+      .select("id, matricula, auth_user_id, loja_id, cargo, nome, ativo")
+      .eq("id", userId)
+      .maybeSingle();
+    if (targetError || !target || !target.ativo) return json({ error: "Funcionário não encontrado ou inativo." }, 404);
+    if (!isSaasAdmin && String(actor.loja_id || "") !== String(target.loja_id || "")) {
+      return json({ error: "Você não pode provisionar usuários de outra loja." }, 403);
+    }
+
+    // A RPC privilegiada só é chamada aqui, após autenticar e autorizar o gerente.
+    // Ela atualiza senha_hash e mantém o ID do cadastro; service_role nunca chega ao browser.
+    const { data: syncData, error: syncError } = await adminClient.rpc("rpc_sync_user_password", {
+      p_matricula: String(target.matricula),
+      p_senha: senha,
+      p_user_id: String(target.id),
+      p_is_first_login: Boolean(body.primeiroLogin ?? true),
+    });
+    if (syncError || syncData?.success === false) {
+      return json({ error: "Não foi possível criar a conta de autenticação." }, 503);
+    }
+
+    const { data: linked, error: linkedError } = await adminClient
+      .from("usuarios")
+      .select("auth_user_id")
+      .eq("id", userId)
+      .maybeSingle();
+    if (linkedError || !linked?.auth_user_id) {
+      return json({ error: "A conta foi criada, mas o vínculo com o cadastro não foi confirmado." }, 503);
+    }
+
+    const email = syntheticEmail(String(target.matricula), String(target.id));
+    const { error: metadataError } = await adminClient.auth.admin.updateUserById(String(linked.auth_user_id), {
+      email,
+      app_metadata: {
+        matricula: String(target.matricula),
+        cargo: String(target.cargo || ""),
+        loja_id: target.loja_id ? String(target.loja_id) : null,
+      },
+      user_metadata: { nome: String(target.nome || "") },
+    });
+    if (metadataError) return json({ error: "Conta criada, mas não foi possível atualizar os dados de acesso." }, 503);
+    return json({ success: true });
   }
 
   const matricula = typeof body.matricula === "string" ? body.matricula.trim().slice(0, 64) : "";
@@ -43,15 +120,8 @@ Deno.serve(async (req: Request) => {
     return json({ error: "Matrícula ou senha inválida." }, 400);
   }
 
-  const legacyClient = createClient(supabaseUrl, anonKey, {
-    auth: { persistSession: false, autoRefreshToken: false },
-  });
-  const adminClient = createClient(supabaseUrl, serviceRoleKey, {
-    auth: { persistSession: false, autoRefreshToken: false },
-  });
-
-  // A RPC antiga é usada somente como verificador de credenciais: ela compara
-  // a senha com senha_hash/legado e não recebe permissão para escolher o usuário.
+  // A RPC antiga verifica senha_hash/legado. O endpoint não aceita userId
+  // no modo login: a identidade vem exclusivamente da matrícula validada.
   const { data: validation, error: validationError } = await legacyClient.rpc("rpc_login_usuario", {
     p_matricula: matricula,
     p_senha: senha,
@@ -90,7 +160,6 @@ Deno.serve(async (req: Request) => {
     });
     if (error) return json({ error: "Não foi possível atualizar a conta de autenticação." }, 503);
   } else {
-    // Primeiro tenta localizar uma conta criada anteriormente pela rotina legada.
     let existingUser: { id: string } | null = null;
     for (let page = 1; page <= 10 && !existingUser; page++) {
       const { data, error } = await adminClient.auth.admin.listUsers({ page, perPage: 1000 });
@@ -116,9 +185,7 @@ Deno.serve(async (req: Request) => {
         app_metadata: appMetadata,
         user_metadata: { nome: String(storedUser.nome || "") },
       });
-      if (error || !data.user) {
-        return json({ error: "Não foi possível criar a conta de autenticação." }, 503);
-      }
+      if (error || !data.user) return json({ error: "Não foi possível criar a conta de autenticação." }, 503);
       authUserId = data.user.id;
     }
 
@@ -127,7 +194,7 @@ Deno.serve(async (req: Request) => {
       .update({ auth_user_id: authUserId })
       .eq("id", userId)
       .eq("ativo", true);
-    if (linkError) return json({ error: "Conta criada, mas não foi possível vinculá-la ao cadastro. Tente novamente." }, 503);
+    if (linkError) return json({ error: "Conta criada, mas o vínculo não foi salvo. Tente novamente." }, 503);
   }
 
   const { data: authResult, error: signInError } = await legacyClient.auth.signInWithPassword({
