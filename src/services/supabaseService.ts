@@ -1966,7 +1966,7 @@ export function mapProductRow(
   };
 }
 
-export async function fetchProductsFromSupabase(lojaId?: string): Promise<Product[]> {
+export async function fetchProductsFromSupabase(lojaId?: string): Promise<Product[] | null> {
   const cleanLojaId = lojaId ? sanitizeIdentifier(lojaId, 64) : '';
   if (!cleanLojaId) {
     return [];
@@ -2008,7 +2008,61 @@ export async function fetchProductsFromSupabase(lojaId?: string): Promise<Produc
     return data.map((row: Record<string, unknown>) => mapProductRow(row, cleanLojaId));
   } catch (err) {
     console.warn('Erro ao consultar produtos no Supabase:', err);
-    return [];
+    // null diferencia falha de rede de uma loja que realmente não possui produtos.
+    return null;
+  }
+}
+
+/**
+ * Atualiza o estoque remoto de um produto. A leitura é limitada à loja ativa
+ * e erros são retornados para que a operação possa entrar na fila offline.
+ */
+export async function updateProductStockInSupabase(
+  productId: string,
+  options: { delta?: number; exact?: number },
+  lojaId: string
+): Promise<{ success: boolean; error?: string }> {
+  const cleanId = sanitizeIdentifier(productId, 64);
+  const cleanLojaId = sanitizeIdentifier(lojaId, 64);
+  if (!client || !isSupabaseConfigured()) {
+    return { success: false, error: 'Banco de dados indisponível.' };
+  }
+  if (!cleanId || !cleanLojaId) {
+    return { success: false, error: 'Produto ou loja inválidos.' };
+  }
+  if (typeof options.exact !== 'number' && typeof options.delta !== 'number') {
+    return { success: false, error: 'Atualização de estoque inválida.' };
+  }
+
+  try {
+    const { data: row, error: readError } = await client
+      .from('produtos')
+      .select('id, quantidade')
+      .eq('id', cleanId)
+      .eq('loja_id', cleanLojaId)
+      .maybeSingle();
+    if (readError) throw readError;
+    if (!row) return { success: false, error: 'Produto não encontrado nesta loja.' };
+
+    const current = validatePositiveInt(row.quantidade, 0);
+    const next = typeof options.exact === 'number'
+      ? validatePositiveInt(options.exact, 0)
+      : Math.max(0, current + Number(options.delta || 0));
+
+    const { error: updateError } = await client
+      .from('produtos')
+      .update({ quantidade: next, updated_at: new Date().toISOString() })
+      .eq('id', cleanId)
+      .eq('loja_id', cleanLojaId);
+    if (updateError) throw updateError;
+
+    invalidateProductIndex(cleanLojaId);
+    invalidateStockCache(cleanLojaId);
+    return { success: true };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.warn('[Stock] Falha ao salvar estoque:', message);
+    return { success: false, error: message };
   }
 }
 
@@ -2281,17 +2335,22 @@ export async function syncOfflineQueueToSupabase(
   try {
     // Agrega as ações por tipo para enviar em lotes (antes era 1 requisição
     // por ação, o que tornava a fila offline lenta em grandes volumes).
-    const stockUpdates: Array<{ id: string; quantity: number }> = [];
+    const stockOperations: Array<{ id: string; exact?: number; delta?: number }> = [];
     const newProducts: Array<Record<string, unknown>> = [];
 
     for (const action of actions) {
       if (action.type === 'UPDATE_STOCK') {
         const payload = action.payload as { id: string; exact?: number; delta?: number };
-        const cleanId = sanitizeIdentifier(payload.id, 64);
-        if (cleanId && typeof payload.exact === 'number') {
-          stockUpdates.push({ id: cleanId, quantity: validatePositiveInt(payload.exact, 0) });
+        const cleanId = sanitizeIdentifier(payload?.id, 64);
+        if (!cleanId || (typeof payload.exact !== 'number' && typeof payload.delta !== 'number')) {
+          throw new Error('A fila contém uma atualização de estoque inválida.');
         }
-        synced++;
+        stockOperations.push({
+          id: cleanId,
+          ...(typeof payload.exact === 'number'
+            ? { exact: validatePositiveInt(payload.exact, 0) }
+            : { delta: Number(payload.delta) }),
+        });
       } else if (action.type === 'ADD_PRODUCT') {
         const p = action.payload as Product;
         const cleanEan = sanitizeBarcode(p.ean, 32);
@@ -2310,48 +2369,50 @@ export async function syncOfflineQueueToSupabase(
             iv: p.encryptedPayload?.iv || null,
             ean_hash: await hashEan(cleanEan),
           });
+        } else {
+          throw new Error('Produto inválido na fila offline.');
         }
-        synced++;
       }
     }
 
-    // 1) Atualizações de estoque: uma leitura + um upsert por lote (isolado por loja_id).
-    if (stockUpdates.length > 0) {
-      const ids = stockUpdates.map(u => u.id);
+    // Aplica as operações em ordem para preservar deltas repetidos do mesmo produto.
+    if (stockOperations.length > 0) {
+      const ids = Array.from(new Set(stockOperations.map(op => op.id)));
       let query = client
         .from('produtos')
-        .select('id, nome, codigo_barras, setor, quantidade, data_vencimento, loja_id')
+        .select('id, quantidade')
         .in('id', ids);
-      if (cleanLojaId) {
-        query = query.eq('loja_id', cleanLojaId);
-      }
-      const { data: currentRows } = await query;
+      if (cleanLojaId) query = query.eq('loja_id', cleanLojaId);
+      const { data: currentRows, error: readError } = await query;
+      if (readError) throw readError;
 
-      const byId = new Map<string, Record<string, unknown>>(
-        ((currentRows || []) as unknown as Record<string, unknown>[]).map(r => [String(r.id), r])
+      const quantities = new Map<string, number>(
+        ((currentRows || []) as Array<{ id: string; quantidade: number }>).map(row => [
+          String(row.id), validatePositiveInt(row.quantidade, 0),
+        ])
       );
-
-      const rows = stockUpdates
-        .map(update => {
-          const row = byId.get(update.id);
-          if (!row) return null;
-          return {
-            id: update.id,
-            nome: String(row.nome || ''),
-            codigo_barras: String(row.codigo_barras || ''),
-            setor: String(row.setor || 'MERCEARIA'),
-            quantidade: update.quantity,
-            data_vencimento: String(row.data_vencimento || ''),
-            loja_id: String(row.loja_id || cleanLojaId),
-            updated_at: new Date().toISOString(),
-          };
-        })
-        .filter((row): row is NonNullable<typeof row> => row !== null);
-
-      for (let i = 0; i < rows.length; i += 500) {
-        const chunk = rows.slice(i, i + 500);
-        await upsertProductRows(client, chunk as ProductWriteRow[]);
+      for (const operation of stockOperations) {
+        if (!quantities.has(operation.id)) {
+          throw new Error(`Produto ${operation.id} não encontrado na loja durante a sincronização.`);
+        }
+        const current = quantities.get(operation.id) || 0;
+        quantities.set(
+          operation.id,
+          typeof operation.exact === 'number'
+            ? operation.exact
+            : Math.max(0, current + Number(operation.delta || 0))
+        );
       }
+
+      for (const [id, quantity] of quantities) {
+        let update = client.from('produtos')
+          .update({ quantidade: quantity, updated_at: new Date().toISOString() })
+          .eq('id', id);
+        if (cleanLojaId) update = update.eq('loja_id', cleanLojaId);
+        const { error: updateError } = await update;
+        if (updateError) throw updateError;
+      }
+      synced += stockOperations.length;
     }
 
     // 2) Produtos novos: inserção em lote.
@@ -2360,6 +2421,7 @@ export async function syncOfflineQueueToSupabase(
       const { error: insertError } = await client.from('produtos').insert(chunk);
       if (insertError) throw insertError;
     }
+    synced += actions.filter(action => action.type === 'ADD_PRODUCT').length;
 
     // O índice determinístico mudou: invalida para a próxima importação.
     invalidateProductIndex();
