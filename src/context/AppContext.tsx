@@ -74,6 +74,7 @@ import {
   lockProductInSupabase,
   unlockProductInSupabase,
   updateProductInSupabase,
+  updateProductStockInSupabase,
   fetchAuditReportsFromDatabase
 } from '../services/supabaseService';
 
@@ -795,9 +796,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const syncOfflineQueue = async () => {
     if (offlineQueue.length === 0) return;
     const res = await syncOfflineQueueToSupabase(offlineQueue, operator.loja_id);
-    if (res.success) {
+    // Só remove a fila quando TODAS as ações foram confirmadas pelo banco.
+    if (res.success && res.syncedCount === offlineQueue.length) {
       setOfflineQueue([]);
-      refreshProductsFromDatabase();
+      await refreshProductsFromDatabase();
+    } else {
+      console.warn('Fila offline preservada para nova tentativa:', res.error || 'Sincronização parcial.');
     }
   };
 
@@ -995,17 +999,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     invalidateStockCache(currentUser?.loja_id || operator.loja_id);
 
+    const lojaId = currentUser?.loja_id || operator.loja_id || '';
+    const action: OfflineAction = {
+      id: `queue-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      type: 'UPDATE_STOCK',
+      payload: { id, ...options },
+      timestamp: new Date().toISOString(),
+    };
+
+    // Atualização otimista local; se a gravação remota falhar, mantém a operação
+    // na fila para sincronização posterior, sem descartar o delta.
     if (!effectiveOnline) {
-      setOfflineQueue(prev => [
-        ...prev,
-        {
-          id: `queue-${Date.now()}`,
-          type: 'UPDATE_STOCK',
-          payload: { id, ...options },
-          timestamp: new Date().toISOString(),
-        },
-      ]);
+      setOfflineQueue(prev => [...prev, action]);
+      return;
     }
+
+    void updateProductStockInSupabase(id, options, lojaId).then(result => {
+      if (!result.success) {
+        setOfflineQueue(prev => [...prev, action]);
+        console.warn('Estoque salvo localmente; sincronização pendente:', result.error);
+      }
+    }).catch(error => {
+      setOfflineQueue(prev => [...prev, action]);
+      console.warn('Falha ao sincronizar estoque; operação enfileirada:', error);
+    });
   };
 
   const toggleProductRebaixa = (id: string) => {
