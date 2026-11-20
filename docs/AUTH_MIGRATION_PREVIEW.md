@@ -2,24 +2,27 @@
 
 ## O que foi preparado
 
-- A função `supabase/functions/auth-bridge/index.ts` valida a matrícula/senha pela RPC legada e, somente após validação positiva, cria ou atualiza a conta no Supabase Auth.
-- A função vincula o UUID Auth em `public.usuarios.auth_user_id` sem recriar nem apagar o cadastro de negócio.
-- O e-mail sintético respeita o formato já utilizado pela função SQL atual: matrícula normalizada + os seis primeiros caracteres de MD5 do ID do usuário.
-- O cliente React pode usar o fluxo novo quando `VITE_AUTH_BRIDGE_ENABLED=true`; sem essa variável, mantém o fluxo atual.
+- O login pode usar a Edge Function `auth-bridge` quando `VITE_AUTH_BRIDGE_ENABLED=true`; sem a flag, o login atual permanece inalterado.
+- A ponte valida credenciais legadas no servidor, cria/vincula o usuário Auth e devolve uma sessão JWT real.
+- Senhas legadas AES podem ser migradas no primeiro login, desde que `LEGACY_ENCRYPTION_KEY` esteja configurada como secret privado da Edge Function.
+- Ao cadastrar um funcionário pela tela administrativa, o cliente chama a ação `provision` da mesma função. Ela exige sessão Auth válida, confirma o cargo do administrador e impede gerente de provisionar usuários de outra loja.
+- A função usa `SUPABASE_SERVICE_ROLE_KEY` exclusivamente no servidor; ela nunca é incluída no bundle React.
+- O cadastro em `public.usuarios` e seu ID de negócio são preservados. A conta Auth é vinculada por `auth_user_id`.
 
 ## Ativação somente em ambiente de teste
 
-1. Use um projeto Supabase de desenvolvimento separado, nunca o projeto de produção.
-2. Faça deploy da Edge Function `auth-bridge` nesse projeto com verificação JWT desativada, pois o endpoint recebe o login antes de existir uma sessão.
-3. Confirme que os secrets padrão `SUPABASE_URL`, `SUPABASE_ANON_KEY` e `SUPABASE_SERVICE_ROLE_KEY` estão disponíveis no ambiente da função. A service role fica exclusivamente no servidor.
-4. Configure `VITE_AUTH_BRIDGE_ENABLED=true` apenas nas variáveis de Preview da Vercel e aponte o Preview para o Supabase de desenvolvimento.
-5. Teste primeiro a conta administrativa de teste; depois usuários de cada cargo. Não copie dados de produção nem tente migrar o `saas_admin` real em um ambiente de teste.
-6. Só depois de revisão de segurança e validação dos testes deve ser planejada a ativação em produção.
+1. Crie/use um projeto Supabase de desenvolvimento separado. Não use o projeto de produção.
+2. Configure os secrets da Edge Function: `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY` e `LEGACY_ENCRYPTION_KEY` (a mesma chave histórica que cifrou os campos `usuarios.senha`).
+3. Faça deploy da função `auth-bridge` no projeto de desenvolvimento com `verify_jwt=false`. O modo `login` é público por natureza; o modo `provision` valida JWT e cargo no corpo da função.
+4. Configure variáveis exclusivas do ambiente Preview da Vercel: `VITE_AUTH_BRIDGE_ENABLED=true`, `VITE_SUPABASE_URL` e `VITE_SUPABASE_ANON_KEY` apontando para o projeto de desenvolvimento. Não altere variáveis Production.
+5. Teste primeiro um administrador de teste; depois usuários de cada cargo. Confirme que o cadastro de funcionário cria e vincula a conta Auth sem apagar nem recriar a linha de `usuarios`.
+6. Revise rate limiting e autorização da RPC de verificação antes de qualquer ativação de produção.
 
 ## Limites deliberados desta etapa
 
 - Nenhuma Edge Function foi implantada no Supabase.
-- Nenhuma tabela, política RLS, RPC, senha, usuário ou permissão foi alterada.
-- A variável de ativação não foi habilitada. O Preview continua no fluxo atual até que exista um Supabase de teste configurado.
-- O endpoint de login depende da RPC legada para verificar a senha. A RPC pública de sincronização de senha não é chamada por esta função.
-- A criação de novas contas Auth ocorre no primeiro login válido após o cadastro do usuário na tabela `usuarios`; não exige acesso ao painel Supabase pelo funcionário.
+- Nenhuma tabela, política RLS, RPC, senha, usuário ou permissão do Supabase foi alterada.
+- A variável de ativação não foi habilitada; a branch Preview mantém o fluxo atual até que o projeto Supabase de teste e seus secrets estejam configurados.
+- O login usa temporariamente a RPC legada `rpc_login_usuario` para verificar hashes bcrypt. Para AES legado, a Edge Function compara o valor descriptografado no servidor e então atualiza o hash via RPC privilegiada chamada apenas com service role.
+- A RPC `rpc_sync_user_password` ainda existe no banco de produção e suas permissões não foram alteradas nesta etapa. Antes de produção, é necessário revogar EXECUTE de `anon`/PUBLIC e permitir a chamada somente por um caminho administrativo controlado.
+- Não teste a conta real `saas_admin` neste Preview. Use credenciais administrativas fictícias em um projeto isolado.
