@@ -123,10 +123,19 @@ Deno.serve(async (req: Request) => {
 
   // A RPC antiga verifica senha_hash/legado. O endpoint não aceita userId
   // no modo login: a identidade vem exclusivamente da matrícula validada.
-  const { data: validation, error: validationError } = await legacyClient.rpc("rpc_login_usuario", {
-    p_matricula: matricula,
-    p_senha: senha,
-  });
+  const normalizedMatricula = matricula.toLowerCase().replace(/^@/, "");
+  const loginCandidates = Array.from(new Set([matricula, normalizedMatricula, `@${normalizedMatricula}`]));
+  let validation: any = null;
+  let validationError: any = null;
+  for (const candidate of loginCandidates) {
+    const result = await legacyClient.rpc("rpc_login_usuario", {
+      p_matricula: candidate,
+      p_senha: senha,
+    });
+    validation = result.data;
+    validationError = result.error;
+    if (!validationError && validation?.success && validation?.user?.id) break;
+  }
 
   let storedUser: Record<string, unknown> | null = null;
   let legacyUser: Record<string, unknown> | null = null;
