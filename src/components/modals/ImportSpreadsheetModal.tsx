@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { 
   FileSpreadsheet, 
   Upload, 
@@ -25,11 +25,13 @@ import { useApp } from '../../context/AppContext';
 import { SpreadsheetProductItem, SetorLoja, SETORES_DISPONIVEIS } from '../../types';
 import { 
   uploadEncryptedProductsRealtime, 
-  isSupabaseConfigured 
+  isSupabaseConfigured,
+  loadStoreCategoryRules,
 } from '../../services/supabaseService';
 import { encryptProductList } from '../../utils/crypto';
 import { triggerScanBeep } from '../../utils/haptics';
 import { sanitizeSpreadsheetCell, sanitizeIdentifier, sanitizeBarcode, validatePositiveInt } from '../../utils/security';
+import { resolveCategory, type CategoryRules } from '../../utils/productCategorizer';
 
 interface ImportSpreadsheetModalProps {
   isOpen: boolean;
@@ -75,8 +77,10 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
     reducedCode: -1,  // 3. Código reduzido
     ean: -1,          // 4. Código EAN
     quantity: -1,     // 5. Quantidade
+    category: -1,     // 6. Categoria/departamento (opcional)
   });
   const [mappedItems, setMappedItems] = useState<SpreadsheetProductItem[]>([]);
+  const [customCategoryRules, setCustomCategoryRules] = useState<CategoryRules>({});
 
   // Estados da Etapa 3: Criptografia Local (AES-GCM 256 bits)
   const [encryptionProgress, setEncryptionProgress] = useState(0);
@@ -92,6 +96,21 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
   const [uploadSuccess, setUploadSuccess] = useState(false);
   const [showEncryptedView, setShowEncryptedView] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  // Carrega o dicionário de categorias customizado da loja para aplicar
+  // as correções feitas pelos operadores em importações anteriores.
+  useEffect(() => {
+    if (!isOpen) return;
+    let cancelled = false;
+
+    loadStoreCategoryRules(operator.loja_id || '').then(rules => {
+      if (!cancelled) setCustomCategoryRules(rules);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, operator.loja_id]);
 
   if (!isOpen) return null;
 
@@ -163,12 +182,15 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
           reducedCode: -1,
           ean: -1,
           quantity: -1,
+          category: -1,
         };
 
         headerRow.forEach((colName, idx) => {
           const norm = normalize(String(colName));
           if (norm.includes('desc') || norm.includes('nome') || norm.includes('produto') || norm.includes('item')) {
             if (autoMap.name === -1) autoMap.name = idx;
+          } else if (norm.includes('categoria') || norm.includes('departamento') || norm.includes('secao') || norm.includes('grupo')) {
+            if (autoMap.category === -1) autoMap.category = idx;
           } else if (norm.includes('fornec') || norm.includes('forn') || norm.includes('fabr') || norm.includes('sup')) {
             if (autoMap.supplierCode === -1) autoMap.supplierCode = idx;
           } else if (norm.includes('reduz') || norm.includes('red') || norm.includes('interno') || norm.includes('plu')) {
@@ -247,6 +269,14 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
       // 5. Quantidade
       const quantityRaw = currentColMap.quantity >= 0 ? row[currentColMap.quantity] : 0;
       const quantity = validatePositiveInt(String(quantityRaw ?? 0).replace(/[^0-9]/g, ''), 0);
+      // 6. Categoria/departamento (opcional na planilha; quando vazia, genérica
+      //    ou abreviada é classificada automaticamente pela descrição)
+      const sourceCategory = currentColMap.category >= 0
+        ? sanitizeSpreadsheetCell(row[currentColMap.category], 80)
+        : '';
+      const department = name
+        ? resolveCategory(sourceCategory, name, customCategoryRules)
+        : 'Outros';
 
       const errors: string[] = [];
       if (!name) errors.push('Descrição ausente');
@@ -259,6 +289,8 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
         ean,
         quantity,
         setor,
+        department,
+        sourceCategory: sourceCategory || undefined,
         isValid: errors.length === 0,
         errors,
       };
@@ -380,6 +412,7 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
         quantity: item.original.quantity,
         setor: selectedSetor,
         sector: selectedSetor,
+        department: item.original.department,
       }));
       importProductsBatch(itemsToBatch, selectedSetor, operator.loja_id || '');
 
@@ -782,6 +815,33 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
                   </select>
                 </div>
               </div>
+
+              {/* 6. CATEGORIA/DEPARTAMENTO (OPCIONAL) */}
+              <div className="p-3 rounded-2xl bg-indigo-500/5 border border-indigo-500/20 space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <label className="text-[11px] font-bold text-indigo-700 dark:text-indigo-300 uppercase block">
+                    6. Categoria / Departamento (opcional)
+                  </label>
+                  <span className="text-[10px] font-bold text-indigo-600 dark:text-indigo-400">
+                    Classificação automática ativa
+                  </span>
+                </div>
+                <select
+                  value={colMap.category}
+                  onChange={e => handleColMapChange('category', parseInt(e.target.value, 10))}
+                  className="w-full p-2.5 rounded-xl border border-indigo-200 dark:border-indigo-800 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200 font-medium"
+                >
+                  <option value={-1}>-- Não mapear / Classificar pela descrição --</option>
+                  {detectedColumns.map(col => (
+                    <option key={col.index} value={col.index}>
+                      {col.label} {col.sampleValue && `(Ex: ${col.sampleValue.substring(0, 18)})`}
+                    </option>
+                  ))}
+                </select>
+                <p className="text-[10px] text-slate-500 dark:text-slate-400">
+                  Quando a coluna vier vazia, genérica ("Geral", "Outros") ou abreviada (ex.: "BEB", "LIMP"), o sistema classifica automaticamente pela descrição do produto e pelo dicionário da loja.
+                </p>
+              </div>
             </div>
 
             {/* TABELA DE CONFERÊNCIA DOS ITENS MAPEADOS */}
@@ -795,11 +855,12 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
                 </span>
               </div>
 
-              <div className="border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden max-h-48 overflow-y-auto text-xs">
+              <div className="border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden max-h-48 overflow-x-auto overflow-y-auto text-xs">
                 <table className="w-full text-left">
                   <thead className="bg-slate-100 dark:bg-slate-800 text-[11px] font-bold text-slate-500 dark:text-slate-400 sticky top-0">
                     <tr>
                       <th className="p-2">Descrição</th>
+                      <th className="p-2">Categoria (Auto)</th>
                       <th className="p-2">Setor</th>
                       <th className="p-2">Cód. Fornecedor</th>
                       <th className="p-2">Cód. Reduzido</th>
@@ -812,6 +873,15 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
                     {mappedItems.map((item, idx) => (
                       <tr key={idx} className={item.isValid ? '' : 'bg-rose-500/10 text-rose-600'}>
                         <td className="p-2 font-bold truncate max-w-[150px]">{item.name || 'NÃO INFORMADO'}</td>
+                        <td className="p-2">
+                          <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded whitespace-nowrap ${
+                            item.department === 'Outros'
+                              ? 'bg-amber-500/15 text-amber-700 dark:text-amber-400'
+                              : 'bg-indigo-500/15 text-indigo-700 dark:text-indigo-300'
+                          }`}>
+                            {item.department || 'Outros'}
+                          </span>
+                        </td>
                         <td className="p-2 font-semibold text-emerald-600 dark:text-emerald-400 text-[11px]">{item.setor}</td>
                         <td className="p-2 font-mono text-[11px] text-slate-500 dark:text-slate-400">{item.supplierCode || '-'}</td>
                         <td className="p-2 font-mono text-[11px] text-slate-500 dark:text-slate-400">{item.reducedCode || '-'}</td>

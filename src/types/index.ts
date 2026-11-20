@@ -21,6 +21,7 @@ export interface Product {
   ean: string;
   secondaryEan?: string; // 2º Código de Barras (ex: código do sistema vs código da embalagem)
   category: string;
+  department?: string; // Categoria/departamento comercial (ex: Bebidas Não Alcoólicas, Limpeza)
   stock: number;
   minStock: number;
   price: number;
@@ -52,6 +53,8 @@ export interface SpreadsheetProductItem {
   quantity: number;
   sector?: SetorLoja;
   setor?: SetorLoja;
+  department?: string; // Categoria/departamento comercial detectada automaticamente
+  sourceCategory?: string; // Categoria original da planilha (antes da normalização)
   isValid?: boolean;
   errors?: string[];
 }
@@ -68,6 +71,7 @@ export interface Store {
   limite_usuarios: number;
   ativa: boolean;
   cor_primaria?: string;
+  categorias_customizadas?: Record<string, string>;
   created_at?: string;
 }
 

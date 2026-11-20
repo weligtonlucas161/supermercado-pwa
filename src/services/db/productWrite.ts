@@ -20,6 +20,7 @@ export interface ProductWriteRow {
   nome: string;
   codigo_barras: string;
   setor?: string;
+  departamento?: string | null;
   quantidade?: number;
   data_vencimento?: string;
   is_encrypted?: boolean;
@@ -74,6 +75,7 @@ export async function upsertProductRows(
     nome: row.nome,
     codigo_barras: row.codigo_barras,
     setor: row.setor ?? 'MERCEARIA',
+    departamento: row.departamento ?? null,
     quantidade: Number(row.quantidade ?? 0),
     data_vencimento:
       row.data_vencimento ??

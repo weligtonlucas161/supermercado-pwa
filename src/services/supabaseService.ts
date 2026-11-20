@@ -34,6 +34,11 @@ import {
 } from '../utils/security';
 import { invalidateStockCache } from '../utils/encryptedCache';
 import {
+  normalizeDescription,
+  type CategoryRules,
+  type ProductCategory,
+} from '../utils/productCategorizer';
+import {
   SUPABASE_STORAGE_KEYS,
   getDbClient,
   getDbConfig,
@@ -1679,6 +1684,7 @@ export async function uploadEncryptedProductsRealtime(
           const cleanSupplier = original.supplierCode ? sanitizeIdentifier(original.supplierCode, 32) : undefined;
           const cleanSetor = validateEnum(original.setor || original.sector, SETORES_DISPONIVEIS, 'MERCEARIA');
           const cleanQty = validatePositiveInt(original.quantity, 0);
+          const cleanDepartment = original.department ? sanitizeText(original.department, 80) : undefined;
 
           const cur = existingMap.get(cleanEan);
           if (cur) {
@@ -1687,6 +1693,7 @@ export async function uploadEncryptedProductsRealtime(
               name: cleanName || cur.name,
               stock: cleanQty,
               category: cleanSetor,
+              department: cleanDepartment || cur.department,
               reducedCode: cleanReduced || cur.reducedCode,
               supplierCode: cleanSupplier || cur.supplierCode,
               loja_id: lojaId,
@@ -1703,6 +1710,7 @@ export async function uploadEncryptedProductsRealtime(
               minStock: 10,
               price: 9.90,
               category: cleanSetor,
+              department: cleanDepartment,
               location: `Gôndola - ${cleanSetor}`,
               loja_id: lojaId,
               lastUpdated: new Date().toISOString(),
@@ -1746,6 +1754,7 @@ export async function uploadEncryptedProductsRealtime(
       const cleanSupplier = c.original.supplierCode ? sanitizeIdentifier(c.original.supplierCode, 32) : '';
       const cleanSetor = validateEnum(c.original.setor || c.original.sector, SETORES_DISPONIVEIS, 'MERCEARIA');
       const cleanQty = validatePositiveInt(c.original.quantity, 0);
+      const cleanDepartment = c.original.department ? sanitizeText(c.original.department, 80) : '';
 
       return {
         cleanEan,
@@ -1757,6 +1766,7 @@ export async function uploadEncryptedProductsRealtime(
           plu: cleanReduced ? encryptSingleField(cleanReduced) : null,
           codigo_fornecedor: cleanSupplier ? encryptSingleField(cleanSupplier) : null,
           setor: cleanSetor,
+          departamento: cleanDepartment || null,
           quantidade: cleanQty,
           data_vencimento: defaultDueDate,
           is_encrypted: true,
@@ -1935,6 +1945,7 @@ export function mapProductRow(
     supplierCode: decryptSingleField(rawForn),
     reducedCode: decryptSingleField(rawPlu),
     category: sanitizeText(row.setor || 'MERCEARIA', 64),
+    department: row.departamento ? sanitizeText(String(row.departamento), 80) : undefined,
     stock: validatePositiveInt(row.quantidade, 0),
     minStock: 10,
     price: 0,
@@ -1983,7 +1994,7 @@ export async function fetchProductsFromSupabase(lojaId?: string): Promise<Produc
     // Projeção explícita: evita trafegar colunas desnecessárias (o payload
     // encolhe de forma significativa em catálogos grandes).
     const PRODUCT_COLUMNS =
-      'id, nome, codigo_barras, codigo_barras_secundario, plu, codigo_fornecedor, setor, quantidade, data_vencimento, loja_id, is_encrypted, ciphertext, iv, is_locked_for_edit, locked_by, locked_at, criado_em';
+      'id, nome, codigo_barras, codigo_barras_secundario, plu, codigo_fornecedor, setor, departamento, quantidade, data_vencimento, loja_id, is_encrypted, ciphertext, iv, is_locked_for_edit, locked_by, locked_at, criado_em';
 
     // Busca estritamente pela loja específica (paginado em blocos), garantindo
     // isolamento total de estoque entre lojas.
@@ -2007,6 +2018,7 @@ export interface FetchStockPaginatedParams {
   pageSize?: number; // padrão 50
   searchTerm?: string;
   category?: string;
+  department?: string;
   sortBy?: 'default' | 'qtd-desc' | 'qtd-asc' | 'name-asc' | 'name-desc' | 'forn-asc';
   onlyRuptures?: boolean;
 }
@@ -2046,6 +2058,14 @@ export async function fetchStockPaginatedFromSupabase(
             let filtered = parsed.filter((p: any) => (!p.loja_id || p.loja_id === cleanLojaId));
             if (params.category && params.category !== 'all') {
               filtered = filtered.filter((p: any) => (p.category || p.setor) === params.category);
+            }
+            if (params.department && params.department !== 'all') {
+              filtered = filtered.filter((p: any) => {
+                const dep = p.department || p.departamento || 'Outros';
+                return params.department === 'Outros'
+                  ? !dep || dep === 'Outros'
+                  : dep === params.department;
+              });
             }
             if (params.onlyRuptures) {
               filtered = filtered.filter((p: any) => (p.stock ?? p.quantidade ?? 0) <= (p.minStock ?? 10));
@@ -2095,7 +2115,7 @@ export async function fetchStockPaginatedFromSupabase(
 
   try {
     const PRODUCT_COLUMNS =
-      'id, nome, codigo_barras, codigo_barras_secundario, plu, codigo_fornecedor, setor, quantidade, data_vencimento, loja_id, is_encrypted, ciphertext, iv, is_locked_for_edit, locked_by, locked_at, criado_em';
+      'id, nome, codigo_barras, codigo_barras_secundario, plu, codigo_fornecedor, setor, departamento, quantidade, data_vencimento, loja_id, is_encrypted, ciphertext, iv, is_locked_for_edit, locked_by, locked_at, criado_em';
 
     let query = client
       .from('produtos')
@@ -2104,6 +2124,14 @@ export async function fetchStockPaginatedFromSupabase(
 
     if (params.category && params.category !== 'all') {
       query = query.eq('setor', params.category);
+    }
+
+    if (params.department && params.department !== 'all') {
+      if (params.department === 'Outros') {
+        query = query.or('departamento.is.null,departamento.eq.Outros');
+      } else {
+        query = query.eq('departamento', params.department);
+      }
     }
 
     if (params.onlyRuptures) {
@@ -4032,6 +4060,10 @@ export async function updateProductInSupabase(
     }
     if (updates.stock !== undefined) payload.quantidade = validatePositiveInt(updates.stock, 0);
     if (updates.category !== undefined) payload.setor = sanitizeText(updates.category, 64);
+    if (updates.department !== undefined) {
+      const cleanDepartment = sanitizeText(updates.department, 80);
+      payload.departamento = cleanDepartment || null;
+    }
     if (updates.reducedCode !== undefined) {
       const cleanPlu = sanitizeIdentifier(updates.reducedCode, 32);
       payload.plu = cleanPlu ? encryptSingleField(cleanPlu) : null;
@@ -4060,5 +4092,139 @@ export async function updateProductInSupabase(
     return { success: false, error: msg };
   }
 }
+
+// ============================================================================
+// DICIONÁRIO DE CATEGORIZAÇÃO CUSTOMIZADO POR LOJA
+// ============================================================================
+
+const CATEGORY_RULES_STORAGE_PREFIX = 'superpwa_category_rules_';
+
+function categoryRulesStorageKey(lojaId: string): string {
+  return `${CATEGORY_RULES_STORAGE_PREFIX}${lojaId || 'default'}`;
+}
+
+function readLocalCategoryRules(lojaId: string): CategoryRules {
+  if (typeof window === 'undefined') return {};
+  try {
+    const raw = localStorage.getItem(categoryRulesStorageKey(lojaId));
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? (parsed as CategoryRules) : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeLocalCategoryRules(lojaId: string, rules: CategoryRules): void {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.setItem(categoryRulesStorageKey(lojaId), JSON.stringify(rules));
+  } catch {
+    // armazenamento indisponível: ignora silenciosamente
+  }
+}
+
+/**
+ * Carrega o dicionário `palavra-chave -> categoria` da loja.
+ * Usa a coluna `lojas.categorias_customizadas` e mantém espelho local para
+ * funcionamento offline.
+ */
+export async function loadStoreCategoryRules(lojaId: string): Promise<CategoryRules> {
+  const cleanLojaId = sanitizeIdentifier(lojaId, 64);
+  if (!cleanLojaId) return {};
+
+  const localRules = readLocalCategoryRules(cleanLojaId);
+
+  if (!client || !isSupabaseConfigured()) {
+    return localRules;
+  }
+
+  try {
+    const { data, error } = await client
+      .from('lojas')
+      .select('categorias_customizadas')
+      .eq('id', cleanLojaId)
+      .maybeSingle();
+
+    if (error) throw error;
+
+    const remote = (data?.categorias_customizadas || {}) as CategoryRules;
+    const merged = { ...localRules, ...remote };
+    writeLocalCategoryRules(cleanLojaId, merged);
+    return merged;
+  } catch (err) {
+    console.warn('[CategoryRules] Falha ao carregar dicionário da loja:', err);
+    return localRules;
+  }
+}
+
+/**
+ * Persiste uma correção manual no dicionário da loja.
+ * A palavra-chave é normalizada antes de ser gravada para casar com o
+ * mesmo processo usado na importação.
+ */
+export async function saveStoreCategoryRule(
+  lojaId: string,
+  keyword: string,
+  category: ProductCategory
+): Promise<{ success: boolean; rules: CategoryRules }> {
+  const cleanLojaId = sanitizeIdentifier(lojaId, 64);
+  const cleanKeyword = normalizeDescription(keyword);
+
+  if (!cleanLojaId || !cleanKeyword || !category) {
+    return { success: false, rules: readLocalCategoryRules(cleanLojaId) };
+  }
+
+  const current = await loadStoreCategoryRules(cleanLojaId);
+  const nextRules: CategoryRules = { ...current, [cleanKeyword]: category };
+
+  writeLocalCategoryRules(cleanLojaId, nextRules);
+
+  if (!client || !isSupabaseConfigured()) {
+    return { success: true, rules: nextRules };
+  }
+
+  try {
+    const { error } = await client
+      .from('lojas')
+      .update({ categorias_customizadas: nextRules })
+      .eq('id', cleanLojaId);
+
+    if (error) throw error;
+    return { success: true, rules: nextRules };
+  } catch (err) {
+    console.warn('[CategoryRules] Falha ao salvar dicionário na nuvem:', err);
+    // Mantém o valor local para sincronização futura/uso offline.
+    return { success: true, rules: nextRules };
+  }
+}
+
+/** Remove uma regra customizada (opcional, útil para limpeza de dicionário). */
+export async function removeStoreCategoryRule(
+  lojaId: string,
+  keyword: string
+): Promise<{ success: boolean; rules: CategoryRules }> {
+  const cleanLojaId = sanitizeIdentifier(lojaId, 64);
+  const cleanKeyword = normalizeDescription(keyword);
+  const current = await loadStoreCategoryRules(cleanLojaId);
+  const nextRules = { ...current };
+  delete nextRules[cleanKeyword];
+
+  writeLocalCategoryRules(cleanLojaId, nextRules);
+
+  if (client && isSupabaseConfigured()) {
+    try {
+      await client
+        .from('lojas')
+        .update({ categorias_customizadas: nextRules })
+        .eq('id', cleanLojaId);
+    } catch (err) {
+      console.warn('[CategoryRules] Falha ao remover regra na nuvem:', err);
+    }
+  }
+
+  return { success: true, rules: nextRules };
+}
+
 
 
