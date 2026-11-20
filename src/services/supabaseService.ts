@@ -621,6 +621,76 @@ export async function loginUser(matricula: string, senha: string): Promise<Login
   const isSaasMatricula = normInput === '200309' || cleanMatricula === '111111';
   const effectiveMatricula = (normInput === '200309') ? '@200309' : cleanMatricula;
 
+  // Migração gradual: quando habilitada no ambiente Preview, o login passa pelo
+  // Edge Function que valida a senha legada no servidor, provisiona o usuário Auth
+  // e devolve uma sessão JWT real. Sem a flag, o fluxo legado permanece intacto.
+  const authBridgeEnabled = import.meta.env.VITE_AUTH_BRIDGE_ENABLED === 'true';
+  if (authBridgeEnabled) {
+    if (!client || !isSupabaseConfigured()) {
+      return { success: false, message: 'Autenticação segura indisponível: banco não configurado.' };
+    }
+
+    try {
+      const config = getDbConfig();
+      const response = await fetch(`${config.url}/functions/v1/auth-bridge`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          apikey: config.key,
+          Authorization: `Bearer ${config.key}`,
+        },
+        body: JSON.stringify({ matricula: cleanMatricula, senha: cleanSenha }),
+      });
+      const payload = await response.json().catch(() => null) as {
+        error?: string;
+        session?: { access_token?: string; refresh_token?: string };
+        user?: Record<string, unknown>;
+      } | null;
+
+      if (!response.ok || !payload?.session?.access_token || !payload.session.refresh_token || !payload.user) {
+        return {
+          success: false,
+          message: payload?.error || 'Não foi possível validar as credenciais no servidor.',
+        };
+      }
+
+      const { error: sessionError } = await client.auth.setSession({
+        access_token: payload.session.access_token,
+        refresh_token: payload.session.refresh_token,
+      });
+      if (sessionError) {
+        return { success: false, message: 'A sessão segura não pôde ser iniciada. Tente novamente.' };
+      }
+
+      const remote = payload.user;
+      const remoteCargo = String(remote.cargo || 'operador').toLowerCase();
+      const mappedCargo = remoteCargo.includes('saas')
+        ? 'saas_admin'
+        : remoteCargo.includes('gerente') || remoteCargo.includes('admin')
+          ? 'gerente'
+          : 'operador';
+
+      return {
+        success: true,
+        token: payload.session.access_token,
+        user: {
+          id: String(remote.id || ''),
+          matricula: String(remote.matricula || cleanMatricula),
+          nome: decryptSingleField(String(remote.nome || '')),
+          cargo: mappedCargo,
+          cargoCompleto: sanitizeText(String(remote.cargo || 'Operador de Loja'), 64),
+          setor: sanitizeText(String(remote.setor || 'Geral'), 64),
+          loja_id: String(remote.loja_id || ''),
+          loja_nome: sanitizeText(String(remote.loja_nome || ''), 120),
+          primeiro_login: Boolean(remote.primeiro_login ?? false),
+        },
+      };
+    } catch (error) {
+      console.warn('[Auth Bridge] Falha de comunicação:', error);
+      return { success: false, message: 'Não foi possível conectar ao serviço de autenticação.' };
+    }
+  }
+
   // 1. Checagem em funcionários/gerentes cadastrados localmente (offline)
   const localEmployees = getStoredEmployees();
   const matchedEmp = localEmployees.find(e => {
