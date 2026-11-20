@@ -2326,8 +2326,11 @@ export async function syncOfflineQueueToSupabase(
   actions: OfflineAction[],
   lojaId = ''
 ): Promise<{ success: boolean; syncedCount: number; error?: string }> {
-  if (!client || actions.length === 0) {
+  if (actions.length === 0) {
     return { success: true, syncedCount: 0 };
+  }
+  if (!client || !isSupabaseConfigured()) {
+    return { success: false, syncedCount: 0, error: 'Supabase indisponível; fila mantida localmente.' };
   }
 
   const cleanLojaId = sanitizeIdentifier(lojaId, 64);
