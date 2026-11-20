@@ -1,29 +1,43 @@
-import React, { useState } from 'react';
-import { 
-  AlertTriangle, 
-  Calendar, 
-  ClipboardCheck, 
-  Package, 
-  Barcode, 
-  Plus, 
-  ArrowUpRight, 
-  Check, 
-  Tag, 
-  Percent,
-  FileSpreadsheet,
-  Clock,
-  Layers,
-  ChevronRight,
-  TrendingDown,
-  ShieldAlert,
+import React, { useMemo, useState } from 'react';
+import {
+  AlertTriangle,
   ArrowRight,
-  MessageSquare
+  ArrowUpRight,
+  Barcode,
+  Check,
+  ClipboardCheck,
+  Clock,
+  FileSpreadsheet,
+  Package,
+  Percent,
+  Plus,
+  Tag,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { NewValidityModal } from '../modals/NewValidityModal';
 import { NewProductModal } from '../modals/NewProductModal';
 import { ImportSpreadsheetModal } from '../modals/ImportSpreadsheetModal';
 import { RuptureHistoryChart } from '../dashboard/RuptureHistoryChart';
+import {
+  CriticalProductsCarousel,
+  type CriticalProductItem,
+} from '../dashboard/CriticalProductsCarousel';
+
+/** Data local (YYYY-MM-DD) sem o deslocamento de fuso do toISOString. */
+const getLocalDateString = (date: Date = new Date()): string => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+const ROLE_LABELS: Record<string, string> = {
+  saas_admin: 'Administrador SaaS',
+  gerente: 'Gerente',
+  adm: 'Administrador',
+  master: 'Master',
+  operador: 'Operador',
+};
 
 /**
  * Componente Dashboard com cards de resumo focados na operação de piso de loja:
@@ -32,18 +46,10 @@ import { RuptureHistoryChart } from '../dashboard/RuptureHistoryChart';
  * - Tarefas Pendentes de Auditoria
  */
 export const Dashboard: React.FC = () => {
-  const { 
-    products, 
-    validities, 
-    audits, 
-    setActiveTab, 
-    applyDiscount, 
-    darkMode,
-    storeColor
-  } = useApp();
+  const { products, validities, audits, setActiveTab, darkMode, storeColor } = useApp();
 
-  // Obter data de hoje em formato YYYY-MM-DD
-  const todayStr = new Date().toISOString().split('T')[0];
+  // Obter data de hoje em formato YYYY-MM-DD (fuso local)
+  const todayStr = getLocalDateString();
 
   // 1. Validades Vencendo Hoje (ou com prazo imediato de hoje)
   const expiringToday = validities.filter(v => v.dueDate <= todayStr || v.status === 'urgent');
@@ -272,16 +278,15 @@ export const InicioTab: React.FC = () => {
   const { 
     products, 
     validities, 
-    audits, 
     setActiveTab, 
     darkMode, 
     applyDiscount, 
     openScanner,
     operator,
+    currentUser,
+    isGerente,
     storeName,
     storeColor,
-    openChat,
-    unreadChatCount 
   } = useApp();
 
   const [isValidityModalOpen, setIsValidityModalOpen] = useState(false);
@@ -289,8 +294,125 @@ export const InicioTab: React.FC = () => {
   const [isSpreadsheetModalOpen, setIsSpreadsheetModalOpen] = useState(false);
   const [discountSuccessId, setDiscountSuccessId] = useState<string | null>(null);
 
-  const urgentValidities = validities.filter(v => v.status === 'urgent');
-  const lowStockProducts = products.filter(p => p.stock <= p.minStock);
+  const todayStr = useMemo(() => getLocalDateString(), []);
+
+  // Contexto do usuário: setor, cargo e escopo de visualização
+  const userSector = (operator.setor_restrito || currentUser?.setor || '').trim().toUpperCase();
+  const hasSectorRestriction = Boolean(userSector && userSector !== 'TODOS');
+  const isManagerView =
+    isGerente ||
+    ['gerente', 'adm', 'master'].includes((currentUser?.cargo || operator.role || '').toLowerCase());
+  const scopeToSector = hasSectorRestriction && !isManagerView;
+
+  const matchesSector = (sector?: string) =>
+    !scopeToSector || (sector || '').trim().toUpperCase() === userSector;
+
+  // Rupturas e vencidos do escopo do usuário (setor próprio ou loja inteira)
+  const { ruptureItems, expiredItems } = useMemo(() => {
+    const productById = new Map(products.map(p => [p.id, p]));
+
+    const ruptures: CriticalProductItem[] = products
+      .filter(p => p.stock <= p.minStock && matchesSector(p.category))
+      .sort((a, b) => a.stock - b.stock || a.name.localeCompare(b.name, 'pt-BR'))
+      .map(p => ({
+        key: `ruptura-${p.id}`,
+        kind: 'ruptura' as const,
+        name: p.name,
+        sector: p.category,
+        code: p.reducedCode || p.ean,
+        stock: p.stock,
+        minStock: p.minStock,
+      }));
+
+    const coveredProductIds = new Set<string>();
+
+    const expiredFromLots: CriticalProductItem[] = validities
+      .filter(v => v.dueDate && v.dueDate <= todayStr)
+      .map(v => {
+        const product = productById.get(v.productId);
+        return { validity: v, sector: product?.category, code: product?.reducedCode || product?.ean };
+      })
+      .filter(({ sector }) => matchesSector(sector))
+      .map(({ validity, sector, code }) => {
+        coveredProductIds.add(validity.productId);
+        return {
+          key: `vencido-lote-${validity.id}`,
+          kind: 'vencido' as const,
+          name: validity.name,
+          sector,
+          code,
+          quantity: validity.quantity,
+          dueDate: validity.dueDate,
+          batch: validity.batch,
+        };
+      });
+
+    const expiredFromProducts: CriticalProductItem[] = products
+      .filter(p => p.data_vencimento && p.data_vencimento.slice(0, 10) <= todayStr)
+      .filter(p => matchesSector(p.category) && !coveredProductIds.has(p.id))
+      .map(p => ({
+        key: `vencido-produto-${p.id}`,
+        kind: 'vencido' as const,
+        name: p.name,
+        sector: p.category,
+        code: p.reducedCode || p.ean,
+        quantity: p.stock,
+        dueDate: p.data_vencimento?.slice(0, 10),
+        batch: p.batch,
+      }));
+
+    const expired = [...expiredFromLots, ...expiredFromProducts].sort((a, b) =>
+      (a.dueDate || '').localeCompare(b.dueDate || '')
+    );
+
+    return { ruptureItems: ruptures, expiredItems: expired };
+  }, [products, validities, todayStr, scopeToSector, userSector]);
+
+  const combinedItems = useMemo(
+    () => [...ruptureItems, ...expiredItems],
+    [ruptureItems, expiredItems]
+  );
+
+  // Lotes urgentes (vencimento em até 5 dias) do escopo do usuário
+  const urgentValidities = useMemo(() => {
+    const productById = new Map(products.map(p => [p.id, p]));
+    return validities.filter(v => {
+      if (v.status !== 'urgent') return false;
+      if (!scopeToSector) return true;
+      const sector = productById.get(v.productId)?.category;
+      return (sector || '').trim().toUpperCase() === userSector;
+    });
+  }, [validities, products, scopeToSector, userSector]);
+
+  const greeting = useMemo(() => {
+    const hour = new Date().getHours();
+    if (hour < 12) return 'Bom dia';
+    if (hour < 18) return 'Boa tarde';
+    return 'Boa noite';
+  }, []);
+
+  const userName = (currentUser?.nome || operator.name || 'Operador').trim();
+  const roleLabel =
+    operator.cargoCompleto ||
+    ROLE_LABELS[(currentUser?.cargo || operator.role || 'operador').toLowerCase()] ||
+    'Operador';
+  const scopeLabel = scopeToSector ? `Setor ${userSector}` : 'Visão geral da loja';
+
+  const alertParts: string[] = [];
+  if (expiredItems.length > 0) {
+    alertParts.push(
+      `${expiredItems.length} ${expiredItems.length === 1 ? 'produto vencido' : 'produtos vencidos'}`
+    );
+  }
+  if (ruptureItems.length > 0) {
+    alertParts.push(
+      `${ruptureItems.length} ${ruptureItems.length === 1 ? 'item em ruptura' : 'itens em ruptura'}`
+    );
+  }
+  const alertSummary =
+    alertParts.length > 0
+      ? `${alertParts.join(' e ')} exigem ação imediata.`
+      : 'Tudo em dia na operação! Nenhum alerta crítico no momento.';
 
   const handleApplyDiscount = (validityId: string) => {
     applyDiscount(validityId, 30);
@@ -300,7 +422,7 @@ export const InicioTab: React.FC = () => {
 
   return (
     <div className="space-y-6 animate-in fade-in duration-300">
-      {/* Banner de Boas-Vindas Operacional */}
+      {/* Banner de Boas-Vindas Operacional com saudação personalizada */}
       <div
         className="rounded-3xl p-5 sm:p-6 bg-white border border-slate-200 text-slate-900 shadow-sm relative overflow-hidden"
         style={{
@@ -319,7 +441,7 @@ export const InicioTab: React.FC = () => {
           aria-hidden="true"
         />
 
-        <div className="flex items-center justify-between pt-1">
+        <div className="flex items-center justify-between gap-2 pt-1">
           <span
             className="text-[11px] font-bold uppercase tracking-wider px-2.5 py-1 rounded-lg border"
             style={{
@@ -335,45 +457,38 @@ export const InicioTab: React.FC = () => {
           </span>
         </div>
 
-        <h2 className="text-2xl font-black mt-2 tracking-tight text-slate-900">
-          {storeName || 'Controle de Validade e Auditorias'}
+        <h2 className="text-2xl sm:text-3xl font-black mt-2 tracking-tight text-slate-900 break-words">
+          {greeting}, {userName}!
         </h2>
-        <p className="text-slate-600 text-xs sm:text-sm mt-1 max-w-lg">
-          {urgentValidities.length > 0
-            ? `${urgentValidities.length} lotes com risco de vencimento imediato exigem remarcação ou liquidação.`
-            : 'Tudo em dia na operação! Nenhum alerta crítico no momento.'}
+        <p className="text-slate-500 text-xs sm:text-sm mt-1.5">
+          {roleLabel} • {scopeLabel} • {storeName}
         </p>
 
-        <div className="mt-4 flex flex-wrap gap-2.5">
-          <button
-            onClick={() => setActiveTab('validade')}
-            className="bg-emerald-600 text-white px-4 py-2 rounded-xl text-xs font-bold hover:bg-emerald-700 active:scale-95 transition shadow-sm cursor-pointer"
-          >
-            Ver Validades ({urgentValidities.length})
-          </button>
-          <button
-            onClick={() => setActiveTab('estoque')}
-            className="bg-slate-900 text-white px-4 py-2 rounded-xl text-xs font-bold hover:bg-slate-800 active:scale-95 transition shadow-sm cursor-pointer"
-          >
-            Repor Rupturas ({lowStockProducts.length})
-          </button>
+        <div
+          className={`mt-3 flex items-start gap-2 text-xs rounded-2xl px-3 py-2 border ${
+            alertParts.length > 0
+              ? 'bg-rose-500/5 border-rose-500/20 text-rose-700'
+              : 'bg-emerald-500/5 border-emerald-500/20 text-emerald-700'
+          }`}
+        >
+          {alertParts.length > 0 ? (
+            <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+          ) : (
+            <Check className="w-4 h-4 shrink-0 mt-0.5" />
+          )}
+          <span className="font-semibold leading-relaxed">{alertSummary}</span>
         </div>
       </div>
 
-      {/* DASHBOARD PRINCIPAL COM CARDS DEDICADOS */}
-      <Dashboard />
-
-      {/* GRÁFICO RECHARTS: HISTÓRICO DE RUPTURAS NOS ÚLTIMOS 7 DIAS */}
-      <RuptureHistoryChart />
-
-      {/* Ações Rápidas de Terminal */}
+      {/* Ações Rápidas de Campo (atalhos essenciais) */}
       <div>
         <div className="flex items-center justify-between mb-3">
           <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400">
-            Ações Rápidas de Campo & Comunicação
+            Ações Rápidas
           </h3>
+          <span className="text-[10px] text-slate-400">Toque para abrir</span>
         </div>
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2.5">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
           <button
             onClick={() => openScanner()}
             className={`p-3.5 rounded-2xl border flex items-center gap-3 transition-all text-left cursor-pointer ${
@@ -387,51 +502,7 @@ export const InicioTab: React.FC = () => {
             </div>
             <div>
               <div className="text-xs font-bold text-slate-800 dark:text-white">Bipar Produto</div>
-              <div className="text-[10px] text-slate-400">Google Barcode</div>
-            </div>
-          </button>
-
-          <button
-            onClick={() => openChat()}
-            className={`p-3.5 rounded-2xl border flex items-center gap-3 transition-all text-left relative cursor-pointer ${
-              darkMode
-                ? 'bg-slate-800/90 border-slate-700 hover:bg-slate-750'
-                : 'bg-white border-slate-200 hover:bg-slate-50'
-            } shadow-xs`}
-          >
-            <div className="p-2.5 rounded-xl bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 relative">
-              <MessageSquare className="w-5 h-5" />
-              {unreadChatCount > 0 && (
-                <span className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-rose-500 ring-2 ring-white dark:ring-slate-900 animate-pulse" />
-              )}
-            </div>
-            <div>
-              <div className="text-xs font-bold text-slate-800 dark:text-white flex items-center gap-1.5">
-                <span>Chat Loja</span>
-                {unreadChatCount > 0 && (
-                  <span className="text-[9px] font-black px-1.5 py-0.2 rounded-full bg-rose-500 text-white">
-                    {unreadChatCount}
-                  </span>
-                )}
-              </div>
-              <div className="text-[10px] text-slate-400">Grupo & Líderes</div>
-            </div>
-          </button>
-
-          <button
-            onClick={() => setIsSpreadsheetModalOpen(true)}
-            className={`p-3.5 rounded-2xl border flex items-center gap-3 transition-all text-left cursor-pointer ${
-              darkMode
-                ? 'bg-slate-800/90 border-slate-700 hover:bg-slate-750'
-                : 'bg-white border-slate-200 hover:bg-slate-50'
-            } shadow-xs`}
-          >
-            <div className="p-2.5 rounded-xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
-              <FileSpreadsheet className="w-5 h-5" />
-            </div>
-            <div>
-              <div className="text-xs font-bold text-slate-800 dark:text-white">Subir Planilha</div>
-              <div className="text-[10px] text-slate-400">Importação XLSX</div>
+              <div className="text-[10px] text-slate-400">Câmera / EAN</div>
             </div>
           </button>
 
@@ -468,8 +539,67 @@ export const InicioTab: React.FC = () => {
               <div className="text-[10px] text-slate-400">Catálogo manual</div>
             </div>
           </button>
+
+          <button
+            onClick={() => setIsSpreadsheetModalOpen(true)}
+            className={`p-3.5 rounded-2xl border flex items-center gap-3 transition-all text-left cursor-pointer ${
+              darkMode
+                ? 'bg-slate-800/90 border-slate-700 hover:bg-slate-750'
+                : 'bg-white border-slate-200 hover:bg-slate-50'
+            } shadow-xs`}
+          >
+            <div className="p-2.5 rounded-xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
+              <FileSpreadsheet className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="text-xs font-bold text-slate-800 dark:text-white">Subir Planilha</div>
+              <div className="text-[10px] text-slate-400">Importação XLSX</div>
+            </div>
+          </button>
         </div>
       </div>
+
+      {/* PAINEL DE RESUMO OPERACIONAL */}
+      <Dashboard />
+
+      {/* CARROSSÉIS DE PRODUTOS CRÍTICOS (ACIMA DO GRÁFICO) */}
+      {isManagerView ? (
+        <div className="space-y-4">
+          <CriticalProductsCarousel
+            title="Produtos em Ruptura"
+            subtitle="Gôndolas vazias ou abaixo do estoque mínimo de segurança"
+            items={ruptureItems}
+            onSeeAll={() => setActiveTab('estoque')}
+            onItemClick={() => setActiveTab('estoque')}
+            emptyMessage="Nenhum produto em ruptura no momento."
+          />
+          <CriticalProductsCarousel
+            title="Produtos Vencidos"
+            subtitle="Lotes com validade expirada que exigem baixa ou remarcação"
+            items={expiredItems}
+            onSeeAll={() => setActiveTab('validade')}
+            onItemClick={() => setActiveTab('validade')}
+            emptyMessage="Nenhum produto vencido no momento."
+          />
+        </div>
+      ) : (
+        <CriticalProductsCarousel
+          title={scopeToSector ? `Rupturas e Vencidos — ${userSector}` : 'Rupturas e Vencidos'}
+          subtitle="Itens críticos que exigem ação imediata no piso de loja"
+          items={combinedItems}
+          showKindBadge
+          onSeeAll={() => setActiveTab(expiredItems.length > 0 ? 'validade' : 'estoque')}
+          onItemClick={item => setActiveTab(item.kind === 'vencido' ? 'validade' : 'estoque')}
+          emptyMessage={
+            scopeToSector
+              ? 'Nenhum produto em ruptura ou vencido no seu setor.'
+              : 'Nenhum produto em ruptura ou vencido no momento.'
+          }
+        />
+      )}
+
+      {/* GRÁFICO RECHARTS: HISTÓRICO DE RUPTURAS NOS ÚLTIMOS 7 DIAS */}
+      <RuptureHistoryChart />
 
       {/* Lista de Atenção Urgente (Vencimentos Próximos) */}
       <div
@@ -483,7 +613,11 @@ export const InicioTab: React.FC = () => {
               <AlertTriangle className="w-4 h-4 text-rose-500" />
               Lotes em Risco Imediato de Vencimento
             </h3>
-            <p className="text-[11px] text-slate-400">Itens com vencimento hoje ou inferior a 5 dias</p>
+            <p className="text-[11px] text-slate-400">
+              {scopeToSector
+                ? `Itens do setor ${userSector} com vencimento hoje ou inferior a 5 dias`
+                : 'Itens com vencimento hoje ou inferior a 5 dias'}
+            </p>
           </div>
           <button
             onClick={() => setActiveTab('validade')}

@@ -37,3 +37,25 @@
 .animate-rebaixa-blink {
   animation: rebaixaBlink 1.1s ease-in-out infinite;
 }
+
+/* Zoom animado estilo Dock na barra de navegação inferior (mouse e toque) */
+.nav-dock-item {
+  transition: transform 260ms cubic-bezier(0.34, 1.56, 0.64, 1), color 180ms ease, background-color 180ms ease;
+  transform-origin: bottom center;
+  will-change: transform;
+}
+
+@media (hover: hover) {
+  .nav-dock-item:hover {
+    transform: translateY(-6px) scale(1.22);
+  }
+}
+
+.nav-dock-item:focus-visible,
+.nav-dock-item.nav-dock-zoomed {
+  transform: translateY(-6px) scale(1.22);
+}
+
+.nav-dock-item:active {
+  transform: translateY(-4px) scale(1.26);
+}
