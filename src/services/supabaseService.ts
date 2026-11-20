@@ -1535,18 +1535,40 @@ export async function saveStoreEmployee(emp: StoreEmployee): Promise<{ success: 
         return { success: false, error: `Erro no banco de dados: ${upsertErr.message}` };
       }
 
-      // 5. Sincroniza credencial com auth.users e atualiza senha_hash
-      if (cleanEmp.senha) {
-        try {
-          const { error: syncErr } = await client.rpc('rpc_sync_user_password', {
-            p_matricula: cleanEmp.matricula,
-            p_senha: cleanEmp.senha,
-          });
-          if (syncErr) {
-            console.warn('Aviso ao sincronizar senha com auth.users:', syncErr);
-          }
-        } catch (syncErr) {
-          console.warn('Exceção ao sincronizar senha com auth.users:', syncErr);
+      // 5. No modo Preview, provisiona a conta Auth por Edge Function.
+      // A service role nunca é enviada ao navegador; a função valida o gerente
+      // autenticado antes de criar/atualizar a credencial do funcionário.
+      if (cleanEmp.senha && import.meta.env.VITE_AUTH_BRIDGE_ENABLED === 'true') {
+        const { data: sessionData, error: sessionError } = await client.auth.getSession();
+        const accessToken = sessionData.session?.access_token;
+        if (sessionError || !accessToken) {
+          return {
+            success: false,
+            error: 'O cadastro foi salvo, mas não há sessão segura para criar o acesso. Entre novamente e tente salvar o perfil.',
+          };
+        }
+
+        const config = getDbConfig();
+        const provisionResponse = await fetch(`${config.url}/functions/v1/auth-bridge`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            apikey: config.key,
+            Authorization: `Bearer ${accessToken}`,
+          },
+          body: JSON.stringify({
+            action: 'provision',
+            userId: finalId,
+            senha: cleanEmp.senha,
+            primeiroLogin: true,
+          }),
+        });
+        const provisionResult = await provisionResponse.json().catch(() => null) as { error?: string } | null;
+        if (!provisionResponse.ok) {
+          return {
+            success: false,
+            error: provisionResult?.error || 'O perfil foi salvo, mas a conta Auth não pôde ser provisionada.',
+          };
         }
       }
     } catch (err: any) {
