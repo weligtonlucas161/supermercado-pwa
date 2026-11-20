@@ -1,6 +1,7 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2.119.0";
 import { createHash } from "node:crypto";
+import CryptoJS from "npm:crypto-js@4.2.0";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -126,22 +127,78 @@ Deno.serve(async (req: Request) => {
     p_matricula: matricula,
     p_senha: senha,
   });
-  if (validationError || !validation?.success || !validation?.user?.id) {
-    return json({ error: "Matrícula ou senha incorreta." }, 401);
+
+  let storedUser: Record<string, unknown> | null = null;
+  let legacyUser: Record<string, unknown> | null = null;
+
+  if (!validationError && validation?.success && validation?.user?.id) {
+    legacyUser = validation.user as Record<string, unknown>;
+    const { data, error } = await adminClient
+      .from("usuarios")
+      .select("id, matricula, auth_user_id, loja_id, cargo, nome, setor, primeiro_login, ativo")
+      .eq("id", String(legacyUser.id))
+      .eq("ativo", true)
+      .maybeSingle();
+    if (error) return json({ error: "Não foi possível validar o cadastro." }, 503);
+    storedUser = data;
+  } else {
+    // Migração de registros antigos cuja senha ainda está cifrada com CryptoJS AES.
+    // A chave legada deve existir somente como secret da Edge Function.
+    const normalized = matricula.toLowerCase().replace(/^@/, "");
+    const candidates = Array.from(new Set([matricula, normalized, `@${normalized}`]));
+    const { data, error } = await adminClient
+      .from("usuarios")
+      .select("id, matricula, auth_user_id, loja_id, cargo, nome, setor, primeiro_login, ativo, senha")
+      .in("matricula", candidates)
+      .eq("ativo", true)
+      .limit(1)
+      .maybeSingle();
+    if (error || !data) return json({ error: "Matrícula ou senha incorreta." }, 401);
+
+    const encryptedPassword = String(data.senha || "");
+    const legacyKey = Deno.env.get("LEGACY_ENCRYPTION_KEY") || "";
+    if (!encryptedPassword.startsWith("U2FsdGVk") || !legacyKey) {
+      return json({ error: "A migração desta credencial antiga ainda não está configurada." }, 503);
+    }
+
+    let decryptedPassword = "";
+    try {
+      decryptedPassword = CryptoJS.AES.decrypt(encryptedPassword, legacyKey).toString(CryptoJS.enc.Utf8);
+    } catch {
+      decryptedPassword = "";
+    }
+    if (!decryptedPassword || decryptedPassword !== senha) {
+      return json({ error: "Matrícula ou senha incorreta." }, 401);
+    }
+
+    // Após conferir o AES no servidor, converte a credencial para bcrypt e vincula
+    // o usuário Auth. A RPC é invocada somente do servidor com service_role.
+    const { data: syncData, error: syncError } = await adminClient.rpc("rpc_sync_user_password", {
+      p_matricula: String(data.matricula),
+      p_senha: senha,
+      p_user_id: String(data.id),
+      p_is_first_login: null,
+    });
+    if (syncError || syncData?.success === false) {
+      return json({ error: "Não foi possível migrar a credencial antiga." }, 503);
+    }
+    storedUser = data;
+    legacyUser = {
+      id: data.id,
+      matricula: data.matricula,
+      nome: data.nome,
+      cargo: data.cargo,
+      setor: data.setor,
+      loja_id: data.loja_id,
+      loja_nome: "",
+      primeiro_login: data.primeiro_login ?? false,
+    };
   }
 
-  const legacyUser = validation.user as Record<string, unknown>;
-  const userId = String(legacyUser.id);
-  const { data: storedUser, error: storedUserError } = await adminClient
-    .from("usuarios")
-    .select("id, matricula, auth_user_id, loja_id, cargo, nome, ativo")
-    .eq("id", userId)
-    .eq("ativo", true)
-    .maybeSingle();
-
-  if (storedUserError || !storedUser) {
+  if (!storedUser || !legacyUser) {
     return json({ error: "Usuário não encontrado ou inativo." }, 403);
   }
+  const userId = String(storedUser.id);
 
   const email = syntheticEmail(String(storedUser.matricula), userId);
   const appMetadata = {
