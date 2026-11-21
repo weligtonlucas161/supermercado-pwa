@@ -121,6 +121,25 @@ Deno.serve(async (req: Request) => {
     return json({ error: "Matrícula ou senha inválida." }, 400);
   }
 
+  // Bloqueio progressivo persistido no banco e verificado antes de validar senha.
+  // O hash do identificador é feito no banco; nunca armazenamos matrícula em claro.
+  const lockCheck = await adminClient.rpc("auth_login_lock_check", { p_identifier: matricula });
+  if (lockCheck.error) {
+    return json({ error: "Proteção de login temporariamente indisponível. Tente novamente." }, 503);
+  }
+  const lockRow = Array.isArray(lockCheck.data) ? lockCheck.data[0] : lockCheck.data;
+  if (lockRow && lockRow.allowed === false) {
+    const seconds = Math.max(1, Number(lockRow.seconds_remaining || 1));
+    const minutes = Math.ceil(seconds / 60);
+    return json({ error: `Muitas tentativas incorretas. Acesso bloqueado; tente novamente em ${minutes} minuto(s).`, retry_after: seconds }, 429);
+  }
+
+  const recordFailedAttempt = async () => {
+    const result = await adminClient.rpc("auth_login_lock_failure", { p_identifier: matricula });
+    if (result.error) return null;
+    return Array.isArray(result.data) ? result.data[0] : result.data;
+  };
+
   // A RPC antiga verifica senha_hash/legado. O endpoint não aceita userId
   // no modo login: a identidade vem exclusivamente da matrícula validada.
   const normalizedMatricula = matricula.toLowerCase().replace(/^@/, "");
@@ -162,7 +181,15 @@ Deno.serve(async (req: Request) => {
       .eq("ativo", true)
       .limit(1)
       .maybeSingle();
-    if (error || !data) return json({ error: "Matrícula ou senha incorreta." }, 401);
+    if (error || !data) {
+      const failure = await recordFailedAttempt();
+      if (!failure) return json({ error: "Proteção de login temporariamente indisponível. Tente novamente." }, 503);
+      if (Number(failure.lock_seconds || 0) > 0) {
+        const minutes = Math.ceil(Number(failure.lock_seconds) / 60);
+        return json({ error: `Muitas tentativas incorretas. Acesso bloqueado por ${minutes} minuto(s).`, retry_after: Number(failure.lock_seconds) }, 429);
+      }
+      return json({ error: "Matrícula ou senha incorreta." }, 401);
+    }
 
     const encryptedPassword = String(data.senha || "");
     const legacyKey = Deno.env.get("LEGACY_ENCRYPTION_KEY") || "";
@@ -177,6 +204,12 @@ Deno.serve(async (req: Request) => {
       decryptedPassword = "";
     }
     if (!decryptedPassword || decryptedPassword !== senha) {
+      const failure = await recordFailedAttempt();
+      if (!failure) return json({ error: "Proteção de login temporariamente indisponível. Tente novamente." }, 503);
+      if (Number(failure.lock_seconds || 0) > 0) {
+        const minutes = Math.ceil(Number(failure.lock_seconds) / 60);
+        return json({ error: `Muitas tentativas incorretas. Acesso bloqueado por ${minutes} minuto(s).`, retry_after: Number(failure.lock_seconds) }, 429);
+      }
       return json({ error: "Matrícula ou senha incorreta." }, 401);
     }
 
@@ -207,6 +240,13 @@ Deno.serve(async (req: Request) => {
   if (!storedUser || !legacyUser) {
     return json({ error: "Usuário não encontrado ou inativo." }, 403);
   }
+
+  // Senha correta: contador e nível de bloqueio são zerados imediatamente.
+  const resetLock = await adminClient.rpc("auth_login_lock_success", { p_identifier: matricula });
+  if (resetLock.error) {
+    return json({ error: "Não foi possível concluir a validação segura. Tente novamente." }, 503);
+  }
+
   const userId = String(storedUser.id);
 
   const email = syntheticEmail(String(storedUser.matricula), userId);
