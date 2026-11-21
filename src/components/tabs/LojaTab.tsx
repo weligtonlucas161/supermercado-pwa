@@ -69,6 +69,7 @@ export const LojaTab: React.FC = () => {
   const [empNome, setEmpNome] = useState('');
   const [empSenha, setEmpSenha] = useState('');
   const [empCargo, setEmpCargo] = useState('Operador de Gôndola');
+  const [empCodigoFornecedor, setEmpCodigoFornecedor] = useState('');
   const [empSetorRestrito, setEmpSetorRestrito] = useState<string>('TODOS');
 
   // Form Cargo
@@ -111,6 +112,11 @@ export const LojaTab: React.FC = () => {
       return;
     }
 
+    if (empCargo.trim().toLowerCase() === 'promotor' && !empCodigoFornecedor.trim()) {
+      setNotice({ type: 'error', text: 'Informe o código do fornecedor para cadastrar um promotor.' });
+      return;
+    }
+
     if (isLimitReached) {
       setNotice({ 
         type: 'error', 
@@ -125,6 +131,7 @@ export const LojaTab: React.FC = () => {
       nome: empNome.trim(),
       senha: empSenha.trim(),
       cargo: empCargo,
+      codigo_fornecedor: empCargo.trim().toLowerCase() === 'promotor' ? empCodigoFornecedor.trim() : undefined,
       setor_restrito: empSetorRestrito,
       loja_id: currentLojaId,
       ativo: true,
@@ -142,6 +149,7 @@ export const LojaTab: React.FC = () => {
       setEmpMatricula('');
       setEmpNome('');
       setEmpSenha('');
+      setEmpCodigoFornecedor('');
       setEmpSetorRestrito('TODOS');
     } else {
       setNotice({ type: 'error', text: res.error || 'Erro ao cadastrar funcionário.' });
@@ -715,17 +723,37 @@ export const LojaTab: React.FC = () => {
                 </label>
                 <select
                   value={empCargo}
-                  onChange={e => setEmpCargo(e.target.value)}
+                  onChange={e => { setEmpCargo(e.target.value); if (e.target.value.trim().toLowerCase() !== 'promotor') setEmpCodigoFornecedor(''); }}
                   className="w-full p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-bold"
                 >
                   {roles.map(r => (
                     <option key={r.id} value={r.nome}>{r.nome}</option>
                   ))}
+                  <option value="Promotor">Promotor</option>
                   <option value="Operador Geral">Operador Geral</option>
                   <option value="Conferente de Auditoria">Conferente de Auditoria</option>
                   <option value="Fiscal de Prevenção">Fiscal de Prevenção</option>
                 </select>
               </div>
+
+              {empCargo.trim().toLowerCase() === 'promotor' && (
+                <div>
+                  <label htmlFor="emp-codigo-fornecedor" className="font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider text-[10px] block mb-1">
+                    Código do fornecedor *
+                  </label>
+                  <input
+                    id="emp-codigo-fornecedor"
+                    type="text"
+                    required
+                    maxLength={64}
+                    autoComplete="off"
+                    value={empCodigoFornecedor}
+                    onChange={e => setEmpCodigoFornecedor(e.target.value)}
+                    placeholder="Informe o código do fornecedor"
+                    className="w-full p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-bold"
+                  />
+                </div>
+              )}
 
               {/* PERMISSÃO POR SETOR ESPECÍFICO (Ex: Somente demandas do setor X ou Y) */}
               <div className="p-3 rounded-2xl bg-emerald-500/5 border border-emerald-500/20 space-y-2">
