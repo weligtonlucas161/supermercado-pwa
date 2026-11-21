@@ -21,7 +21,7 @@ declare
   v_hash text;
   v_until timestamptz;
 begin
-  v_hash := encode(sha256(convert_to(lower(trim(coalesce(p_identifier, ''))), 'UTF8')), 'hex');
+  v_hash := encode(sha256(convert_to(regexp_replace(lower(trim(coalesce(p_identifier, ''))), '^@', ''), 'UTF8')), 'hex');
   if v_hash = encode(sha256(convert_to('', 'UTF8')), 'hex') then
     return query select false, 1;
     return;
@@ -48,7 +48,7 @@ declare
   v_row public.auth_login_lockouts%rowtype;
   v_seconds integer := 0;
 begin
-  v_hash := encode(sha256(convert_to(lower(trim(coalesce(p_identifier, ''))), 'UTF8')), 'hex');
+  v_hash := encode(sha256(convert_to(regexp_replace(lower(trim(coalesce(p_identifier, ''))), '^@', ''), 'UTF8')), 'hex');
   if v_hash = encode(sha256(convert_to('', 'UTF8')), 'hex') then
     return query select 0, 0, null::timestamptz;
     return;
@@ -99,7 +99,7 @@ as $$
 declare
   v_hash text;
 begin
-  v_hash := encode(sha256(convert_to(lower(trim(coalesce(p_identifier, ''))), 'UTF8')), 'hex');
+  v_hash := encode(sha256(convert_to(regexp_replace(lower(trim(coalesce(p_identifier, ''))), '^@', ''), 'UTF8')), 'hex');
   if v_hash = encode(sha256(convert_to('', 'UTF8')), 'hex') then
     return false;
   end if;
