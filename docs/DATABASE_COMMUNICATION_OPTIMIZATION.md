@@ -2,7 +2,7 @@
 
 ## Alterações
 
-- Leituras do índice de produtos e do catálogo universal agora usam paginação por intervalos de 1.000 registros e ordenação estável. Isso evita truncamento no limite padrão do PostgREST e evita montar um índice incompleto em lojas com muitos produtos.
+- Leituras do índice de produtos e do catálogo universal agora usam paginação por cursor (keyset) em lotes de até 1.000 registros e ordenação estável. Isso evita truncamento no limite padrão do PostgREST e evita montar um índice incompleto em lojas com muitos produtos.
 - Falhas ao carregar páginas agora são propagadas. Antes, uma falha podia ser tratada como uma lista vazia e armazenada em cache, aumentando o risco de duplicação em importações.
 - A importação reutiliza o índice de produtos em memória dentro do TTL de 60 segundos, em vez de forçar uma leitura completa da loja em toda importação.
 - O fetch compartilhado repete apenas requisições GET/HEAD em falhas de rede ou respostas 5xx. POST/RPC não é repetido automaticamente, pois a primeira operação pode ter sido concluída mesmo que a resposta tenha se perdido; repetir uma escrita poderia duplicar efeitos.
