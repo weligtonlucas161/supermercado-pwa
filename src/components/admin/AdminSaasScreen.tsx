@@ -303,8 +303,8 @@ export const AdminSaasScreen: React.FC = () => {
     const finalCargo = profileCargo === 'Outro' ? profileCustomCargo.trim() : profileCargo;
     const targetStoreId = profileStoreId || selectedStoreForDetails?.id || stores[0]?.id || '';
 
-    if (!profileName.trim() || !profileMatricula.trim() || !targetStoreId) {
-      setFeedbackMessage({ type: 'error', text: 'Preencha o nome, a matrícula e selecione uma loja válida.' });
+    if (!profileName.trim() || !targetStoreId) {
+      setFeedbackMessage({ type: 'error', text: 'Preencha o nome e selecione uma loja válida.' });
       return;
     }
 
@@ -317,7 +317,7 @@ export const AdminSaasScreen: React.FC = () => {
 
     const empToSave: StoreEmployee = {
       id: editingEmployee ? editingEmployee.id : `usr_emp_${Date.now()}`,
-      matricula: profileMatricula.trim(),
+      matricula: editingEmployee ? profileMatricula.trim() : '',
       nome: profileName.trim(),
       senha: profilePassword.trim() || (editingEmployee?.senha || ''),
       cargo: finalCargo || 'Operador',
@@ -334,7 +334,7 @@ export const AdminSaasScreen: React.FC = () => {
       triggerScanBeep(true);
       setFeedbackMessage({ 
         type: 'success', 
-        text: `Perfil "${empToSave.nome}" (${empToSave.cargo}) salvo com sucesso na loja selecionada!` 
+        text: `Perfil "${empToSave.nome}" (${empToSave.cargo}) salvo com sucesso${res.matricula ? ` com a matrícula ${res.matricula}` : ''}!`
       });
       setIsProfileModalOpen(false);
       setEditingEmployee(null);
@@ -1741,7 +1741,7 @@ export const AdminSaasScreen: React.FC = () => {
                   />
                 </div>
 
-                <div>
+                {editingEmployee && <div>
                   <label className="font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider text-[10px] block mb-1">
                     Matrícula de Login *
                   </label>
@@ -1753,7 +1753,7 @@ export const AdminSaasScreen: React.FC = () => {
                     onChange={e => setProfileMatricula(e.target.value)}
                     className="w-full p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-mono font-bold focus:outline-none focus:ring-2 focus:ring-rose-500"
                   />
-                </div>
+                </div>}
               </div>
 
               <div>

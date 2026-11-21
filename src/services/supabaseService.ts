@@ -1377,12 +1377,58 @@ export async function fetchStoreEmployees(lojaId?: string): Promise<StoreEmploye
   return filtered;
 }
 
-export async function saveStoreEmployee(emp: StoreEmployee): Promise<{ success: boolean; error?: string }> {
+function buildLocalMatricula(nome: string): string {
+  const prefix = nome
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-zA-Z0-9]/g, '')
+    .slice(0, 5)
+    .toUpperCase() || 'USER';
+  const used = new Set(getStoredEmployees().map(employee => employee.matricula.toUpperCase()));
+
+  for (let attempt = 0; attempt < 10_000; attempt += 1) {
+    const suffix = crypto.getRandomValues(new Uint16Array(1))[0] % 10_000;
+    const matricula = `${prefix}-${suffix.toString().padStart(4, '0')}`;
+    if (!used.has(matricula)) return matricula;
+  }
+
+  throw new Error('Não foi possível gerar uma matrícula disponível.');
+}
+
+async function requestAutomaticMatricula(nome: string): Promise<string> {
+  if (client && isSupabaseConfigured()) {
+    const { data, error } = await client.rpc('rpc_gerar_matricula', { p_nome: nome });
+    if (error) throw error;
+
+    const generated = sanitizeIdentifier(data, 64).toUpperCase();
+    if (generated) return generated;
+  }
+
+  return buildLocalMatricula(nome);
+}
+
+export async function saveStoreEmployee(emp: StoreEmployee): Promise<{ success: boolean; error?: string; matricula?: string }> {
+  const cleanNome = sanitizeText(emp.nome, 120);
+  const isAutomaticMatricula = !sanitizeIdentifier(emp.matricula, 64);
+  let generatedMatricula = sanitizeIdentifier(emp.matricula, 64).toUpperCase();
+
+  if (!cleanNome) {
+    return { success: false, error: 'O nome do funcionário é obrigatório.' };
+  }
+
+  if (isAutomaticMatricula) {
+    try {
+      generatedMatricula = await requestAutomaticMatricula(cleanNome);
+    } catch (err: any) {
+      return { success: false, error: err?.message || 'Não foi possível gerar a matrícula automática.' };
+    }
+  }
+
   const cleanEmp: StoreEmployee = {
     ...emp,
     id: sanitizeIdentifier(emp.id, 64),
-    matricula: sanitizeIdentifier(emp.matricula, 64),
-    nome: sanitizeText(emp.nome, 120),
+    matricula: generatedMatricula,
+    nome: cleanNome,
     senha: typeof emp.senha === 'string' ? emp.senha.trim() : '',
     cargo: sanitizeText(emp.cargo || 'Operador', 64),
     setor_restrito: sanitizeText(emp.setor_restrito || 'TODOS', 64),
@@ -1448,17 +1494,24 @@ export async function saveStoreEmployee(emp: StoreEmployee): Promise<{ success: 
         }
       }
 
-      // 4. Salva no banco de dados Supabase
-      const { error: upsertErr } = await client.from('usuarios').upsert({
-        id: finalId,
-        matricula: cleanEmp.matricula,
-        nome: encryptedNome,
-        senha: encryptedSenha,
-        cargo: cleanEmp.cargo,
-        setor: cleanEmp.setor_restrito,
-        loja_id: cleanEmp.loja_id,
-        ativo: cleanEmp.ativo,
-      });
+      // 4. Salva no banco. Se dois cadastros sortearem a mesma matrícula ao
+      // mesmo tempo, o índice único rejeita a colisão e geramos outra sequência.
+      let upsertErr: any = null;
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        const result = await client.from('usuarios').upsert({
+          id: finalId,
+          matricula: cleanEmp.matricula,
+          nome: encryptedNome,
+          senha: encryptedSenha,
+          cargo: cleanEmp.cargo,
+          setor: cleanEmp.setor_restrito,
+          loja_id: cleanEmp.loja_id,
+          ativo: cleanEmp.ativo,
+        });
+        upsertErr = result.error;
+        if (!upsertErr || !isAutomaticMatricula || upsertErr.code !== '23505') break;
+        cleanEmp.matricula = await requestAutomaticMatricula(cleanEmp.nome);
+      }
 
       if (upsertErr) {
         console.error('Erro ao salvar funcionário no banco:', upsertErr);
@@ -1497,7 +1550,7 @@ export async function saveStoreEmployee(emp: StoreEmployee): Promise<{ success: 
     localStorage.setItem(LOCAL_STORAGE_EMPLOYEES_KEY, JSON.stringify(updated));
   }
 
-  return { success: true };
+  return { success: true, matricula: cleanEmp.matricula };
 }
 
 export async function deleteStoreEmployee(empId: string, matricula?: string): Promise<{ success: boolean; error?: string }> {
