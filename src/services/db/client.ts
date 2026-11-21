@@ -239,6 +239,9 @@ export function setCustomDbConfig(url: string, key: string): { success: boolean;
 
   try {
     const testClient = buildClient(safeUrl, cleanKey);
+    // Fecha canais ligados ao projeto anterior antes de trocar o singleton.
+    // Isso evita sockets antigos, eventos duplicados e conexões órfãs.
+    disposeRealtimeChannels();
     client = testClient;
     activeConfig = { url: safeUrl, key: cleanKey, isConfigured: true, source: 'custom' };
 
