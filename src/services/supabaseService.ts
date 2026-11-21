@@ -1665,6 +1665,65 @@ export async function fetchStockPaginatedFromSupabase(
     const PRODUCT_COLUMNS =
       'id, nome, codigo_barras, codigo_barras_secundario, plu, codigo_fornecedor, setor, departamento, quantidade, data_vencimento, loja_id, is_encrypted, ciphertext, iv, is_locked_for_edit, locked_by, locked_at, criado_em';
 
+    // Campos de produto são cifrados com IV aleatório. SQL não pode comparar
+    // codigo_fornecedor/nome cifrados com o texto informado pelo usuário.
+    // Para filtros de conteúdo, varremos em lotes e filtramos após descriptografar.
+    const needsDecryptedFiltering = Boolean(
+      params.codigoFornecedor !== undefined ||
+      (params.searchTerm && params.searchTerm.trim()) ||
+      (params.category && params.category !== 'all') ||
+      (params.department && params.department !== 'all') ||
+      params.onlyRuptures ||
+      (params.sortBy && params.sortBy !== 'default')
+    );
+    if (needsDecryptedFiltering) {
+      const matched: Product[] = [];
+      const chunkSize = 500;
+      let offset = 0;
+      const term = params.searchTerm?.trim().toLocaleLowerCase('pt-BR') || '';
+      while (true) {
+        const { data: chunk, error: chunkError } = await client.from('produtos')
+          .select(PRODUCT_COLUMNS).eq('loja_id', cleanLojaId)
+          .order('id', { ascending: true })
+          .range(offset, offset + chunkSize - 1);
+        if (chunkError) {
+          console.warn('Erro ao buscar lote de estoque cifrado:', chunkError.message);
+          return { items: [], totalCount: 0, page, pageSize, hasMore: false };
+        }
+        const rows = chunk || [];
+        for (const row of rows) {
+          const p = mapProductRow(row as Record<string, unknown>, cleanLojaId);
+          if (params.codigoFornecedor !== undefined &&
+              (!codigoFornecedor || String(p.supplierCode || '').trim() !== codigoFornecedor)) continue;
+          if (params.category && params.category !== 'all' && p.category !== params.category) continue;
+          if (params.department && params.department !== 'all') {
+            const dep = p.department || 'Outros';
+            if (params.department === 'Outros' ? dep !== 'Outros' : dep !== params.department) continue;
+          }
+          if (params.onlyRuptures && p.stock > (p.minStock ?? 10)) continue;
+          if (term && ![p.name, p.ean, p.reducedCode, p.supplierCode]
+            .some(v => String(v || '').toLocaleLowerCase('pt-BR').includes(term))) continue;
+          matched.push(p);
+        }
+        offset += rows.length;
+        if (rows.length < chunkSize) break;
+      }
+      switch (params.sortBy) {
+        case 'qtd-desc': matched.sort((a,b) => b.stock - a.stock); break;
+        case 'qtd-asc': matched.sort((a,b) => a.stock - b.stock); break;
+        case 'name-asc': matched.sort((a,b) => a.name.localeCompare(b.name, 'pt-BR')); break;
+        case 'name-desc': matched.sort((a,b) => b.name.localeCompare(a.name, 'pt-BR')); break;
+        case 'forn-asc': matched.sort((a,b) => (a.supplierCode || '').localeCompare(b.supplierCode || '', 'pt-BR')); break;
+      }
+      const from = page * pageSize;
+      return {
+        items: matched.slice(from, from + pageSize),
+        totalCount: matched.length,
+        page, pageSize,
+        hasMore: from + pageSize < matched.length,
+      };
+    }
+
     let query = client
       .from('produtos')
       .select(PRODUCT_COLUMNS, { count: 'exact' })
