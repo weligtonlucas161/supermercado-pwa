@@ -102,6 +102,7 @@ export interface StoreEmployee {
   senha?: string;
   cargo: string;
   cargo_id?: string;
+  codigo_fornecedor?: string;
   setor_restrito?: string; // 'TODOS' ou setor específico e.g. 'MERCEARIA', 'FRIOS'
   loja_id: string;
   ativo: boolean;
