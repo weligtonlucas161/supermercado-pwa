@@ -3,11 +3,10 @@
 -- increases by another 5 minutes (10, 15, 20...), until a successful login resets it.
 
 create schema if not exists private;
-revoke all on schema private from public, anon, authenticated;
 grant usage on schema private to service_role;
 
 create table if not exists private.auth_login_lockouts (
-  identifier_key text primary key,
+  identifier_key text primary key check (length(identifier_key) = 64),
   failed_attempts integer not null default 0 check (failed_attempts >= 0),
   lock_level integer not null default 0 check (lock_level >= 0),
   locked_until timestamptz,
