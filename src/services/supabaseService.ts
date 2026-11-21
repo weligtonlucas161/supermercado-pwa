@@ -871,6 +871,7 @@ export async function loginUser(matricula: string, senha: string): Promise<Login
               matricula: userData.matricula,
               nome: decryptSingleField(String(userData.nome || '')),
               cargo: mappedCargo,
+              codigo_fornecedor: mappedCargo === 'promotor' ? String(userData.codigo_fornecedor || '') : undefined,
               cargoCompleto: sanitizeText(userData.cargo || (mappedCargo === 'saas_admin' ? 'Administrador SaaS' : 'Operador de Loja'), 64),
               setor: sanitizeText(userData.setor || 'Geral', 64),
               loja_id: userData.loja_id || '',
@@ -2023,6 +2024,7 @@ export async function fetchProductsFromSupabase(lojaId?: string): Promise<Produc
 
 export interface FetchStockPaginatedParams {
   lojaId: string;
+  codigoFornecedor?: string;
   page: number; // 0-based
   pageSize?: number; // padrão 50
   searchTerm?: string;
@@ -2050,6 +2052,7 @@ export async function fetchStockPaginatedFromSupabase(
   const cleanLojaId = params.lojaId ? sanitizeIdentifier(params.lojaId, 64) : '';
   const pageSize = Math.max(1, Math.min(100, params.pageSize || 50));
   const page = Math.max(0, params.page || 0);
+  const codigoFornecedor = params.codigoFornecedor?.trim();
 
   if (!cleanLojaId) {
     return { items: [], totalCount: 0, page, pageSize, hasMore: false };
@@ -2065,6 +2068,9 @@ export async function fetchStockPaginatedFromSupabase(
           const parsed = JSON.parse(raw);
           if (Array.isArray(parsed)) {
             let filtered = parsed.filter((p: any) => (!p.loja_id || p.loja_id === cleanLojaId));
+            if (params.codigoFornecedor !== undefined) {
+              filtered = filtered.filter((p: any) => codigoFornecedor && String(p.supplierCode || p.codigo_fornecedor || '').trim() === codigoFornecedor);
+            }
             if (params.category && params.category !== 'all') {
               filtered = filtered.filter((p: any) => (p.category || p.setor) === params.category);
             }
@@ -2130,6 +2136,10 @@ export async function fetchStockPaginatedFromSupabase(
       .from('produtos')
       .select(PRODUCT_COLUMNS, { count: 'exact' })
       .eq('loja_id', cleanLojaId);
+
+    if (params.codigoFornecedor !== undefined) {
+      query = codigoFornecedor ? query.eq('codigo_fornecedor', codigoFornecedor) : query.eq('codigo_fornecedor', '__SEM_FORNECEDOR__');
+    }
 
     if (params.category && params.category !== 'all') {
       query = query.eq('setor', params.category);
