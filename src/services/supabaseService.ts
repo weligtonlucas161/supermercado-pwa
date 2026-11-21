@@ -1363,6 +1363,7 @@ export async function fetchStoreEmployees(lojaId?: string): Promise<StoreEmploye
         nome: decryptSingleField(String(u.nome || '')),
         senha: u.senha ? decryptSingleField(String(u.senha), undefined, { skipSanitize: true }) : '',
         cargo: sanitizeText(u.cargo || 'Operador', 64),
+        codigo_fornecedor: typeof u.codigo_fornecedor === 'string' ? sanitizeIdentifier(u.codigo_fornecedor, 64) : undefined,
         setor_restrito: u.setor ? sanitizeText(u.setor, 64) : 'TODOS',
         loja_id: sanitizeIdentifier(u.loja_id || cleanLojaId || '', 64),
         ativo: Boolean(u.ativo ?? true),
@@ -1385,6 +1386,7 @@ export async function saveStoreEmployee(emp: StoreEmployee): Promise<{ success: 
     nome: sanitizeText(emp.nome, 120),
     senha: typeof emp.senha === 'string' ? emp.senha.trim() : '',
     cargo: sanitizeText(emp.cargo || 'Operador', 64),
+    codigo_fornecedor: typeof emp.codigo_fornecedor === 'string' ? sanitizeIdentifier(emp.codigo_fornecedor.trim(), 64) : undefined,
     setor_restrito: sanitizeText(emp.setor_restrito || 'TODOS', 64),
     loja_id: sanitizeIdentifier(emp.loja_id, 64),
     ativo: Boolean(emp.ativo),
@@ -1396,6 +1398,10 @@ export async function saveStoreEmployee(emp: StoreEmployee): Promise<{ success: 
 
   if (!cleanEmp.loja_id) {
     return { success: false, error: 'Selecione uma loja válida para vincular o perfil.' };
+  }
+
+  if (cleanEmp.cargo.trim().toLowerCase() === 'promotor' && !cleanEmp.codigo_fornecedor) {
+    return { success: false, error: 'O código do fornecedor é obrigatório para o cargo Promotor.' };
   }
 
   const encryptedNome = encryptSingleField(cleanEmp.nome);
@@ -1455,6 +1461,7 @@ export async function saveStoreEmployee(emp: StoreEmployee): Promise<{ success: 
         nome: encryptedNome,
         senha: encryptedSenha,
         cargo: cleanEmp.cargo,
+        codigo_fornecedor: cleanEmp.cargo.trim().toLowerCase() === 'promotor' ? cleanEmp.codigo_fornecedor : null,
         setor: cleanEmp.setor_restrito,
         loja_id: cleanEmp.loja_id,
         ativo: cleanEmp.ativo,
