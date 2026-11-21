@@ -414,7 +414,7 @@ export const EstoqueTab: React.FC = () => {
   // Matrículas de promotor no formato NOME-CODIGO (ex.: PEPSI-1565)
   // permitem recuperar a marca quando o código do fornecedor muda.
   const nomeFornecedorPromotor = currentUser?.cargo === 'promotor'
-    ? (currentUser.matricula || '').replace(/[-_ ]?\\d+$/, '').replace(/[-_]+$/, '').trim()
+    ? (currentUser.matricula || '').replace(/[-_ ]?\d+$/, '').replace(/[-_]+$/, '').trim()
     : '';
   const cacheKey = `${activeLojaId}_${currentUser?.matricula || ''}_${effectiveSupplierCode ?? 'todos'}_${nomeFornecedorPromotor}_${mainTab}_${selectedCategory}_${debouncedSearchTerm.trim().toLowerCase()}_${sortBy}`;
 
