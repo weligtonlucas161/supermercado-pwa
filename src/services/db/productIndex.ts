@@ -23,6 +23,9 @@ import { upsertProductRows, upsertCatalogRows } from './productWrite';
 
 const INDEX_TTL_MS = 60_000;
 const BACKFILL_BATCH = 500;
+// O limite padrão do PostgREST pode truncar respostas grandes. Paginar evita
+// índices incompletos em lojas com milhares (ou dezenas de milhares) de itens.
+const READ_PAGE_SIZE = 1_000;
 
 /**
  * Colunas lidas para montar o índice. Inclui todas as colunas NOT NULL
@@ -92,16 +95,31 @@ export async function loadProductIndex(
   const idToHash = new Map<string, string>();
   const pendingBackfill: IndexRow[] = [];
 
-  const { data, error } = await client
-    .from('produtos')
-    .select(INDEX_COLUMNS)
-    .eq('loja_id', lojaId);
+  const rows: IndexRow[] = [];
+  let lastProductId: string | null = null;
+  for (;;) {
+    let query = client
+      .from('produtos')
+      .select(INDEX_COLUMNS)
+      .eq('loja_id', lojaId);
 
-  if (error) {
-    console.warn('[productIndex] Falha ao carregar o índice de produtos:', error.message);
+    if (lastProductId) query = query.gt('id', lastProductId);
+
+    const { data, error } = await query
+      .order('id', { ascending: true })
+      .limit(READ_PAGE_SIZE);
+
+    if (error) {
+      // Não armazenar um índice parcial/vazio: isso pode provocar duplicações
+      // em importações. O chamador recebe o erro e pode tentar novamente.
+      throw new Error(`Falha ao carregar índice de produtos (após ${lastProductId || 'início'}): ${error.message}`);
+    }
+
+    const page = (data || []) as IndexRow[];
+    rows.push(...page);
+    if (page.length < READ_PAGE_SIZE) break;
+    lastProductId = page[page.length - 1].id;
   }
-
-  const rows = (data || []) as IndexRow[];
   const legacyRows: IndexRow[] = [];
 
   for (const row of rows) {
@@ -186,20 +204,33 @@ export async function loadCatalogIndex(client: SupabaseClient): Promise<Set<stri
   }
 
   const hashes = new Set<string>();
-  const { data, error } = await client
-    .from('produtos_catalogo_universal')
-    .select('codigo_barras, nome, ean_hash');
-
-  if (error) {
-    console.warn('[productIndex] Falha ao carregar o catálogo universal:', error.message);
-    return hashes;
-  }
-
-  const rows = (data || []) as Array<{
+  const rows: Array<{
     ean_hash: string | null;
     codigo_barras: string | null;
     nome: string | null;
-  }>;
+  }> = [];
+
+  let lastCatalogCode: string | null = null;
+  for (;;) {
+    let query = client
+      .from('produtos_catalogo_universal')
+      .select('codigo_barras, nome, ean_hash');
+
+    if (lastCatalogCode) query = query.gt('codigo_barras', lastCatalogCode);
+
+    const { data, error } = await query
+      .order('codigo_barras', { ascending: true })
+      .limit(READ_PAGE_SIZE);
+
+    if (error) {
+      throw new Error(`Falha ao carregar catálogo universal (após ${lastCatalogCode || 'início'}): ${error.message}`);
+    }
+
+    const page = (data || []) as typeof rows;
+    rows.push(...page);
+    if (page.length < READ_PAGE_SIZE) break;
+    lastCatalogCode = page[page.length - 1].codigo_barras || null;
+  }
   const legacy: typeof rows = [];
 
   for (const row of rows) {

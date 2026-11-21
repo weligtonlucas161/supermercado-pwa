@@ -1739,7 +1739,7 @@ export async function uploadEncryptedProductsRealtime(
 
     // 1. Índice determinístico da loja (EAN -> id) construído a partir do
     //    `ean_hash`. Evita decifrar a tabela inteira a cada importação.
-    const index = await loadProductIndex(client, lojaId, { force: true });
+    const index = await loadProductIndex(client, lojaId);
     const catalogHashes = await loadCatalogIndex(client);
 
     const batchSize = 500;
