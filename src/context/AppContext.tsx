@@ -669,23 +669,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     if (!isSupabaseConfigured()) {
       const localScoped = loadStoredData<Product[]>(`superpwa_products_${lojaId}`, []);
-      setProducts(localScoped.filter(p => !p.loja_id || p.loja_id === lojaId));
+      setProducts(localScoped.filter(p => (!p.loja_id || p.loja_id === lojaId) && (currentUser?.cargo !== 'promotor' || (Boolean(currentUser.codigo_fornecedor) && p.supplierCode?.trim() === currentUser.codigo_fornecedor.trim()))));
       return;
     }
 
     setIsSyncingWithDatabase(true);
     try {
       const dbProducts = await fetchProductsFromSupabase(lojaId);
-      if (dbProducts !== null) {
-        if (dbProducts.length === 0) {
+      const visibleProducts = currentUser?.cargo === 'promotor'
+        ? dbProducts.filter(p => Boolean(currentUser.codigo_fornecedor) && p.supplierCode?.trim() === currentUser.codigo_fornecedor.trim())
+        : dbProducts;
+      if (visibleProducts !== null) {
+        if (visibleProducts.length === 0) {
           // Se no banco de dados a loja não possuir estoque (0 produtos), limpa o local storage e o state!
           setProducts([]);
           saveStoredData(STORAGE_KEYS.PRODUCTS, []);
           saveStoredData(`superpwa_products_${lojaId}`, []);
         } else {
-          setProducts(dbProducts);
-          saveStoredData(STORAGE_KEYS.PRODUCTS, dbProducts);
-          saveStoredData(`superpwa_products_${lojaId}`, dbProducts);
+          setProducts(visibleProducts);
+          saveStoredData(STORAGE_KEYS.PRODUCTS, visibleProducts);
+          saveStoredData(`superpwa_products_${lojaId}`, visibleProducts);
         }
         const now = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
         setLastDatabaseSyncTime(now);
@@ -695,7 +698,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } finally {
       setIsSyncingWithDatabase(false);
     }
-  }, [currentUser?.loja_id, operator.loja_id]);
+  }, [currentUser?.loja_id, currentUser?.cargo, currentUser?.codigo_fornecedor, operator.loja_id]);
 
   const refreshAuditsFromDatabase = useCallback(async () => {
     if (!isSupabaseConfigured()) {
@@ -763,6 +766,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (!rowLoja || rowLoja !== lojaId) return;
 
       const mapped = mapProductRow(event.row, lojaId);
+      if (currentUser?.cargo === 'promotor' && (!currentUser.codigo_fornecedor || mapped.supplierCode?.trim() !== currentUser.codigo_fornecedor.trim())) {
+        setProducts(prev => prev.filter(p => p.id !== mapped.id));
+        return;
+      }
       setProducts(prev => {
         const index = prev.findIndex(p => p.id === mapped.id);
         const next = index >= 0
@@ -776,7 +783,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return () => {
       unsubscribe();
     };
-  }, [isAuthenticated, refreshProductsFromDatabase, operator.loja_id, currentUser?.loja_id]);
+  }, [isAuthenticated, refreshProductsFromDatabase, operator.loja_id, currentUser?.loja_id, currentUser?.cargo, currentUser?.codigo_fornecedor]);
 
   // Background Sync when online
   useBackgroundSync({
