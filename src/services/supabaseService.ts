@@ -1558,6 +1558,7 @@ export async function fetchProductsFromSupabase(lojaId?: string): Promise<Produc
 export interface FetchStockPaginatedParams {
   lojaId: string;
   codigoFornecedor?: string;
+  nomeFornecedor?: string;
   page: number; // 0-based
   pageSize?: number; // padrão 50
   searchTerm?: string;
@@ -1586,6 +1587,7 @@ export async function fetchStockPaginatedFromSupabase(
   const pageSize = Math.max(1, Math.min(100, params.pageSize || 50));
   const page = Math.max(0, params.page || 0);
   const codigoFornecedor = params.codigoFornecedor?.trim();
+  const nomeFornecedor = params.nomeFornecedor?.trim().toLocaleLowerCase('pt-BR') || '';
 
   if (!cleanLojaId) {
     return { items: [], totalCount: 0, page, pageSize, hasMore: false };
@@ -1602,7 +1604,10 @@ export async function fetchStockPaginatedFromSupabase(
           if (Array.isArray(parsed)) {
             let filtered = parsed.filter((p: any) => (!p.loja_id || p.loja_id === cleanLojaId));
             if (params.codigoFornecedor !== undefined) {
-              filtered = filtered.filter((p: any) => codigoFornecedor && String(p.supplierCode || p.codigo_fornecedor || '').trim() === codigoFornecedor);
+              filtered = filtered.filter((p: any) =>
+                (Boolean(codigoFornecedor) && String(p.supplierCode || p.codigo_fornecedor || '').trim() === codigoFornecedor) ||
+                (Boolean(nomeFornecedor) && String(p.name || p.nome || '').toLocaleLowerCase('pt-BR').includes(nomeFornecedor))
+              );
             }
             if (params.category && params.category !== 'all') {
               filtered = filtered.filter((p: any) => (p.category || p.setor) === params.category);
@@ -1670,6 +1675,7 @@ export async function fetchStockPaginatedFromSupabase(
     // Para filtros de conteúdo, varremos em lotes e filtramos após descriptografar.
     const needsDecryptedFiltering = Boolean(
       params.codigoFornecedor !== undefined ||
+      Boolean(nomeFornecedor) ||
       (params.searchTerm && params.searchTerm.trim()) ||
       (params.category && params.category !== 'all') ||
       (params.department && params.department !== 'all') ||
@@ -1694,7 +1700,8 @@ export async function fetchStockPaginatedFromSupabase(
         for (const row of rows) {
           const p = mapProductRow(row as Record<string, unknown>, cleanLojaId);
           if (params.codigoFornecedor !== undefined &&
-              (!codigoFornecedor || String(p.supplierCode || '').trim() !== codigoFornecedor)) continue;
+              !((Boolean(codigoFornecedor) && String(p.supplierCode || '').trim() === codigoFornecedor) ||
+                (Boolean(nomeFornecedor) && String(p.name || '').toLocaleLowerCase('pt-BR').includes(nomeFornecedor)))) continue;
           if (params.category && params.category !== 'all' && p.category !== params.category) continue;
           if (params.department && params.department !== 'all') {
             const dep = p.department || 'Outros';
