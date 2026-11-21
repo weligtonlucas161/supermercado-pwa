@@ -193,7 +193,16 @@ Deno.serve(async (req: Request) => {
 
     const encryptedPassword = String(data.senha || "");
     const legacyKey = Deno.env.get("LEGACY_ENCRYPTION_KEY") || "";
-    if (!encryptedPassword.startsWith("U2FsdGVk") || !legacyKey) {
+    if (!encryptedPassword.startsWith("U2FsdGVk")) {
+      const failure = await recordFailedAttempt();
+      if (!failure) return json({ error: "Proteção de login temporariamente indisponível. Tente novamente." }, 503);
+      if (Number(failure.lock_seconds || 0) > 0) {
+        const minutes = Math.ceil(Number(failure.lock_seconds) / 60);
+        return json({ error: "Muitas tentativas incorretas. Acesso bloqueado por " + minutes + " minuto(s).", retry_after: Number(failure.lock_seconds) }, 429);
+      }
+      return json({ error: "Matrícula ou senha incorreta." }, 401);
+    }
+    if (!legacyKey) {
       return json({ error: "A migração desta credencial antiga ainda não está configurada." }, 503);
     }
 
