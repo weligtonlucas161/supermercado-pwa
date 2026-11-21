@@ -1,6 +1,6 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2.119.0";
-import { createHash } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 import CryptoJS from "npm:crypto-js@4.2.0";
 
 const corsHeaders = {
@@ -10,8 +10,13 @@ const corsHeaders = {
   "Content-Type": "application/json",
 };
 
-function json(body: Record<string, unknown>, status = 200) {
-  return new Response(JSON.stringify(body), { status, headers: corsHeaders });
+function json(body: Record<string, unknown>, status = 200, extraHeaders: Record<string, string> = {}) {
+  return new Response(JSON.stringify(body), { status, headers: { ...corsHeaders, ...extraHeaders } });
+}
+
+function lockoutIdentifier(matricula: string, secret: string): string {
+  const normalized = matricula.toLowerCase().replace(/^@/, "").trim();
+  return createHmac("sha256", secret).update(`login:${normalized}`).digest("hex");
 }
 
 function syntheticEmail(matricula: string, userId: string): string {
@@ -121,9 +126,14 @@ Deno.serve(async (req: Request) => {
     return json({ error: "Matrícula ou senha inválida." }, 400);
   }
 
-  // Bloqueio progressivo persistido no banco e verificado antes de validar senha.
-  // O hash do identificador é feito no banco; nunca armazenamos matrícula em claro.
-  const lockCheck = await adminClient.rpc("auth_login_lock_check", { p_identifier: matricula });
+  // Bloqueio progressivo persistido no banco. A matrícula nunca é armazenada:
+  // usamos HMAC-SHA256 com segredo exclusivo da Edge Function.
+  const lockoutSecret = Deno.env.get("AUTH_LOCKOUT_SECRET") || "";
+  if (lockoutSecret.length < 32) {
+    return json({ error: "Proteção de login não configurada. Tente novamente mais tarde." }, 503);
+  }
+  const lockoutKey = lockoutIdentifier(matricula, lockoutSecret);
+  const lockCheck = await adminClient.rpc("auth_login_lock_check", { p_identifier: lockoutKey });
   if (lockCheck.error) {
     return json({ error: "Proteção de login temporariamente indisponível. Tente novamente." }, 503);
   }
@@ -131,11 +141,11 @@ Deno.serve(async (req: Request) => {
   if (lockRow && lockRow.allowed === false) {
     const seconds = Math.max(1, Number(lockRow.seconds_remaining || 1));
     const minutes = Math.ceil(seconds / 60);
-    return json({ error: `Muitas tentativas incorretas. Acesso bloqueado; tente novamente em ${minutes} minuto(s).`, retry_after: seconds }, 429);
+    return json({ error: `Muitas tentativas incorretas. Acesso bloqueado; tente novamente em ${minutes} minuto(s).`, retry_after: seconds }, 429, { "Retry-After": String(seconds) });
   }
 
   const recordFailedAttempt = async () => {
-    const result = await adminClient.rpc("auth_login_lock_failure", { p_identifier: matricula });
+    const result = await adminClient.rpc("auth_login_lock_failure", { p_identifier: lockoutKey });
     if (result.error) return null;
     return Array.isArray(result.data) ? result.data[0] : result.data;
   };
@@ -169,6 +179,9 @@ Deno.serve(async (req: Request) => {
       .maybeSingle();
     if (error) return json({ error: "Não foi possível validar o cadastro." }, 503);
     storedUser = data;
+  } else if (validationError) {
+    // Erro de infraestrutura na RPC não conta como tentativa de senha inválida.
+    return json({ error: "Não foi possível validar a credencial agora. Tente novamente." }, 503);
   } else {
     // Migração de registros antigos cuja senha ainda está cifrada com CryptoJS AES.
     // A chave legada deve existir somente como secret da Edge Function.
@@ -187,7 +200,7 @@ Deno.serve(async (req: Request) => {
       if (!failure) return json({ error: "Proteção de login temporariamente indisponível. Tente novamente." }, 503);
       if (Number(failure.lock_seconds || 0) > 0) {
         const minutes = Math.ceil(Number(failure.lock_seconds) / 60);
-        return json({ error: `Muitas tentativas incorretas. Acesso bloqueado por ${minutes} minuto(s).`, retry_after: Number(failure.lock_seconds) }, 429);
+        return json({ error: `Muitas tentativas incorretas. Acesso bloqueado por ${minutes} minuto(s).`, retry_after: Number(failure.lock_seconds) }, 429, { "Retry-After": String(Number(failure.lock_seconds)) });
       }
       return json({ error: "Matrícula ou senha incorreta." }, 401);
     }
@@ -199,7 +212,7 @@ Deno.serve(async (req: Request) => {
       if (!failure) return json({ error: "Proteção de login temporariamente indisponível. Tente novamente." }, 503);
       if (Number(failure.lock_seconds || 0) > 0) {
         const minutes = Math.ceil(Number(failure.lock_seconds) / 60);
-        return json({ error: "Muitas tentativas incorretas. Acesso bloqueado por " + minutes + " minuto(s).", retry_after: Number(failure.lock_seconds) }, 429);
+        return json({ error: "Muitas tentativas incorretas. Acesso bloqueado por " + minutes + " minuto(s).", retry_after: Number(failure.lock_seconds) }, 429, { "Retry-After": String(Number(failure.lock_seconds)) });
       }
       return json({ error: "Matrícula ou senha incorreta." }, 401);
     }
@@ -252,7 +265,7 @@ Deno.serve(async (req: Request) => {
   }
 
   // Senha correta: contador e nível de bloqueio são zerados imediatamente.
-  const resetLock = await adminClient.rpc("auth_login_lock_success", { p_identifier: matricula });
+  const resetLock = await adminClient.rpc("auth_login_lock_success", { p_identifier: lockoutKey });
   if (resetLock.error) {
     return json({ error: "Não foi possível concluir a validação segura. Tente novamente." }, 503);
   }
