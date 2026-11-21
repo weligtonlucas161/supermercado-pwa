@@ -387,7 +387,31 @@ export const EstoqueTab: React.FC = () => {
 
   const activeLojaId = currentUser?.loja_id || operator?.loja_id || '';
   const codigoFornecedorPromotor = currentUser?.cargo === 'promotor' ? (currentUser.codigo_fornecedor?.trim() || '') : undefined;
-  const cacheKey = `${activeLojaId}_${currentUser?.matricula || ''}_${codigoFornecedorPromotor ?? 'todos'}_${mainTab}_${selectedCategory}_${debouncedSearchTerm.trim().toLowerCase()}_${sortBy}`;
+  // Perfil de promotor: código vinculado à conta, sem digitação manual.
+  // O cadastro no banco é a fonte de verdade caso a sessão local esteja desatualizada.
+  const [supplierCodeFromAccount, setSupplierCodeFromAccount] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    setSupplierCodeFromAccount(null);
+    if (currentUser?.cargo !== 'promotor') return;
+    import('../../services/db/client').then(async ({ getDbClient }) => {
+      const db = getDbClient();
+      if (!db) return;
+      const { data: identity } = await db.auth.getUser();
+      if (!identity.user || cancelled) return;
+      const { data: account, error } = await db.from('usuarios')
+        .select('codigo_fornecedor,loja_id,ativo')
+        .eq('auth_user_id', identity.user.id).maybeSingle();
+      if (!cancelled && !error && account?.ativo && account.loja_id === activeLojaId) {
+        setSupplierCodeFromAccount(String(account.codigo_fornecedor || '').trim());
+      }
+    }).catch(error => console.warn('Falha ao recuperar fornecedor do promotor:', error));
+    return () => { cancelled = true; };
+  }, [currentUser?.cargo, currentUser?.id, activeLojaId]);
+  const effectiveSupplierCode = currentUser?.cargo === 'promotor'
+    ? (supplierCodeFromAccount ?? codigoFornecedorPromotor ?? '')
+    : undefined;
+  const cacheKey = `${activeLojaId}_${currentUser?.matricula || ''}_${effectiveSupplierCode ?? 'todos'}_${mainTab}_${selectedCategory}_${debouncedSearchTerm.trim().toLowerCase()}_${sortBy}`;
 
   // 1. Produtos em Ruptura Iminente (Estoque <= Mínimo ou Zerado)
   const ruptureProducts = products.filter(p => p.stock <= p.minStock || p.stock === 0);
@@ -402,7 +426,7 @@ export const EstoqueTab: React.FC = () => {
     if (!forceRefresh) {
       // Tenta recuperar do cache criptografado (expira em 4h automaticamente)
       const cached = await getEncryptedCache<{ items: Product[]; totalCount: number; hasMore: boolean; page: number }>(cacheKey);
-      if (cached && cached.data && Array.isArray(cached.data.items) && (codigoFornecedorPromotor === undefined || cached.data.items.every(p => Boolean(codigoFornecedorPromotor) && p.supplierCode?.trim() === codigoFornecedorPromotor))) {
+      if (cached && cached.data && Array.isArray(cached.data.items) && (effectiveSupplierCode === undefined || cached.data.items.every(p => Boolean(effectiveSupplierCode) && p.supplierCode?.trim() === effectiveSupplierCode))) {
         setStockItems(cached.data.items);
         setTotalCount(cached.data.totalCount);
         setHasMore(cached.data.hasMore);
@@ -420,7 +444,7 @@ export const EstoqueTab: React.FC = () => {
     try {
       const res = await fetchStockPaginatedFromSupabase({
         lojaId: activeLojaId,
-        codigoFornecedor: codigoFornecedorPromotor,
+        codigoFornecedor: effectiveSupplierCode,
         page: 0,
         pageSize: 50,
         searchTerm: debouncedSearchTerm,
@@ -448,7 +472,7 @@ export const EstoqueTab: React.FC = () => {
     } finally {
       setIsLoadingInitial(false);
     }
-  }, [activeLojaId, cacheKey, debouncedSearchTerm, selectedCategory, sortBy, mainTab, codigoFornecedorPromotor]);
+  }, [activeLojaId, cacheKey, debouncedSearchTerm, selectedCategory, sortBy, mainTab, effectiveSupplierCode]);
 
   useEffect(() => {
     loadInitialData();
@@ -467,7 +491,7 @@ export const EstoqueTab: React.FC = () => {
       const [res] = await Promise.all([
         fetchStockPaginatedFromSupabase({
           lojaId: activeLojaId,
-          codigoFornecedor: codigoFornecedorPromotor,
+          codigoFornecedor: effectiveSupplierCode,
           page: nextPage,
           pageSize: 50,
           searchTerm: debouncedSearchTerm,
@@ -502,7 +526,7 @@ export const EstoqueTab: React.FC = () => {
     } finally {
       setIsLoadingMore(false);
     }
-  }, [isLoadingMore, isLoadingInitial, hasMore, activeLojaId, page, debouncedSearchTerm, selectedCategory, sortBy, mainTab, cacheKey, codigoFornecedorPromotor]);
+  }, [isLoadingMore, isLoadingInitial, hasMore, activeLojaId, page, debouncedSearchTerm, selectedCategory, sortBy, mainTab, cacheKey, effectiveSupplierCode]);
 
   // Observer do elemento sentinela no fim da lista
   const observerTargetRef = useRef<HTMLDivElement | null>(null);
