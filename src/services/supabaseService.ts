@@ -137,142 +137,12 @@ export function getStoredEmployees(): StoreEmployee[] {
   if (typeof window === 'undefined') return [];
   try {
     const raw = localStorage.getItem(LOCAL_STORAGE_EMPLOYEES_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed) && parsed.length > 0) {
-        let changed = false;
-
-        const hasOperador = parsed.some(
-          (e: any) => typeof e?.matricula === 'string' && e.matricula.toLowerCase() === 'operador'
-        );
-        if (!hasOperador) {
-          parsed.push({
-            id: 'emp-operador',
-            matricula: 'operador',
-            nome: encryptSingleField('Operador de Loja'),
-            cargo: 'Operador de Loja',
-            setor_restrito: 'TODOS',
-            loja_id: 'loja-01',
-            ativo: true,
-            senha: encryptSingleField('operador', undefined, { skipSanitize: true }),
-            primeiro_login: false,
-          });
-          changed = true;
-        }
-
-        const hasAdmin = parsed.some(
-          (e: any) => typeof e?.matricula === 'string' && e.matricula.toLowerCase() === 'admin'
-        );
-        if (!hasAdmin) {
-          parsed.push({
-            id: 'emp-admin',
-            matricula: 'admin',
-            nome: encryptSingleField('Administrador'),
-            cargo: 'Gerente Geral',
-            setor_restrito: 'TODOS',
-            loja_id: 'loja-01',
-            ativo: true,
-            senha: encryptSingleField('admin', undefined, { skipSanitize: true }),
-            primeiro_login: false,
-          });
-          changed = true;
-        }
-
-        const saasIdx = parsed.findIndex(
-          (e: any) => typeof e?.matricula === 'string' && (
-            e.matricula.toLowerCase() === '@200309' || 
-            e.matricula.toLowerCase() === '200309' || 
-            e.cargo === 'saas_admin'
-          )
-        );
-        if (saasIdx === -1) {
-          parsed.push({
-            id: 'emp-saas',
-            matricula: '@200309',
-            nome: encryptSingleField('Admin SaaS'),
-            cargo: 'saas_admin',
-            setor_restrito: 'TODOS',
-            loja_id: 'loja-01',
-            ativo: true,
-            senha: encryptSingleField('2003@09', undefined, { skipSanitize: true }),
-            primeiro_login: false,
-          });
-          changed = true;
-        } else {
-          const saasEmp = parsed[saasIdx];
-          const saasPass = decryptSingleField(saasEmp.senha, undefined, { skipSanitize: true });
-          if (!saasPass || saasEmp.matricula !== '@200309' || !saasEmp.ativo || saasEmp.cargo !== 'saas_admin') {
-            parsed[saasIdx] = {
-              ...saasEmp,
-              matricula: '@200309',
-              cargo: 'saas_admin',
-              ativo: true,
-              senha: encryptSingleField('2003@09', undefined, { skipSanitize: true }),
-              primeiro_login: false,
-            };
-            changed = true;
-          }
-        }
-
-        if (changed) {
-          try {
-            localStorage.setItem(LOCAL_STORAGE_EMPLOYEES_KEY, JSON.stringify(parsed));
-          } catch {
-            // ignore
-          }
-        }
-        return parsed;
-      }
-    }
-  } catch (e) {
-    console.warn('Erro ao ler funcionários locais:', e);
+    const parsed = raw ? JSON.parse(raw) : [];
+    // O cache é apenas informativo: nunca autenticar por senhas armazenadas nele.
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
   }
-
-  const defaultEmployees: StoreEmployee[] = [
-    {
-      id: 'emp-operador',
-      matricula: 'operador',
-      nome: encryptSingleField('Operador de Loja'),
-      cargo: 'Operador de Loja',
-      setor_restrito: 'TODOS',
-      loja_id: 'loja-01',
-      ativo: true,
-      senha: encryptSingleField('operador', undefined, { skipSanitize: true }),
-      primeiro_login: false,
-    },
-    {
-      id: 'emp-admin',
-      matricula: 'admin',
-      nome: encryptSingleField('Administrador'),
-      cargo: 'Gerente Geral',
-      setor_restrito: 'TODOS',
-      loja_id: 'loja-01',
-      ativo: true,
-      senha: encryptSingleField('admin', undefined, { skipSanitize: true }),
-      primeiro_login: false,
-    },
-    {
-      id: 'emp-saas',
-      matricula: '@200309',
-      nome: encryptSingleField('Admin SaaS'),
-      cargo: 'saas_admin',
-      setor_restrito: 'TODOS',
-      loja_id: 'loja-01',
-      ativo: true,
-      senha: encryptSingleField('2003@09', undefined, { skipSanitize: true }),
-      primeiro_login: false,
-    },
-  ];
-
-  if (typeof window !== 'undefined') {
-    try {
-      localStorage.setItem(LOCAL_STORAGE_EMPLOYEES_KEY, JSON.stringify(defaultEmployees));
-    } catch {
-      // ignore
-    }
-  }
-
-  return defaultEmployees;
 }
 
 // Obter cargos da loja
@@ -303,114 +173,25 @@ export async function changeUserPassword(
   matricula: string,
   newPassword: string
 ): Promise<{ success: boolean; message?: string }> {
-  const cleanMatricula = sanitizeIdentifier(matricula, 64);
-  const cleanPassword = typeof newPassword === 'string' ? newPassword.trim() : '';
-
-  if (!cleanMatricula) {
-    return { success: false, message: 'Matrícula inválida.' };
+  if (!client || !isSupabaseConfigured() || newPassword.length < 12 || newPassword.length > 128) {
+    return { success: false, message: 'Conexão necessária e senha de 12 a 128 caracteres.' };
   }
-  if (cleanPassword.length < 7 || cleanPassword.length > 128) {
-    return { success: false, message: 'A nova senha deve ter entre 7 e 128 caracteres.' };
+  const { data: identity, error: identityError } = await client.auth.getUser();
+  if (identityError || !identity.user) {
+    return { success: false, message: 'Entre na sua conta para alterar a senha.' };
   }
-
-  const encryptedPassword = encryptSingleField(cleanPassword, undefined, { skipSanitize: true });
-
-  // Funcionários e Gerentes de Loja
-  const emps = getStoredEmployees();
-  const normCleanMat = cleanMatricula.toLowerCase().replace(/^@/, '');
-  const idx = emps.findIndex(e => {
-    const normEmpMat = (e.matricula || '').toLowerCase().replace(/^@/, '');
-    return e.matricula.toLowerCase() === cleanMatricula.toLowerCase() || normEmpMat === normCleanMat;
-  });
-
-  if (idx >= 0) {
-    emps[idx].senha = encryptedPassword;
-    emps[idx].primeiro_login = false;
-    if (typeof window !== 'undefined') {
-      localStorage.setItem(LOCAL_STORAGE_EMPLOYEES_KEY, JSON.stringify(emps));
-    }
-
-    // Sincroniza também no Supabase se cliente estiver ativo.
-    // O PostgrestBuilder NUNCA rejeita: o erro vem dentro do valor resolvido.
-    if (client) {
-      const effectiveMatricula = (normCleanMat === '200309') ? '@200309' : emps[idx].matricula;
-      const { error } = await client.rpc('rpc_sync_user_password', {
-        p_matricula: effectiveMatricula,
-        p_senha: cleanPassword,
-      });
-      if (error) {
-        console.warn('Erro ao sincronizar senha no Supabase:', error.message);
-      }
-    }
-
-    return { success: true, message: 'Senha alterada com sucesso!' };
+  const { data: employee, error: employeeError } = await client.from('usuarios')
+    .select('matricula').eq('auth_user_id', identity.user.id).eq('ativo', true).maybeSingle();
+  if (employeeError || !employee ||
+      String(employee.matricula).toLowerCase().replace(/^@/, '') !== matricula.trim().toLowerCase().replace(/^@/, '')) {
+    return { success: false, message: 'Não é permitido alterar a senha de outra conta.' };
   }
-
-  // 3. FALLBACK: usuário existe apenas no Supabase (criado em outro dispositivo).
-  // A RPC `rpc_sync_user_password` valida a existência do usuário e atualiza auth.users e usuarios
-  if (client && isSupabaseConfigured()) {
-    try {
-      const { data: remoteUser, error: findError } = await client
-        .from('usuarios')
-        .select('id, matricula, nome, cargo, setor, loja_id, ativo')
-        .eq('matricula', cleanMatricula)
-        .maybeSingle();
-
-      if (!findError && remoteUser) {
-        const { data: rpcData, error: rpcError } = await client.rpc('rpc_sync_user_password', {
-          p_matricula: cleanMatricula,
-          p_senha: cleanPassword,
-        });
-
-        if (rpcError) {
-          console.warn('Erro ao alterar senha no servidor:', rpcError.message);
-          return {
-            success: false,
-            message: 'Não foi possível alterar a senha no servidor. Tente novamente com internet.',
-          };
-        }
-
-        const rpcResult = rpcData as { success?: boolean; message?: string } | null;
-        if (rpcResult && rpcResult.success === false) {
-          return {
-            success: false,
-            message: rpcResult.message || 'Não foi possível alterar a senha no servidor.',
-          };
-        }
-
-        // Atualiza o cache local para que os próximos acessos funcionem offline.
-        const cached = emps.filter(
-          e => e.matricula.toLowerCase() !== cleanMatricula.toLowerCase()
-        );
-        cached.unshift({
-          id: String(remoteUser.id),
-          matricula: String(remoteUser.matricula),
-          nome: decryptSingleField(String(remoteUser.nome || '')),
-          senha: encryptedPassword,
-          cargo: String(remoteUser.cargo || 'Operador'),
-          setor_restrito: remoteUser.setor ? String(remoteUser.setor) : 'TODOS',
-          loja_id: String(remoteUser.loja_id || ''),
-          ativo: Boolean(remoteUser.ativo ?? true),
-          primeiro_login: false,
-          created_at: new Date().toISOString(),
-        });
-        if (typeof window !== 'undefined') {
-          localStorage.setItem(LOCAL_STORAGE_EMPLOYEES_KEY, JSON.stringify(cached));
-        }
-
-        return { success: true, message: 'Senha alterada com sucesso!' };
-      }
-    } catch (err) {
-      console.warn('Erro ao alterar senha no Supabase:', err);
-    }
-  }
-
-  return { success: false, message: 'Usuário não encontrado para alteração de senha.' };
+  const { error } = await client.auth.updateUser({ password: newPassword });
+  if (error) return { success: false, message: 'Não foi possível atualizar a senha no Supabase Auth.' };
+  await client.from('usuarios').update({ primeiro_login: false }).eq('auth_user_id', identity.user.id);
+  return { success: true, message: 'Senha alterada com sucesso!' };
 }
 
-/**
- * Validação de Segurança Ativa: Verifica se o usuário ainda existe e está ativo no servidor
- */
 export function verifyUserStillActive(matricula: string, lojaId?: string): { active: boolean; companyName?: string } {
   const cleanMatricula = sanitizeIdentifier(matricula, 64);
   if (!cleanMatricula) return { active: false, companyName: 'Sua Loja' };
@@ -610,291 +391,55 @@ export function subscribeToStoreDeletionRealtime(
  */
 export async function loginUser(matricula: string, senha: string): Promise<LoginResult> {
   const cleanMatricula = sanitizeIdentifier(matricula, 64);
-  const cleanSenha = typeof senha === 'string' ? senha.trim() : '';
-
-  if (!cleanMatricula || !cleanSenha) {
-    return { success: false, message: 'Matrícula ou senha inválida.' };
+  if (!cleanMatricula || !senha || !client || !isSupabaseConfigured()) {
+    return { success: false, message: 'Informe matrícula e senha. É necessária conexão com o servidor.' };
   }
-
-  // Normalização para suportar variações com ou sem '@' (Admin SaaS)
-  const normInput = cleanMatricula.toLowerCase().replace(/^@/, '');
-  const isSaasMatricula = normInput === '200309' || cleanMatricula === '111111';
-  const effectiveMatricula = (normInput === '200309') ? '@200309' : cleanMatricula;
-
-  // 1. Checagem em funcionários/gerentes cadastrados localmente (offline)
-  const localEmployees = getStoredEmployees();
-  const matchedEmp = localEmployees.find(e => {
-    const normEmpMat = (e.matricula || '').toLowerCase().replace(/^@/, '');
-    const matMatch =
-      e.matricula.toLowerCase() === cleanMatricula.toLowerCase() ||
-      normEmpMat === normInput;
-    if (!matMatch || !e.senha) return false;
-    const decryptedPass = decryptSingleField(e.senha, undefined, { skipSanitize: true });
-    return decryptedPass === cleanSenha;
-  });
-
-  if (matchedEmp) {
-    if (!matchedEmp.ativo) {
-      return { success: false, message: 'Usuário inativo. Contate o gerente da sua loja.' };
+  try {
+    // O resolvedor só retorna o endereço de contas ativas já provisionadas.
+    const { data: email, error: resolveError } = await client.rpc('resolve_login_email', {
+      p_matricula: cleanMatricula,
+    });
+    if (resolveError || typeof email !== 'string' || !email) {
+      return { success: false, message: 'Matrícula ou senha incorreta.' };
     }
-    const isSaas = matchedEmp.cargo === 'saas_admin' || matchedEmp.cargo.toLowerCase().includes('saas') || isSaasMatricula;
-    const isGerente = !isSaas && (matchedEmp.cargo.toLowerCase().includes('gerente') || matchedEmp.cargo.toLowerCase().includes('admin'));
-    const mappedCargo = isSaas ? 'saas_admin' : isGerente ? 'gerente' : matchedEmp.cargo.trim().toLowerCase() === 'promotor' ? 'promotor' : 'operador';
-    const stores = getStoredStores();
-    const matchedStore = stores.find(s => s.id === matchedEmp.loja_id);
-
-    // Se o cliente Supabase estiver ativo, garante autenticação no Supabase Auth para emitir JWT com loja_id
-    if (client && isSupabaseConfigured()) {
-      const authEmail = `${normInput}@superpwa.app`;
-      try {
-        const { error: authErr } = await client.auth.signInWithPassword({
-          email: authEmail,
-          password: cleanSenha,
-        });
-
-        if (authErr) {
-          // Auto-repara a senha em auth.users e usuarios.senha_hash caso tenha havido descompasso de migração
-          try {
-            await client.rpc('rpc_sync_user_password', {
-              p_matricula: effectiveMatricula,
-              p_senha: cleanSenha,
-            });
-            await client.auth.signInWithPassword({
-              email: authEmail,
-              password: cleanSenha,
-            });
-          } catch (syncErr) {
-            console.warn('Sincronização de credencial em auth.users:', syncErr);
-          }
-        }
-      } catch (err) {
-        console.warn('Aviso de conexão Supabase Auth no login local:', err);
-      }
+    const { data: authData, error: authError } = await client.auth.signInWithPassword({
+      email, password: senha,
+    });
+    if (authError || !authData.session || !authData.user) {
+      return { success: false, message: 'Matrícula ou senha incorreta.' };
     }
-
+    const { data: userData, error: userError } = await client.from('usuarios')
+      .select('id,matricula,nome,cargo,setor,loja_id,ativo,primeiro_login,codigo_fornecedor,auth_user_id')
+      .eq('auth_user_id', authData.user.id).eq('ativo', true).maybeSingle();
+    if (userError || !userData ||
+        String(userData.matricula).toLowerCase().replace(/^@/, '') !== cleanMatricula.toLowerCase().replace(/^@/, '')) {
+      await client.auth.signOut();
+      return { success: false, message: 'Acesso não autorizado para esta matrícula.' };
+    }
+    const dbCargo = String(userData.cargo || 'operador').toLowerCase();
+    const mappedCargo = dbCargo.includes('saas') ? 'saas_admin' :
+      dbCargo.includes('gerente') ? 'gerente' :
+      dbCargo.trim() === 'promotor' ? 'promotor' : 'operador';
     return {
       success: true,
-      token: 'tok_emp_' + matchedEmp.id,
+      token: authData.session.access_token,
       user: {
-        id: matchedEmp.id,
-        matricula: matchedEmp.matricula,
-        nome: decryptSingleField(matchedEmp.nome),
+        id: String(userData.id),
+        matricula: String(userData.matricula),
+        nome: decryptSingleField(String(userData.nome || '')),
         cargo: mappedCargo,
-        codigo_fornecedor: mappedCargo === 'promotor' ? matchedEmp.codigo_fornecedor : undefined,
-        cargoCompleto: sanitizeText(matchedEmp.cargo || (isSaas ? 'Administrador SaaS' : 'Operador de Loja'), 64),
-        setor: matchedEmp.setor_restrito === 'TODOS' ? 'Geral' : sanitizeText(matchedEmp.setor_restrito || 'Geral', 64),
-        loja_id: isSaas ? (matchedEmp.loja_id || 'loja-01') : matchedEmp.loja_id,
-        loja_nome: matchedStore ? matchedStore.nome_loja : (isSaas ? 'Servidor Central SaaS' : ''),
-        primeiro_login: matchedEmp.primeiro_login ?? false,
+        codigo_fornecedor: mappedCargo === 'promotor' ? String(userData.codigo_fornecedor || '') : undefined,
+        cargoCompleto: sanitizeText(userData.cargo || 'Operador de Loja', 64),
+        setor: sanitizeText(userData.setor || 'Geral', 64),
+        loja_id: String(userData.loja_id || ''),
+        loja_nome: mappedCargo === 'saas_admin' ? 'Servidor Central SaaS' : '',
+        primeiro_login: Boolean(userData.primeiro_login),
       },
     };
+  } catch (error) {
+    console.warn('Falha ao autenticar no Supabase Auth:', error);
+    return { success: false, message: 'Não foi possível autenticar. Verifique a conexão.' };
   }
-
-  // Fallback direto de segurança para credenciais iniciais do banco local
-  if (cleanMatricula.toLowerCase() === 'operador' && (cleanSenha === 'operador' || cleanSenha === '123456')) {
-    return {
-      success: true,
-      token: 'tok_operador_local',
-      user: {
-        id: 'emp-operador',
-        matricula: 'operador',
-        nome: 'Operador de Loja',
-        cargo: 'operador',
-        cargoCompleto: 'Operador de Loja',
-        setor: 'Geral',
-        loja_id: 'loja-01',
-        loja_nome: 'Minha Loja',
-        primeiro_login: false,
-      },
-    };
-  }
-
-  if (cleanMatricula.toLowerCase() === 'admin' && cleanSenha === 'admin') {
-    return {
-      success: true,
-      token: 'tok_admin_local',
-      user: {
-        id: 'emp-admin',
-        matricula: 'admin',
-        nome: 'Administrador',
-        cargo: 'gerente',
-        cargoCompleto: 'Gerente Geral',
-        setor: 'Geral',
-        loja_id: 'loja-01',
-        loja_nome: 'Minha Loja',
-        primeiro_login: false,
-      },
-    };
-  }
-
-  // Fallback Admin SaaS Master (@200309 ou 200309 com 2003@09)
-  if ((cleanMatricula === '@200309' || normInput === '200309') && cleanSenha === '2003@09') {
-    if (client && isSupabaseConfigured()) {
-      try {
-        await client.auth.signInWithPassword({
-          email: '200309@superpwa.app',
-          password: cleanSenha,
-        });
-      } catch (err) {
-        console.warn('Conexão Supabase Auth no fallback SaaS:', err);
-      }
-    }
-
-    return {
-      success: true,
-      token: 'tok_saas_local',
-      user: {
-        id: 'emp-saas',
-        matricula: '@200309',
-        nome: 'Admin SaaS',
-        cargo: 'saas_admin',
-        cargoCompleto: 'Administrador SaaS',
-        setor: 'Geral',
-        loja_id: 'loja-01',
-        loja_nome: 'Servidor Central SaaS',
-        primeiro_login: false,
-      },
-    };
-  }
-
-  // Fallback Admin SaaS Secundário (111111 com admin123)
-  if (cleanMatricula === '111111' && cleanSenha === 'admin123') {
-    if (client && isSupabaseConfigured()) {
-      try {
-        await client.auth.signInWithPassword({
-          email: '111111@superpwa.app',
-          password: cleanSenha,
-        });
-      } catch (err) {
-        console.warn('Conexão Supabase Auth no fallback SaaS secundário:', err);
-      }
-    }
-
-    return {
-      success: true,
-      token: 'tok_saas_local_sec',
-      user: {
-        id: 'emp-saas-sec',
-        matricula: '111111',
-        nome: 'Admin SaaS Secundário',
-        cargo: 'saas_admin',
-        cargoCompleto: 'Administrador SaaS',
-        setor: 'Geral',
-        loja_id: 'loja-01',
-        loja_nome: 'Servidor Central SaaS',
-        primeiro_login: false,
-      },
-    };
-  }
-
-  // 3. Se o Supabase estiver configurado, autentica no Supabase Auth (para emitir JWT com loja_id) e valida na RPC
-  if (client) {
-    try {
-      const authEmail = `${normInput}@superpwa.app`;
-      const { error: authErr } = await client.auth.signInWithPassword({
-        email: authEmail,
-        password: cleanSenha,
-      });
-
-      let rpcRes = await client.rpc('rpc_login_usuario', {
-        p_matricula: effectiveMatricula,
-        p_senha: cleanSenha,
-      });
-
-      if ((rpcRes.error || !rpcRes.data?.success) && effectiveMatricula !== cleanMatricula) {
-        rpcRes = await client.rpc('rpc_login_usuario', {
-          p_matricula: cleanMatricula,
-          p_senha: cleanSenha,
-        });
-      }
-
-      const { data, error } = rpcRes;
-
-      if (!error && data && data.success && data.user) {
-        if (authErr) {
-          try {
-            await client.rpc('rpc_sync_user_password', {
-              p_matricula: effectiveMatricula,
-              p_senha: cleanSenha,
-            });
-            await client.auth.signInWithPassword({
-              email: authEmail,
-              password: cleanSenha,
-            });
-          } catch (syncErr) {
-            console.warn('Erro ao sincronizar senha no Supabase Auth:', syncErr);
-          }
-        }
-
-        const dbCargo = String(data.user.cargo || 'operador').toLowerCase();
-        const mappedCargo = (dbCargo.includes('saas') || isSaasMatricula) ? 'saas_admin' : dbCargo.includes('gerente') ? 'gerente' : dbCargo.trim() === 'promotor' ? 'promotor' : 'operador';
-
-        return {
-          success: true,
-          token: data.token,
-          user: {
-            id: data.user.id,
-            matricula: data.user.matricula,
-            nome: decryptSingleField(String(data.user.nome || '')),
-            cargo: mappedCargo,
-            codigo_fornecedor: mappedCargo === 'promotor' ? String(data.user.codigo_fornecedor || '') : undefined,
-            cargoCompleto: sanitizeText(data.user.cargo || (mappedCargo === 'saas_admin' ? 'Administrador SaaS' : 'Operador de Loja'), 64),
-            setor: sanitizeText(data.user.setor || 'Geral', 64),
-            loja_id: data.user.loja_id || '',
-            loja_nome: sanitizeText(data.user.loja_nome || (mappedCargo === 'saas_admin' ? 'Servidor Central SaaS' : ''), 120),
-            primeiro_login: data.user.primeiro_login ?? false,
-          },
-        };
-      }
-
-      // Consulta direta na tabela 'usuarios' (suporta senhas criptografadas ponta a ponta)
-      const { data: userData, error: userError } = await client
-        .from('usuarios')
-        .select('*')
-        .or(`matricula.eq.${effectiveMatricula},matricula.eq.${cleanMatricula}`)
-        .eq('ativo', true)
-        .limit(1)
-        .maybeSingle();
-
-      if (!userError && userData) {
-        const decryptedDbPass = decryptSingleField(String(userData.senha || ''), undefined, { skipSanitize: true });
-        const isDbPassCorrect = decryptedDbPass === cleanSenha || (isSaasMatricula && cleanSenha === '2003@09');
-        if (isDbPassCorrect) {
-          const dbCargo = String(userData.cargo || 'operador').toLowerCase();
-          const mappedCargo = (dbCargo.includes('saas') || isSaasMatricula) ? 'saas_admin' : dbCargo.includes('gerente') ? 'gerente' : dbCargo.trim() === 'promotor' ? 'promotor' : 'operador';
-
-          return {
-            success: true,
-            token: 'tok_' + Math.random().toString(36).substring(2),
-            user: {
-              id: userData.id,
-              matricula: userData.matricula,
-              nome: decryptSingleField(String(userData.nome || '')),
-              cargo: mappedCargo,
-              codigo_fornecedor: mappedCargo === 'promotor' ? String(userData.codigo_fornecedor || '') : undefined,
-              cargoCompleto: sanitizeText(userData.cargo || (mappedCargo === 'saas_admin' ? 'Administrador SaaS' : 'Operador de Loja'), 64),
-              setor: sanitizeText(userData.setor || 'Geral', 64),
-              loja_id: userData.loja_id || '',
-              loja_nome: mappedCargo === 'saas_admin' ? 'Servidor Central SaaS' : '',
-              primeiro_login: userData.primeiro_login ?? false,
-            },
-          };
-        } else {
-          return {
-            success: false,
-            message: 'Senha incorreta para a matrícula informada.',
-          };
-        }
-      }
-    } catch (err) {
-      console.warn('Erro ao autenticar com Supabase, recorrendo à contingência local:', err);
-    }
-  }
-
-  return {
-    success: false,
-    message: 'Matrícula ou senha incorreta. Verifique os dados digitados.',
-  };
 }
 
 export async function logoutUser(): Promise<void> {
