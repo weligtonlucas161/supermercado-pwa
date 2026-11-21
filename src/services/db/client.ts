@@ -124,6 +124,8 @@ async function resilientFetch(
   init?: RequestInit
 ): Promise<Response> {
   let lastError: unknown = null;
+  const method = (init?.method || (input instanceof Request ? input.method : 'GET')).toUpperCase();
+  const canRetry = method === 'GET' || method === 'HEAD';
 
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     const controller = new AbortController();
@@ -142,11 +144,13 @@ async function resilientFetch(
       clearTimeout(timer);
       externalSignal?.removeEventListener('abort', onExternalAbort);
 
-      // Erros de servidor transitórios (429/5xx) são retentáveis.
-      if (response.status >= 500 || response.status === 429) {
+      // Só repetimos leituras idempotentes. Repetir POST/RPC pode duplicar
+      // gravações quando o servidor concluiu a operação, mas a resposta se perdeu.
+      if (canRetry && response.status >= 500) {
         lastError = new Error(`HTTP ${response.status}`);
         if (attempt === MAX_RETRIES) return response;
-        await sleep(RETRY_BASE_DELAY_MS * Math.pow(2, attempt) + Math.random() * 150);
+        const delay = Math.min(5_000, RETRY_BASE_DELAY_MS * Math.pow(2, attempt)) + Math.random() * 150;
+        await sleep(delay);
         continue;
       }
       return response;
@@ -156,10 +160,11 @@ async function resilientFetch(
       lastError = err;
 
       // Abort externo é definitivo: propaga imediatamente.
-      if (externalSignal?.aborted) throw err;
+      if (externalSignal?.aborted || !canRetry) throw err;
       if (attempt === MAX_RETRIES) throw err;
 
-      await sleep(RETRY_BASE_DELAY_MS * Math.pow(2, attempt) + Math.random() * 150);
+      const delay = Math.min(5_000, RETRY_BASE_DELAY_MS * Math.pow(2, attempt)) + Math.random() * 150;
+      await sleep(delay);
     }
   }
 
