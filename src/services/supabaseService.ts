@@ -1020,20 +1020,8 @@ export async function saveStoreEmployee(emp: StoreEmployee): Promise<{ success: 
         return { success: false, error: `Erro no banco de dados: ${upsertErr.message}` };
       }
 
-      // 5. Sincroniza credencial com auth.users e atualiza senha_hash
-      if (cleanEmp.senha) {
-        try {
-          const { error: syncErr } = await client.rpc('rpc_sync_user_password', {
-            p_matricula: cleanEmp.matricula,
-            p_senha: cleanEmp.senha,
-          });
-          if (syncErr) {
-            console.warn('Aviso ao sincronizar senha com auth.users:', syncErr);
-          }
-        } catch (syncErr) {
-          console.warn('Exceção ao sincronizar senha com auth.users:', syncErr);
-        }
-      }
+      // A criação de credenciais é feita exclusivamente pelo Supabase Auth.
+      // Nunca sincronizar senhas por RPC privilegiada a partir do navegador.
     } catch (err: any) {
       console.error('Exceção ao salvar funcionário no banco:', err);
       return { success: false, error: err?.message || 'Falha de comunicação com o servidor ao salvar perfil.' };
