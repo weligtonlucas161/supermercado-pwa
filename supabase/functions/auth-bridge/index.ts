@@ -181,7 +181,8 @@ Deno.serve(async (req: Request) => {
       .eq("ativo", true)
       .limit(1)
       .maybeSingle();
-    if (error || !data) {
+    if (error) return json({ error: "Não foi possível consultar o cadastro. Tente novamente." }, 503);
+    if (!data) {
       const failure = await recordFailedAttempt();
       if (!failure) return json({ error: "Proteção de login temporariamente indisponível. Tente novamente." }, 503);
       if (Number(failure.lock_seconds || 0) > 0) {
