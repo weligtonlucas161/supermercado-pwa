@@ -23,6 +23,9 @@ import { upsertProductRows, upsertCatalogRows } from './productWrite';
 
 const INDEX_TTL_MS = 60_000;
 const BACKFILL_BATCH = 500;
+// O limite padrão do PostgREST pode truncar respostas grandes. Paginar evita
+// índices incompletos em lojas com milhares (ou dezenas de milhares) de itens.
+const READ_PAGE_SIZE = 1_000;
 
 /**
  * Colunas lidas para montar o índice. Inclui todas as colunas NOT NULL
@@ -92,16 +95,25 @@ export async function loadProductIndex(
   const idToHash = new Map<string, string>();
   const pendingBackfill: IndexRow[] = [];
 
-  const { data, error } = await client
-    .from('produtos')
-    .select(INDEX_COLUMNS)
-    .eq('loja_id', lojaId);
+  const rows: IndexRow[] = [];
+  for (let offset = 0; ; offset += READ_PAGE_SIZE) {
+    const { data, error } = await client
+      .from('produtos')
+      .select(INDEX_COLUMNS)
+      .eq('loja_id', lojaId)
+      .order('id', { ascending: true })
+      .range(offset, offset + READ_PAGE_SIZE - 1);
 
-  if (error) {
-    console.warn('[productIndex] Falha ao carregar o índice de produtos:', error.message);
+    if (error) {
+      // Não armazenar um índice parcial/vazio: isso pode provocar duplicações
+      // em importações. O chamador recebe o erro e pode tentar novamente.
+      throw new Error(`Falha ao carregar índice de produtos (offset ${offset}): ${error.message}`);
+    }
+
+    const page = (data || []) as IndexRow[];
+    rows.push(...page);
+    if (page.length < READ_PAGE_SIZE) break;
   }
-
-  const rows = (data || []) as IndexRow[];
   const legacyRows: IndexRow[] = [];
 
   for (const row of rows) {
@@ -186,20 +198,27 @@ export async function loadCatalogIndex(client: SupabaseClient): Promise<Set<stri
   }
 
   const hashes = new Set<string>();
-  const { data, error } = await client
-    .from('produtos_catalogo_universal')
-    .select('codigo_barras, nome, ean_hash');
-
-  if (error) {
-    console.warn('[productIndex] Falha ao carregar o catálogo universal:', error.message);
-    return hashes;
-  }
-
-  const rows = (data || []) as Array<{
+  const rows: Array<{
     ean_hash: string | null;
     codigo_barras: string | null;
     nome: string | null;
-  }>;
+  }> = [];
+
+  for (let offset = 0; ; offset += READ_PAGE_SIZE) {
+    const { data, error } = await client
+      .from('produtos_catalogo_universal')
+      .select('codigo_barras, nome, ean_hash')
+      .order('codigo_barras', { ascending: true })
+      .range(offset, offset + READ_PAGE_SIZE - 1);
+
+    if (error) {
+      throw new Error(`Falha ao carregar catálogo universal (offset ${offset}): ${error.message}`);
+    }
+
+    const page = (data || []) as typeof rows;
+    rows.push(...page);
+    if (page.length < READ_PAGE_SIZE) break;
+  }
   const legacy: typeof rows = [];
 
   for (const row of rows) {
