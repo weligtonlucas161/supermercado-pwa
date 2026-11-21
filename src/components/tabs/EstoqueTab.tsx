@@ -411,7 +411,12 @@ export const EstoqueTab: React.FC = () => {
   const effectiveSupplierCode = currentUser?.cargo === 'promotor'
     ? (supplierCodeFromAccount ?? codigoFornecedorPromotor ?? '')
     : undefined;
-  const cacheKey = `${activeLojaId}_${currentUser?.matricula || ''}_${effectiveSupplierCode ?? 'todos'}_${mainTab}_${selectedCategory}_${debouncedSearchTerm.trim().toLowerCase()}_${sortBy}`;
+  // Matrículas de promotor no formato NOME-CODIGO (ex.: PEPSI-1565)
+  // permitem recuperar a marca quando o código do fornecedor muda.
+  const nomeFornecedorPromotor = currentUser?.cargo === 'promotor'
+    ? (currentUser.matricula || '').replace(/[-_ ]?\\d+$/, '').replace(/[-_]+$/, '').trim()
+    : '';
+  const cacheKey = `${activeLojaId}_${currentUser?.matricula || ''}_${effectiveSupplierCode ?? 'todos'}_${nomeFornecedorPromotor}_${mainTab}_${selectedCategory}_${debouncedSearchTerm.trim().toLowerCase()}_${sortBy}`;
 
   // 1. Produtos em Ruptura Iminente (Estoque <= Mínimo ou Zerado)
   const ruptureProducts = products.filter(p => p.stock <= p.minStock || p.stock === 0);
@@ -426,7 +431,7 @@ export const EstoqueTab: React.FC = () => {
     if (!forceRefresh) {
       // Tenta recuperar do cache criptografado (expira em 4h automaticamente)
       const cached = await getEncryptedCache<{ items: Product[]; totalCount: number; hasMore: boolean; page: number }>(cacheKey);
-      if (cached && cached.data && Array.isArray(cached.data.items) && (effectiveSupplierCode === undefined || cached.data.items.every(p => Boolean(effectiveSupplierCode) && p.supplierCode?.trim() === effectiveSupplierCode))) {
+      if (cached && cached.data && Array.isArray(cached.data.items) && (effectiveSupplierCode === undefined || cached.data.items.every(p => (Boolean(effectiveSupplierCode) && p.supplierCode?.trim() === effectiveSupplierCode) || (Boolean(nomeFornecedorPromotor) && p.name?.toLocaleLowerCase('pt-BR').includes(nomeFornecedorPromotor.toLocaleLowerCase('pt-BR')))))) {
         setStockItems(cached.data.items);
         setTotalCount(cached.data.totalCount);
         setHasMore(cached.data.hasMore);
@@ -445,6 +450,7 @@ export const EstoqueTab: React.FC = () => {
       const res = await fetchStockPaginatedFromSupabase({
         lojaId: activeLojaId,
         codigoFornecedor: effectiveSupplierCode,
+        nomeFornecedor: nomeFornecedorPromotor,
         page: 0,
         pageSize: 50,
         searchTerm: debouncedSearchTerm,
@@ -472,7 +478,7 @@ export const EstoqueTab: React.FC = () => {
     } finally {
       setIsLoadingInitial(false);
     }
-  }, [activeLojaId, cacheKey, debouncedSearchTerm, selectedCategory, sortBy, mainTab, effectiveSupplierCode]);
+  }, [activeLojaId, cacheKey, debouncedSearchTerm, selectedCategory, sortBy, mainTab, effectiveSupplierCode, nomeFornecedorPromotor]);
 
   useEffect(() => {
     loadInitialData();
@@ -526,7 +532,7 @@ export const EstoqueTab: React.FC = () => {
     } finally {
       setIsLoadingMore(false);
     }
-  }, [isLoadingMore, isLoadingInitial, hasMore, activeLojaId, page, debouncedSearchTerm, selectedCategory, sortBy, mainTab, cacheKey, effectiveSupplierCode]);
+  }, [isLoadingMore, isLoadingInitial, hasMore, activeLojaId, page, debouncedSearchTerm, selectedCategory, sortBy, mainTab, cacheKey, effectiveSupplierCode, nomeFornecedorPromotor]);
 
   // Observer do elemento sentinela no fim da lista
   const observerTargetRef = useRef<HTMLDivElement | null>(null);
