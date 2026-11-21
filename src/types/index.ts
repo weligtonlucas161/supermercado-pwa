@@ -140,8 +140,9 @@ export interface AuthUser {
   id: string;
   matricula: string;
   nome: string;
-  cargo: 'saas_admin' | 'gerente' | 'adm' | 'master' | 'operador';
+  cargo: 'saas_admin' | 'gerente' | 'adm' | 'master' | 'operador' | 'promotor';
   cargoCompleto?: string;
+  codigo_fornecedor?: string;
   setor?: string;
   loja_id: string;
   loja_nome?: string;
@@ -228,7 +229,7 @@ export interface Operator {
   name: string;
   code: string;         // Matrícula
   matricula?: string;
-  role: 'saas_admin' | 'gerente' | 'adm' | 'master' | 'operador';
+  role: 'saas_admin' | 'gerente' | 'adm' | 'master' | 'operador' | 'promotor';
   cargoCompleto?: string;
   store: string;
   loja_id: string;      // ID da loja vinculada
