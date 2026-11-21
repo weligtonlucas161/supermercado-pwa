@@ -17,3 +17,7 @@
 
 ## Implantação
 Esta migração deve ser aplicada antes de publicar/ativar auth-bridge. Não aplicar diretamente em produção sem o teste em ambiente isolado e validação de backup/restauração conforme checklist de migração.
+
+
+## Secret required
+Set `AUTH_LOCKOUT_SECRET` in the Edge Function secret store to a randomly generated value of at least 32 characters. Do not put it in the frontend, repository, or chat. Deployment is not performed by this PR.
