@@ -65,7 +65,6 @@ export const LojaTab: React.FC = () => {
   const [editingRole, setEditingRole] = useState<StoreRole | null>(null);
 
   // Form Funcionário
-  const [empMatricula, setEmpMatricula] = useState('');
   const [empNome, setEmpNome] = useState('');
   const [empSenha, setEmpSenha] = useState('');
   const [empCargo, setEmpCargo] = useState('Operador de Gôndola');
@@ -106,8 +105,8 @@ export const LojaTab: React.FC = () => {
   // Handler Adicionar Funcionário
   const handleSaveEmployee = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!empMatricula.trim() || !empNome.trim()) {
-      setNotice({ type: 'error', text: 'Preencha a matrícula e o nome do funcionário.' });
+    if (!empNome.trim()) {
+      setNotice({ type: 'error', text: 'Preencha o nome do funcionário.' });
       return;
     }
 
@@ -121,7 +120,7 @@ export const LojaTab: React.FC = () => {
 
     const newEmp: StoreEmployee = {
       id: `usr_emp_${Date.now()}`,
-      matricula: empMatricula.trim(),
+      matricula: '',
       nome: empNome.trim(),
       senha: empSenha.trim(),
       cargo: empCargo,
@@ -136,10 +135,9 @@ export const LojaTab: React.FC = () => {
       triggerScanBeep(true);
       setNotice({ 
         type: 'success', 
-        text: `Funcionário "${newEmp.nome}" cadastrado com sucesso! Permissão: ${empSetorRestrito === 'TODOS' ? 'Todos os setores' : `Somente ${empSetorRestrito}`}.` 
+        text: `Funcionário "${newEmp.nome}" cadastrado com a matrícula ${res.matricula}. Permissão: ${empSetorRestrito === 'TODOS' ? 'Todos os setores' : `Somente ${empSetorRestrito}`}.`
       });
       setIsEmployeeModalOpen(false);
-      setEmpMatricula('');
       setEmpNome('');
       setEmpSenha('');
       setEmpSetorRestrito('TODOS');
@@ -656,7 +654,7 @@ export const LojaTab: React.FC = () => {
                 </div>
                 <div>
                   <h3 className="font-extrabold text-sm text-slate-900 dark:text-white">Adicionar Funcionário da Loja</h3>
-                  <p className="text-[11px] text-slate-400">Atribua matrícula, cargo e restrição de setor</p>
+                  <p className="text-[11px] text-slate-400">A matrícula será criada automaticamente</p>
                 </div>
               </div>
               <button onClick={() => setIsEmployeeModalOpen(false)} className="text-slate-400 hover:text-slate-600">
@@ -679,21 +677,7 @@ export const LojaTab: React.FC = () => {
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider text-[10px] block mb-1">
-                    Matrícula de Login *
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="Ex: 5044"
-                    value={empMatricula}
-                    onChange={e => setEmpMatricula(e.target.value)}
-                    className="w-full p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-mono font-bold"
-                  />
-                </div>
-
+              <div className="grid grid-cols-1 gap-3">
                 <div>
                   <label className="font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider text-[10px] block mb-1">
                     Senha de Acesso *

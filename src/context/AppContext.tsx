@@ -122,7 +122,7 @@ interface AppContextType {
   updateStoreUserLimit: (storeId: string, newLimit: number) => Promise<{ success: boolean; error?: string }>;
   employees: StoreEmployee[];
   refreshEmployees: (lojaId?: string) => Promise<void>;
-  addOrUpdateEmployee: (emp: StoreEmployee) => Promise<{ success: boolean; error?: string }>;
+  addOrUpdateEmployee: (emp: StoreEmployee) => Promise<{ success: boolean; error?: string; matricula?: string }>;
   deleteEmployee: (empId: string, matricula?: string) => Promise<{ success: boolean; error?: string }>;
   toggleEmployeeStatus: (empId: string, active: boolean) => Promise<void>;
   roles: StoreRole[];
