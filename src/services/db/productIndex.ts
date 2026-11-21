@@ -96,23 +96,29 @@ export async function loadProductIndex(
   const pendingBackfill: IndexRow[] = [];
 
   const rows: IndexRow[] = [];
-  for (let offset = 0; ; offset += READ_PAGE_SIZE) {
-    const { data, error } = await client
+  let lastProductId: string | null = null;
+  for (;;) {
+    let query = client
       .from('produtos')
       .select(INDEX_COLUMNS)
-      .eq('loja_id', lojaId)
+      .eq('loja_id', lojaId);
+
+    if (lastProductId) query = query.gt('id', lastProductId);
+
+    const { data, error } = await query
       .order('id', { ascending: true })
-      .range(offset, offset + READ_PAGE_SIZE - 1);
+      .limit(READ_PAGE_SIZE);
 
     if (error) {
       // Não armazenar um índice parcial/vazio: isso pode provocar duplicações
       // em importações. O chamador recebe o erro e pode tentar novamente.
-      throw new Error(`Falha ao carregar índice de produtos (offset ${offset}): ${error.message}`);
+      throw new Error(`Falha ao carregar índice de produtos (após ${lastProductId || 'início'}): ${error.message}`);
     }
 
     const page = (data || []) as IndexRow[];
     rows.push(...page);
     if (page.length < READ_PAGE_SIZE) break;
+    lastProductId = page[page.length - 1].id;
   }
   const legacyRows: IndexRow[] = [];
 
@@ -204,20 +210,26 @@ export async function loadCatalogIndex(client: SupabaseClient): Promise<Set<stri
     nome: string | null;
   }> = [];
 
-  for (let offset = 0; ; offset += READ_PAGE_SIZE) {
-    const { data, error } = await client
+  let lastCatalogCode: string | null = null;
+  for (;;) {
+    let query = client
       .from('produtos_catalogo_universal')
-      .select('codigo_barras, nome, ean_hash')
+      .select('codigo_barras, nome, ean_hash');
+
+    if (lastCatalogCode) query = query.gt('codigo_barras', lastCatalogCode);
+
+    const { data, error } = await query
       .order('codigo_barras', { ascending: true })
-      .range(offset, offset + READ_PAGE_SIZE - 1);
+      .limit(READ_PAGE_SIZE);
 
     if (error) {
-      throw new Error(`Falha ao carregar catálogo universal (offset ${offset}): ${error.message}`);
+      throw new Error(`Falha ao carregar catálogo universal (após ${lastCatalogCode || 'início'}): ${error.message}`);
     }
 
     const page = (data || []) as typeof rows;
     rows.push(...page);
     if (page.length < READ_PAGE_SIZE) break;
+    lastCatalogCode = page[page.length - 1].codigo_barras || null;
   }
   const legacy: typeof rows = [];
 
