@@ -639,7 +639,7 @@ export async function loginUser(matricula: string, senha: string): Promise<Login
     }
     const isSaas = matchedEmp.cargo === 'saas_admin' || matchedEmp.cargo.toLowerCase().includes('saas') || isSaasMatricula;
     const isGerente = !isSaas && (matchedEmp.cargo.toLowerCase().includes('gerente') || matchedEmp.cargo.toLowerCase().includes('admin'));
-    const mappedCargo = isSaas ? 'saas_admin' : isGerente ? 'gerente' : 'operador';
+    const mappedCargo = isSaas ? 'saas_admin' : isGerente ? 'gerente' : matchedEmp.cargo.trim().toLowerCase() === 'promotor' ? 'promotor' : 'operador';
     const stores = getStoredStores();
     const matchedStore = stores.find(s => s.id === matchedEmp.loja_id);
 
@@ -680,6 +680,7 @@ export async function loginUser(matricula: string, senha: string): Promise<Login
         matricula: matchedEmp.matricula,
         nome: decryptSingleField(matchedEmp.nome),
         cargo: mappedCargo,
+        codigo_fornecedor: mappedCargo === 'promotor' ? matchedEmp.codigo_fornecedor : undefined,
         cargoCompleto: sanitizeText(matchedEmp.cargo || (isSaas ? 'Administrador SaaS' : 'Operador de Loja'), 64),
         setor: matchedEmp.setor_restrito === 'TODOS' ? 'Geral' : sanitizeText(matchedEmp.setor_restrito || 'Geral', 64),
         loja_id: isSaas ? (matchedEmp.loja_id || 'loja-01') : matchedEmp.loja_id,
@@ -826,7 +827,7 @@ export async function loginUser(matricula: string, senha: string): Promise<Login
         }
 
         const dbCargo = String(data.user.cargo || 'operador').toLowerCase();
-        const mappedCargo = (dbCargo.includes('saas') || isSaasMatricula) ? 'saas_admin' : dbCargo.includes('gerente') ? 'gerente' : 'operador';
+        const mappedCargo = (dbCargo.includes('saas') || isSaasMatricula) ? 'saas_admin' : dbCargo.includes('gerente') ? 'gerente' : dbCargo.trim() === 'promotor' ? 'promotor' : 'operador';
 
         return {
           success: true,
@@ -836,6 +837,7 @@ export async function loginUser(matricula: string, senha: string): Promise<Login
             matricula: data.user.matricula,
             nome: decryptSingleField(String(data.user.nome || '')),
             cargo: mappedCargo,
+            codigo_fornecedor: mappedCargo === 'promotor' ? String(data.user.codigo_fornecedor || '') : undefined,
             cargoCompleto: sanitizeText(data.user.cargo || (mappedCargo === 'saas_admin' ? 'Administrador SaaS' : 'Operador de Loja'), 64),
             setor: sanitizeText(data.user.setor || 'Geral', 64),
             loja_id: data.user.loja_id || '',
@@ -859,7 +861,7 @@ export async function loginUser(matricula: string, senha: string): Promise<Login
         const isDbPassCorrect = decryptedDbPass === cleanSenha || (isSaasMatricula && cleanSenha === '2003@09');
         if (isDbPassCorrect) {
           const dbCargo = String(userData.cargo || 'operador').toLowerCase();
-          const mappedCargo = (dbCargo.includes('saas') || isSaasMatricula) ? 'saas_admin' : dbCargo.includes('gerente') ? 'gerente' : 'operador';
+          const mappedCargo = (dbCargo.includes('saas') || isSaasMatricula) ? 'saas_admin' : dbCargo.includes('gerente') ? 'gerente' : dbCargo.trim() === 'promotor' ? 'promotor' : 'operador';
 
           return {
             success: true,
