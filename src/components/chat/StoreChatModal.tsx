@@ -27,7 +27,69 @@ import {
   resolveFullRoleLabel,
 } from '../../utils/chatUtils';
 import { sanitizeText } from '../../utils/security';
-import { decryptSingleField } from '../../utils/encryptionUtils';
+import { decryptSingleField, encryptSingleField } from '../../utils/encryptionUtils';
+import { getDbClient } from '../../services/db/client';
+
+interface SectorMessage { id: string; remetente_nome: string; conteudo: string; created_at: string; remetente_auth_id: string; }
+const SectorChat: React.FC<{ setor: string; lojaId: string; userName: string }> = ({ setor, lojaId, userName }) => {
+  const [messages, setMessages] = useState<SectorMessage[]>([]);
+  const [draft, setDraft] = useState('');
+  const [error, setError] = useState('');
+  const [sending, setSending] = useState(false);
+  useEffect(() => {
+    let disposed = false;
+    const db = getDbClient();
+    if (!db || !lojaId || !setor || setor.toUpperCase() === 'TODOS') return;
+    const refresh = async () => {
+      const { data, error: loadError } = await db.from('chat_setor_mensagens')
+        .select('id,remetente_nome,conteudo,created_at,remetente_auth_id')
+        .eq('loja_id', lojaId).eq('setor', setor).order('created_at', { ascending: false }).limit(100);
+      if (!disposed) {
+        if (loadError) setError('Não foi possível carregar o chat do setor.');
+        else { setMessages((data || []).reverse()); setError(''); }
+      }
+    };
+    void refresh();
+    const timer = window.setInterval(() => { if (document.visibilityState === 'visible') void refresh(); }, 15000);
+    return () => { disposed = true; window.clearInterval(timer); };
+  }, [setor, lojaId]);
+  const send = async (event: React.FormEvent) => {
+    event.preventDefault();
+    const content = sanitizeText(draft, 1000);
+    const db = getDbClient();
+    if (!db || !content || sending || !setor || setor.toUpperCase() === 'TODOS') return;
+    setSending(true);
+    try {
+      const { data: identity } = await db.auth.getUser();
+      if (!identity.user) { setError('Faça login novamente.'); return; }
+      const { error: sendError } = await db.from('chat_setor_mensagens').insert({
+        loja_id: lojaId, setor, remetente_auth_id: identity.user.id,
+        remetente_nome: encryptSingleField(userName), conteudo: encryptSingleField(content)
+      });
+      if (sendError) { setError('Não foi possível enviar a mensagem.'); return; }
+      setDraft('');
+      const { data } = await db.from('chat_setor_mensagens').select('id,remetente_nome,conteudo,created_at,remetente_auth_id')
+        .eq('loja_id', lojaId).eq('setor', setor).order('created_at', { ascending: false }).limit(100);
+      if (data) setMessages(data.reverse());
+    } finally { setSending(false); }
+  };
+  if (!setor || setor.toUpperCase() === 'TODOS') return <div className="flex-1 p-6 text-center text-sm text-slate-500">Para participar de um chat de setor, solicite ao gerente a atribuição de um setor específico no seu perfil.</div>;
+  return <div className="flex-1 min-h-0 flex flex-col">
+    <div className="p-3 border-b text-xs font-bold text-emerald-600">Chat exclusivo: {setor}</div>
+    <div className="flex-1 overflow-y-auto p-4 space-y-3">
+      {error && <p role="alert" className="text-red-500 text-xs">{error}</p>}
+      {messages.map(m => <div key={m.id} className="rounded-xl bg-slate-100 dark:bg-slate-800 p-3 text-xs">
+        <p className="font-bold">{decryptSingleField(m.remetente_nome)}</p>
+        <p className="whitespace-pre-wrap break-words">{decryptSingleField(m.conteudo)}</p>
+        <p className="text-[10px] text-slate-400">{new Date(m.created_at).toLocaleString('pt-BR')}</p>
+      </div>)}
+    </div>
+    <form onSubmit={send} className="p-3 border-t flex gap-2">
+      <input className="flex-1 min-w-0 rounded-xl border p-2 bg-white dark:bg-slate-800 text-xs" value={draft} maxLength={1000} onChange={e => setDraft(e.target.value)} placeholder="Mensagem para o seu setor..." />
+      <button type="submit" disabled={sending || !draft.trim()} className="rounded-xl bg-emerald-600 text-white px-4 disabled:opacity-40">Enviar</button>
+    </form>
+  </div>;
+};
 
 interface MentionOption {
   type: 'setor' | 'usuario';
@@ -43,11 +105,12 @@ export const StoreChatModal: React.FC = () => {
     chatMessages,
     sendChatMessage,
     operator,
+    currentUser,
     employees,
     directLeaderMatricula,
   } = useApp();
 
-  const [activeChannel, setActiveChannel] = useState<'grupo' | 'direto_lider'>('grupo');
+  const [activeChannel, setActiveChannel] = useState<'grupo' | 'direto_lider' | 'setor'>('grupo');
   const [publicDraft, setPublicDraft] = useState('');
   const [anonDraft, setAnonDraft] = useState('');
   const [isAnonimo, setIsAnonimo] = useState(false);
@@ -373,6 +436,15 @@ export const StoreChatModal: React.FC = () => {
           </button>
         </div>
 
+        <div className="px-2 pb-2 border-b border-slate-100 dark:border-slate-800">
+          <button type="button" onClick={() => setActiveChannel('setor')}
+            className={`w-full py-2 rounded-xl text-xs font-bold ${activeChannel === 'setor' ? 'bg-emerald-600 text-white' : 'bg-slate-100 dark:bg-slate-800'}`}>
+            <Lock className="w-3.5 h-3.5 inline mr-2" />Chat do meu setor
+          </button>
+        </div>
+        {activeChannel === 'setor' ? (
+          <SectorChat setor={currentUser?.setor || operator.setor_restrito || ''} lojaId={currentUser?.loja_id || operator.loja_id || ''} userName={currentUser?.nome || operator.name || ''} />
+        ) : (<>
         {/* Barra de Configuração do Canal Privado com Líderes (Alinhada ao padrão OpSys) */}
         {activeChannel === 'direto_lider' && (
           <div className="p-3 bg-slate-50 dark:bg-slate-850 border-b border-slate-200/80 dark:border-slate-800 space-y-2.5 shrink-0">
@@ -671,6 +743,7 @@ export const StoreChatModal: React.FC = () => {
             <Send className="w-4 h-4" />
           </button>
         </form>
+        </>)}
       </div>
     </div>
   );
