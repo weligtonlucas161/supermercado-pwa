@@ -57,7 +57,7 @@ export const ValidadeTab: React.FC = () => {
             className={`w-full pl-9 pr-4 py-2.5 rounded-2xl text-xs border focus:outline-none focus:ring-2 focus:ring-emerald-500 transition ${
               darkMode
                 ? 'bg-slate-800/80 border-slate-700 text-slate-100 placeholder:text-slate-500'
-                : 'bg-white border-slate-200 text-slate-800 placeholder:text-slate-400'
+                : 'bg-white dark:bg-slate-900 border-slate-200 text-slate-800 placeholder:text-slate-400'
             }`}
           />
         </div>
@@ -68,7 +68,7 @@ export const ValidadeTab: React.FC = () => {
             className={`px-3 py-2.5 rounded-2xl text-xs border focus:outline-none focus:ring-2 focus:ring-emerald-500 font-medium ${
               darkMode
                 ? 'bg-slate-800 border-slate-700 text-slate-200'
-                : 'bg-white border-slate-200 text-slate-700'
+                : 'bg-white dark:bg-slate-900 border-slate-200 text-slate-700'
             }`}
           >
             <option value="all">Todos os Status ({validities.length})</option>
@@ -92,7 +92,7 @@ export const ValidadeTab: React.FC = () => {
             <div
               key={item.id}
               className={`p-3.5 rounded-2xl border flex items-center justify-between transition-all ${
-                darkMode ? 'bg-slate-800/80 border-slate-700' : 'bg-white border-slate-200'
+                darkMode ? 'bg-slate-800/80 border-slate-700' : 'bg-white dark:bg-slate-900 border-slate-200'
               } shadow-xs hover:border-emerald-500/40`}
             >
               <div className="flex items-center gap-3">
