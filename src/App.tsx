@@ -21,6 +21,7 @@ import { AuditoriaTab } from './components/tabs/AuditoriaTab';
 import { LojaTab } from './components/tabs/LojaTab';
 import { ConfiguracoesTab } from './components/tabs/ConfiguracoesTab';
 
+import { PasskeyEnrollmentModal } from './components/auth/PasskeyEnrollmentModal';
 import { FirstLoginPasswordModal } from './components/auth/FirstLoginPasswordModal';
 import { StoreChatModal } from './components/chat/StoreChatModal';
 
@@ -137,6 +138,7 @@ function AppContent() {
     return (
       <>
         <AdminSaasScreen />
+        {currentUser && <PasskeyEnrollmentModal userId={currentUser.id} firstLogin={Boolean(currentUser.primeiro_login)} />}
         {showFirstLoginModal && (
           <FirstLoginPasswordModal
             isOpen={true}
@@ -198,6 +200,7 @@ function AppContent() {
       {/* Modal Global de Chat Operacional da Loja e Canal de Líderes */}
       <StoreChatModal />
 
+      {currentUser && <PasskeyEnrollmentModal userId={currentUser.id} firstLogin={Boolean(currentUser.primeiro_login)} />}
       {/* Modal de Alteração de Senha no Primeiro Login */}
       {showFirstLoginModal && (
         <FirstLoginPasswordModal
