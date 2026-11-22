@@ -1462,7 +1462,7 @@ async function fetchPaginated(
 
     if (error) {
       console.warn(`[db] Falha ao paginar ${table}:`, error.message);
-      break;
+      throw new Error(`Falha na paginação de ${table}: ${error.message}`);
     }
 
     const page = (data || []) as unknown as Record<string, unknown>[];
