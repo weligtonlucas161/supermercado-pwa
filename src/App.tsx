@@ -59,7 +59,7 @@ function AppContent() {
       if (Date.now() - lastConfirmedPing.current >= 5 * 60_000) {
         disposed = true;
         void client.auth.signOut();
-        logout();
+        logout(true);
         return;
       }
       sendingPing.current = true;
