@@ -432,7 +432,17 @@ export const EstoqueTab: React.FC = () => {
     if (!forceRefresh) {
       // Tenta recuperar do cache criptografado (expira em 4h automaticamente)
       const cached = await getEncryptedCache<{ items: Product[]; totalCount: number; hasMore: boolean; page: number }>(cacheKey);
-      if (cached && cached.data && Array.isArray(cached.data.items) && (effectiveSupplierCode === undefined || cached.data.items.every(p => ((['TODOS','GERAL'].includes((currentUser?.setor || '').toUpperCase()) || (p.category || '').toUpperCase() === (currentUser?.setor || '').toUpperCase()) && (Boolean(effectiveSupplierCode) && p.supplierCode?.trim() === effectiveSupplierCode) || (Boolean(nomeFornecedorPromotor) && p.name?.toLocaleLowerCase('pt-BR').includes(nomeFornecedorPromotor.toLocaleLowerCase('pt-BR'))))))) {
+      const allowedSector = (sector: string) =>
+        ['TODOS', 'GERAL'].includes((currentUser?.setor || '').toUpperCase()) ||
+        sector.toUpperCase() === (currentUser?.setor || '').toUpperCase();
+      const validCache = cached?.data && Array.isArray(cached.data.items) &&
+        cached.data.items.every(p =>
+          allowedSector(p.category || '') &&
+          (effectiveSupplierCode === undefined ||
+            (Boolean(effectiveSupplierCode) && p.supplierCode?.trim() === effectiveSupplierCode) ||
+            (Boolean(nomeFornecedorPromotor) && p.name?.toLocaleLowerCase('pt-BR').includes(nomeFornecedorPromotor.toLocaleLowerCase('pt-BR'))))
+        );
+      if (validCache && cached) {
         setStockItems(cached.data.items);
         setTotalCount(cached.data.totalCount);
         setHasMore(cached.data.hasMore);
