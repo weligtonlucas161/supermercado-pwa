@@ -29,7 +29,8 @@ import { EstoqueAvariasTab } from './EstoqueAvariasTab';
 import { EstoqueRupturasTab } from './EstoqueRupturasTab';
 import { useDebounce } from '../../hooks/useDebounce';
 import { getEncryptedCache, setEncryptedCache, invalidateStockCache } from '../../utils/encryptedCache';
-import { fetchStockPaginatedFromSupabase } from '../../services/supabaseService';
+import { fetchStockPaginatedFromSupabase, mapProductRow } from '../../services/supabaseService';
+import { getDbClient } from '../../services/db/client';
 
 interface ProductCardProps {
   product: Product;
@@ -386,14 +387,14 @@ export const EstoqueTab: React.FC = () => {
   const [cacheTimestamp, setCacheTimestamp] = useState<number | null>(null);
 
   const activeLojaId = currentUser?.loja_id || operator?.loja_id || '';
-  const codigoFornecedorPromotor = currentUser?.cargo === 'promotor' ? (currentUser.codigo_fornecedor?.trim() || '') : undefined;
+  const codigoFornecedorPromotor = currentUser?.cargo?.toLowerCase() === 'promotor' ? (currentUser.codigo_fornecedor?.trim() || '') : undefined;
   // Perfil de promotor: código vinculado à conta, sem digitação manual.
   // O cadastro no banco é a fonte de verdade caso a sessão local esteja desatualizada.
   const [supplierCodeFromAccount, setSupplierCodeFromAccount] = useState<string | null>(null);
   useEffect(() => {
     let cancelled = false;
     setSupplierCodeFromAccount(null);
-    if (currentUser?.cargo !== 'promotor') return;
+    if (currentUser?.cargo?.toLowerCase() !== 'promotor') return;
     import('../../services/db/client').then(async ({ getDbClient }) => {
       const db = getDbClient();
       if (!db) return;
@@ -416,7 +417,7 @@ export const EstoqueTab: React.FC = () => {
   const nomeFornecedorPromotor = currentUser?.cargo === 'promotor'
     ? (currentUser.matricula || '').replace(/[-_ ]?\d+$/, '').replace(/[-_]+$/, '').trim()
     : '';
-  const cacheKey = `${activeLojaId}_${currentUser?.matricula || ''}_${effectiveSupplierCode ?? 'todos'}_${nomeFornecedorPromotor}_${mainTab}_${selectedCategory}_${debouncedSearchTerm.trim().toLowerCase()}_${sortBy}`;
+  const cacheKey = `${activeLojaId}_${currentUser?.matricula || ''}_${currentUser?.setor || 'SEM_SETOR'}_${effectiveSupplierCode ?? 'todos'}_${nomeFornecedorPromotor}_${mainTab}_${selectedCategory}_${debouncedSearchTerm.trim().toLowerCase()}_${sortBy}`;
 
   // 1. Produtos em Ruptura Iminente (Estoque <= Mínimo ou Zerado)
   const ruptureProducts = products.filter(p => p.stock <= p.minStock || p.stock === 0);
@@ -426,12 +427,12 @@ export const EstoqueTab: React.FC = () => {
 
   // Carregamento inicial ou ao mudar filtros
   const loadInitialData = useCallback(async (forceRefresh = false) => {
-    if (!activeLojaId) return;
+    if (!activeLojaId || !currentUser) return;
 
     if (!forceRefresh) {
       // Tenta recuperar do cache criptografado (expira em 4h automaticamente)
       const cached = await getEncryptedCache<{ items: Product[]; totalCount: number; hasMore: boolean; page: number }>(cacheKey);
-      if (cached && cached.data && Array.isArray(cached.data.items) && (effectiveSupplierCode === undefined || cached.data.items.every(p => (Boolean(effectiveSupplierCode) && p.supplierCode?.trim() === effectiveSupplierCode) || (Boolean(nomeFornecedorPromotor) && p.name?.toLocaleLowerCase('pt-BR').includes(nomeFornecedorPromotor.toLocaleLowerCase('pt-BR')))))) {
+      if (cached && cached.data && Array.isArray(cached.data.items) && (effectiveSupplierCode === undefined || cached.data.items.every(p => ((['TODOS','GERAL'].includes((currentUser?.setor || '').toUpperCase()) || (p.category || '').toUpperCase() === (currentUser?.setor || '').toUpperCase()) && (Boolean(effectiveSupplierCode) && p.supplierCode?.trim() === effectiveSupplierCode) || (Boolean(nomeFornecedorPromotor) && p.name?.toLocaleLowerCase('pt-BR').includes(nomeFornecedorPromotor.toLocaleLowerCase('pt-BR'))))))) {
         setStockItems(cached.data.items);
         setTotalCount(cached.data.totalCount);
         setHasMore(cached.data.hasMore);
@@ -478,11 +479,54 @@ export const EstoqueTab: React.FC = () => {
     } finally {
       setIsLoadingInitial(false);
     }
-  }, [activeLojaId, cacheKey, debouncedSearchTerm, selectedCategory, sortBy, mainTab, effectiveSupplierCode, nomeFornecedorPromotor]);
+  }, [activeLojaId, cacheKey, debouncedSearchTerm, selectedCategory, sortBy, mainTab, effectiveSupplierCode, nomeFornecedorPromotor, currentUser?.setor]);
 
   useEffect(() => {
     loadInitialData();
   }, [loadInitialData]);
+
+  // Sincronização incremental: a cada 90s consulta apenas logs do setor autorizado.
+  const deltaCursor = useRef<number>(Date.now());
+  useEffect(() => { deltaCursor.current = Date.now(); }, [cacheKey]);
+  useEffect(() => {
+    if (!activeLojaId || !currentUser) return;
+    let busy = false;
+    const refreshDelta = async () => {
+      if (busy || document.visibilityState !== 'visible') return;
+      const db = getDbClient();
+      if (!db) return;
+      busy = true;
+      const since = deltaCursor.current;
+      const until = Date.now();
+      try {
+        const { data: logs, error } = await db.from('logs_alteracoes_geral')
+          .select('registro_id,operacao,alterado_em')
+          .eq('tabela', 'produtos').eq('loja_id', activeLojaId)
+          .gt('alterado_em', new Date(since).toISOString())
+          .lte('alterado_em', new Date(until).toISOString())
+          .order('alterado_em', { ascending: true }).limit(500);
+        if (error || !logs) return;
+        if (logs.length >= 500 || logs.some(l => l.operacao !== 'UPDATE')) {
+          await loadInitialData(true);
+        } else if (logs.length) {
+          const ids = [...new Set(logs.map(l => l.registro_id))];
+          const { data: rows, error: rowsError } = await db.from('produtos').select('*')
+            .eq('loja_id', activeLojaId).in('id', ids);
+          if (rowsError) return;
+          const updated = new Map((rows || []).map(row => [row.id, mapProductRow(row, activeLojaId)]));
+          setStockItems(previous => {
+            const next = previous.map(item => updated.get(item.id) || item);
+            void setEncryptedCache(cacheKey, { items: next, totalCount, hasMore, page });
+            return next;
+          });
+          setCacheTimestamp(Date.now());
+        }
+        deltaCursor.current = until;
+      } finally { busy = false; }
+    };
+    const timer = window.setInterval(() => { void refreshDelta(); }, 90_000);
+    return () => window.clearInterval(timer);
+  }, [activeLojaId, cacheKey, currentUser?.id, currentUser?.setor, loadInitialData, totalCount, hasMore, page]);
 
   // Carregamento contínuo durante a rolagem com elemento de loading de cerca de 1 segundo
   const loadMoreItems = useCallback(async () => {
