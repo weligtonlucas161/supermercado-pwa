@@ -116,7 +116,6 @@ function AppContent() {
           userName={currentUser?.nome || 'Usuário'}
           isSaasAdmin={false}
           onPasswordChanged={updateUserPassword}
-          onClose={() => setIsFirstLoginDismissed(true)}
         />
       )}
     </div>
