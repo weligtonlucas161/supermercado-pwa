@@ -229,10 +229,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // =========================================================================
   // 1. MODO CLARO PADRÃO FIXO (SEM OPÇÃO DE MODO ESCURO)
   // =========================================================================
-  const darkMode = true;
+  const darkMode = false;
 
   useEffect(() => {
-    document.documentElement.classList.add('dark');
+    document.documentElement.classList.remove('dark');
   }, []);
 
   // =========================================================================
