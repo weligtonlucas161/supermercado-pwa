@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Building2, 
   Users, 
@@ -55,7 +55,7 @@ export const LojaTab: React.FC = () => {
     isDesktop 
   } = useApp();
 
-  const [activeSubTab, setActiveSubTab] = useState<'funcionarios' | 'cargos' | 'identidade'>('funcionarios');
+  const [activeSubTab, setActiveSubTab] = useState<'resumo' | 'funcionarios' | 'cargos' | 'setores' | 'identidade'>('resumo');
   const [searchTerm, setSearchTerm] = useState('');
   const [editStoreName, setEditStoreName] = useState(storeName);
   const [editStoreColor, setEditStoreColor] = useState(storeColor);
@@ -148,6 +148,53 @@ export const LojaTab: React.FC = () => {
     } catch (error) {
       setNotice({type:'error',text:error instanceof Error ? error.message : 'Não foi possível excluir o usuário.'});
     } finally { setDeletingEmployeeId(null); }
+  };
+
+  const [sectors, setSectors] = useState<{id:string;nome:string}[]>([]);
+  const [newSectorName, setNewSectorName] = useState('');
+  const [editingSectorId, setEditingSectorId] = useState<string | null>(null);
+  const [sectorMetrics, setSectorMetrics] = useState<Record<string,{avarias:number;rupturas:number}>>({});
+  const refreshSectors = async () => {
+    const db=getDbClient(); if(!db || !currentLojaId)return;
+    const {data,error}=await db.from('setores_loja').select('id,nome').eq('loja_id',currentLojaId).order('nome');
+    if(!error)setSectors(data||[]);
+  };
+  useEffect(()=>{void refreshSectors();},[currentLojaId]);
+  useEffect(()=>{
+    const db=getDbClient();if(!db||!currentLojaId)return;
+    let cancelled=false;
+    void Promise.all([
+      db.from('avarias_estoque').select('setor').eq('loja_id',currentLojaId).limit(5000),
+      db.from('produtos').select('setor,estoque,estoque_minimo').eq('loja_id',currentLojaId).limit(5000),
+    ]).then(([damaged,stock])=>{
+      if(cancelled)return;
+      const stats:Record<string,{avarias:number;rupturas:number}>={};
+      for(const row of damaged.data||[]){const key=String(row.setor||'NÃO DEFINIDO');(stats[key]??={avarias:0,rupturas:0}).avarias++;}
+      for(const row of stock.data||[]){const key=String(row.setor||'NÃO DEFINIDO');const x=stats[key]??={avarias:0,rupturas:0};if(Number(row.estoque)<=Number(row.estoque_minimo))x.rupturas++;}
+      setSectorMetrics(stats);
+    });
+    return ()=>{cancelled=true;};
+  },[currentLojaId]);
+  const saveSector=async()=>{
+    const name=newSectorName.trim().toUpperCase();
+    if(!name||name==='TODOS'||name==='GERAL'){setNotice({type:'error',text:'Informe um nome de setor válido.'});return;}
+    const db=getDbClient();if(!db)return;
+    const result=editingSectorId
+      ? await db.from('setores_loja').update({nome:name}).eq('id',editingSectorId).eq('loja_id',currentLojaId)
+      : await db.from('setores_loja').insert({nome:name,loja_id:currentLojaId});
+    if(result.error){setNotice({type:'error',text:result.error.message});return;}
+    setNewSectorName('');setEditingSectorId(null);void refreshSectors();
+    setNotice({type:'success',text:'Setor salvo. Revise os vínculos de usuários e produtos caso tenha renomeado.'});
+  };
+  const deleteSector=async(sector:{id:string;nome:string})=>{
+    if(storeEmployees.some(e=>e.setor_restrito===sector.nome)){setNotice({type:'error',text:'Há usuários vinculados a este setor. Reatribua-os antes de excluir.'});return;}
+    const db=getDbClient();if(!db)return;
+    const {count,error:checkError}=await db.from('produtos').select('id',{count:'exact',head:true}).eq('loja_id',currentLojaId).eq('setor',sector.nome);
+    if(checkError||count){setNotice({type:'error',text:'Há produtos vinculados ou não foi possível verificar. Reatribua-os antes de excluir.'});return;}
+    if(!window.confirm(`Excluir o setor ${sector.nome}?`))return;
+    const {error}=await db.from('setores_loja').delete().eq('id',sector.id).eq('loja_id',currentLojaId);
+    if(error){setNotice({type:'error',text:error.message});return;}
+    void refreshSectors();
   };
 
   // Handler Adicionar Funcionário
@@ -348,6 +395,8 @@ export const LojaTab: React.FC = () => {
       {/* Navegação entre Sub-Abas da Loja */}
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 pb-2">
         <div className="flex flex-wrap gap-2">
+          <button onClick={() => setActiveSubTab('resumo')} className={`py-2 px-3.5 rounded-2xl text-xs font-bold ${activeSubTab==='resumo'?'bg-emerald-600 text-white':'bg-white text-slate-600 border'}`}>Desempenho por setor</button>
+          <button onClick={() => setActiveSubTab('setores')} className={`py-2 px-3.5 rounded-2xl text-xs font-bold ${activeSubTab==='setores'?'bg-emerald-600 text-white':'bg-white text-slate-600 border'}`}>Gerenciar setores</button>
           <button
             onClick={() => setActiveSubTab('funcionarios')}
             className={`py-2 px-3.5 rounded-2xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
@@ -429,6 +478,32 @@ export const LojaTab: React.FC = () => {
         )}
       </div>
 
+      {activeSubTab==='resumo' && <div className="space-y-4">
+        <h2 className="text-lg font-bold">Resultados operacionais por setor</h2>
+        <p className="text-xs text-slate-500">Indicadores disponíveis no banco. Pedidos de rebaixa, aprovações e rupturas corrigidas ainda não possuem histórico consolidado para pontuação confiável.</p>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+        {sectors.map(sector=><div key={sector.id} className="rounded-2xl border p-4 bg-white dark:bg-slate-800">
+          <h3 className="font-bold">{sector.nome}</h3>
+          <p className="text-sm mt-2">Avarias registradas: <strong>{sectorMetrics[sector.nome]?.avarias??0}</strong></p>
+          <p className="text-sm">Rupturas atuais: <strong>{sectorMetrics[sector.nome]?.rupturas??0}</strong></p>
+          <p className="text-xs text-slate-500 mt-2">Pontuação pendente de histórico completo dos quatro indicadores.</p>
+        </div>)}
+        </div>
+      </div>}
+      {activeSubTab==='setores' && <div className="space-y-4">
+        <h2 className="text-lg font-bold">Setores da loja</h2>
+        <div className="flex gap-2">
+          <input value={newSectorName} onChange={e=>setNewSectorName(e.target.value)} placeholder="Nome do setor" className="flex-1 min-w-0 rounded-xl border px-3 py-2 bg-white dark:bg-slate-800" />
+          <button onClick={()=>void saveSector()} className="rounded-xl bg-emerald-600 text-white px-4">{editingSectorId?'Salvar':'Criar'}</button>
+        </div>
+        {sectors.map(sector=><div key={sector.id} className="flex items-center justify-between gap-2 p-3 rounded-xl border">
+          <strong className="text-sm">{sector.nome}</strong>
+          <div className="flex gap-2">
+            <button onClick={()=>{setEditingSectorId(sector.id);setNewSectorName(sector.nome);}} className="text-xs text-emerald-600">Editar</button>
+            <button onClick={()=>void deleteSector(sector)} className="text-xs text-rose-600">Excluir</button>
+          </div>
+        </div>)}
+      </div>}
       {/* =================================================================== */}
       {/* SUB-ABA 1: FUNCIONÁRIOS DA LOJA */}
       {/* =================================================================== */}
