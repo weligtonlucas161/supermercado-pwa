@@ -903,7 +903,7 @@ export async function fetchStoreEmployees(lojaId?: string): Promise<StoreEmploye
   try {
     let query = client
       .from('usuarios')
-      .select('*')
+      .select('id,matricula,nome,cargo,setor,loja_id,ativo,created_at,codigo_fornecedor')
       .neq('cargo', 'saas_admin')
       .order('nome', { ascending: true });
 
@@ -918,7 +918,7 @@ export async function fetchStoreEmployees(lojaId?: string): Promise<StoreEmploye
         id: sanitizeIdentifier(u.id, 64),
         matricula: sanitizeIdentifier(u.matricula, 64),
         nome: decryptSingleField(String(u.nome || '')),
-        senha: u.senha ? decryptSingleField(String(u.senha), undefined, { skipSanitize: true }) : '',
+        senha: '', // Credenciais nunca são recuperadas pela listagem de funcionários.
         cargo: sanitizeText(u.cargo || 'Operador', 64),
         codigo_fornecedor: typeof u.codigo_fornecedor === 'string' ? sanitizeIdentifier(u.codigo_fornecedor, 64) : undefined,
         setor_restrito: u.setor ? sanitizeText(u.setor, 64) : 'TODOS',
