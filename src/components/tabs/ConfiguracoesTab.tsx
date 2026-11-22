@@ -347,53 +347,6 @@ export const ConfiguracoesTab: React.FC = () => {
         </div>
       </div>
 
-      {/* 3. SEÇÃO: PREFERÊNCIA DE SETOR OPERACIONAL */}
-      <div className={`p-4 sm:p-5 rounded-3xl border ${
-        darkMode ? 'bg-slate-800/80 border-slate-700' : 'bg-white border-slate-200'
-      } shadow-sm space-y-3`}>
-        <div className="flex items-center gap-2.5">
-          <div className="p-2.5 rounded-2xl bg-amber-500/10 text-amber-600 dark:text-amber-400">
-            <Tag className="w-5 h-5" />
-          </div>
-          <div>
-            <h3 className="text-sm font-black text-slate-900 dark:text-white">
-              Setor Operacional de Preferência
-            </h3>
-            <p className="text-[11px] text-slate-400">
-              Selecione o setor padrão que será pré-selecionado automaticamente na consulta e auditoria.
-            </p>
-          </div>
-        </div>
-
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1 text-xs">
-          <button
-            type="button"
-            onClick={() => handleSectorChange('TODOS')}
-            className={`p-2.5 rounded-2xl font-bold border transition text-center cursor-pointer ${
-              preferredSector === 'TODOS'
-                ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm'
-                : 'bg-slate-50 dark:bg-slate-850 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-750'
-            }`}
-          >
-            Todos os Setores
-          </button>
-          {SETORES_DISPONIVEIS.map(setor => (
-            <button
-              key={setor}
-              type="button"
-              onClick={() => handleSectorChange(setor)}
-              className={`p-2.5 rounded-2xl font-bold border transition text-center cursor-pointer ${
-                preferredSector === setor
-                  ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm'
-                  : 'bg-slate-50 dark:bg-slate-850 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-750'
-              }`}
-            >
-              {setor}
-            </button>
-          ))}
-        </div>
-      </div>
-
       {/* 4. SEÇÃO: DADOS DO PERFIL & SESSÃO */}
       <div className={`rounded-3xl border divide-y ${
         darkMode ? 'bg-slate-800/80 border-slate-700 divide-slate-700' : 'bg-white border-slate-200 divide-slate-100'
