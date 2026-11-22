@@ -17,7 +17,7 @@ interface FirstLoginPasswordModalProps {
   matricula: string;
   userName: string;
   isSaasAdmin?: boolean;
-  onPasswordChanged: (newPassword: string) => Promise<{ success: boolean; message?: string }>;
+  onPasswordChanged: (newPassword: string, newEmail?: string) => Promise<{ success: boolean; message?: string }>;
   onClose?: () => void;
 }
 
@@ -30,6 +30,7 @@ export const FirstLoginPasswordModal: React.FC<FirstLoginPasswordModalProps> = (
   onClose,
 }) => {
   const [newPassword, setNewPassword] = useState('');
+  const [newEmail, setNewEmail] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
@@ -39,7 +40,7 @@ export const FirstLoginPasswordModal: React.FC<FirstLoginPasswordModalProps> = (
   const strength = useMemo(() => {
     const pwd = newPassword;
     const checks = {
-      length: pwd.length >= 7,
+      length: pwd.length >= 12,
       hasUpper: /[A-Z]/.test(pwd),
       hasLower: /[a-z]/.test(pwd),
       hasNumber: /[0-9]/.test(pwd),
@@ -58,7 +59,7 @@ export const FirstLoginPasswordModal: React.FC<FirstLoginPasswordModalProps> = (
     let widthPercent = 20;
 
     if (!checks.length) {
-      label = 'Muito Fraca (mínimo 7 caracteres)';
+      label = 'Muito Fraca (mínimo 12 caracteres)';
       color = 'bg-rose-500';
       textColor = 'text-rose-500';
       widthPercent = 20;
@@ -96,8 +97,13 @@ export const FirstLoginPasswordModal: React.FC<FirstLoginPasswordModalProps> = (
     e.preventDefault();
     setErrorMessage(null);
 
-    if (newPassword.length < 7) {
-      setErrorMessage('A nova senha deve ter no mínimo 7 caracteres.');
+    if (newPassword.length < 12) {
+      setErrorMessage('A nova senha deve ter no mínimo 12 caracteres.');
+      return;
+    }
+
+    if (!isSaasAdmin && !/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(newEmail.trim())) {
+      setErrorMessage('Informe um e-mail pessoal válido.');
       return;
     }
 
@@ -108,7 +114,7 @@ export const FirstLoginPasswordModal: React.FC<FirstLoginPasswordModalProps> = (
 
     setIsLoading(true);
     try {
-      const result = await onPasswordChanged(newPassword);
+      const result = await onPasswordChanged(newPassword, isSaasAdmin ? undefined : newEmail);
       if (!result.success) {
         setErrorMessage(result.message || 'Erro ao atualizar a senha. Tente novamente.');
       }
@@ -170,10 +176,21 @@ export const FirstLoginPasswordModal: React.FC<FirstLoginPasswordModalProps> = (
 
         {/* Formulário */}
         <form onSubmit={handleSubmit} className="space-y-4 text-xs">
+          {!isSaasAdmin && (
+            <div className="space-y-1.5">
+              <label className="font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider text-[11px] block">
+                E-mail pessoal *
+              </label>
+              <input type="email" required value={newEmail} onChange={e => setNewEmail(e.target.value)}
+                placeholder="seuemail@exemplo.com"
+                className="w-full px-3 py-3 rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800" />
+              <p className="text-slate-500">Você receberá um e-mail de confirmação para substituir o endereço provisório de autenticação.</p>
+            </div>
+          )}
           {/* Nova Senha */}
           <div className="space-y-1.5">
             <label className="font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider text-[11px] block">
-              Nova Senha (Mínimo 7 caracteres)
+              Nova Senha (Mínimo 12 caracteres)
             </label>
             <div className="relative">
               <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
@@ -222,7 +239,7 @@ export const FirstLoginPasswordModal: React.FC<FirstLoginPasswordModalProps> = (
                   strength.checks.length ? 'text-emerald-600 dark:text-emerald-400' : 'text-slate-400'
                 }`}>
                   {strength.checks.length ? <Check className="w-3 h-3" /> : <X className="w-3 h-3" />}
-                  <span>Mínimo 7 caracteres</span>
+                  <span>Mínimo 12 caracteres</span>
                 </div>
                 <div className={`flex items-center gap-1 font-semibold ${
                   strength.checks.hasUpper && strength.checks.hasLower ? 'text-emerald-600 dark:text-emerald-400' : 'text-slate-400'
