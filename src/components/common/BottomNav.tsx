@@ -74,7 +74,7 @@ export const BottomNav: React.FC = () => {
         onTouchMove={updateTouchedTabFromEvent}
         onTouchEnd={() => setTouchedTab(null)}
         onTouchCancel={() => setTouchedTab(null)}
-        className="pointer-events-auto rounded-3xl border border-slate-200/90 bg-white/95 backdrop-blur-xl px-2 py-1.5 shadow-2xl shadow-slate-900/15 transition-all flex justify-around items-center ring-1 ring-black/5"
+        className="pointer-events-auto rounded-3xl border border-slate-200/90 bg-white dark:bg-slate-900/95 dark:bg-slate-900/95 backdrop-blur-xl px-2 py-1.5 shadow-2xl shadow-slate-900/15 transition-all flex justify-around items-center ring-1 ring-black/5"
         style={{ borderColor: `${storeColor}35` }}
       >
         <NavItem
