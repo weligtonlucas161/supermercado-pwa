@@ -1,5 +1,5 @@
 import { getDbClient } from './db/client';
-import { decryptSingleField } from '../utils/security';
+import { decryptSingleField } from '../utils/encryptionUtils';
 
 const b64 = (value: string): ArrayBuffer => {
   const raw = atob(value.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - value.length % 4) % 4));
