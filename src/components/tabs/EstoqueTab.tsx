@@ -547,9 +547,8 @@ export const EstoqueTab: React.FC = () => {
     const nextPage = page + 1;
 
     try {
-      // Loop visual de ~1 segundo exigido pelo usuário para feedback claro a cada rolagem de 50 itens
-      const [res] = await Promise.all([
-        fetchStockPaginatedFromSupabase({
+      // Carrega imediatamente; sem atraso artificial. O tempo real depende da rede.
+      const res = await fetchStockPaginatedFromSupabase({
           lojaId: activeLojaId,
           codigoFornecedor: effectiveSupplierCode,
           page: nextPage,
@@ -558,9 +557,7 @@ export const EstoqueTab: React.FC = () => {
           category: selectedCategory,
           sortBy,
           onlyRuptures: mainTab === 'rupturas',
-        }),
-        new Promise(resolve => setTimeout(resolve, 1000)),
-      ]);
+        });
 
       setStockItems(prev => {
         const existingIds = new Set(prev.map(p => p.id));
