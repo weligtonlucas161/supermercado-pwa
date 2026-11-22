@@ -3,7 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
+import { getDbClient } from './services/db/client';
 import { AppProvider, useApp } from './context/AppContext';
 import { Header } from './components/common/Header';
 import { BottomNav } from './components/common/BottomNav';
@@ -30,12 +31,68 @@ function AppContent() {
     isSaasAdmin, 
     currentUser, 
     updateUserPassword,
+    logout,
     storeColor
   } = useApp();
 
   // Modal de Alteração de Senha no Primeiro Login com opção de fechar
   const [isFirstLoginDismissed, setIsFirstLoginDismissed] = useState(false);
   const showFirstLoginModal = Boolean(currentUser && currentUser.primeiro_login) && !isFirstLoginDismissed;
+
+  // Presença leve: um único ping/minuto por sessão; nunca consulta catálogo.
+  const lastInteraction = useRef(Date.now());
+  const lastConfirmedPing = useRef(Date.now());
+  const sendingPing = useRef(false);
+  useEffect(() => {
+    if (!isAuthenticated || !currentUser) return;
+    let disposed = false;
+    const client = getDbClient();
+    if (!client) return;
+    lastInteraction.current = Date.now();
+    lastConfirmedPing.current = Date.now();
+    const markActivity = () => { lastInteraction.current = Date.now(); };
+    const events: (keyof WindowEventMap)[] = ['pointerdown', 'keydown', 'touchstart'];
+    events.forEach(event => window.addEventListener(event, markActivity, { passive: true }));
+    const ping = async () => {
+      if (disposed || sendingPing.current) return;
+      // Abas suspensas não executam timers: verificar imediatamente ao retornar.
+      if (Date.now() - lastConfirmedPing.current >= 5 * 60_000) {
+        disposed = true;
+        void client.auth.signOut();
+        logout();
+        return;
+      }
+      sendingPing.current = true;
+      try {
+        const { data: identity, error: identityError } = await client.auth.getUser();
+        if (disposed || identityError || !identity.user) return;
+        const status = document.visibilityState === 'hidden' || Date.now() - lastInteraction.current >= 2 * 60_000
+          ? 'repouso' : 'ativo';
+        const { error } = await client.from('presenca_usuarios').upsert({
+          auth_user_id: identity.user.id,
+          loja_id: currentUser.loja_id || null,
+          status,
+          ultimo_ping: new Date().toISOString(),
+          atualizado_em: new Date().toISOString(),
+        }, { onConflict: 'auth_user_id' });
+        if (!error && !disposed) lastConfirmedPing.current = Date.now();
+      } catch (error) {
+        console.warn('Falha no ping de presença:', error);
+      } finally {
+        sendingPing.current = false;
+      }
+    };
+    const interval = window.setInterval(() => { void ping(); }, 60_000);
+    const onVisibility = () => { if (document.visibilityState === 'visible') void ping(); };
+    document.addEventListener('visibilitychange', onVisibility);
+    void ping();
+    return () => {
+      disposed = true;
+      window.clearInterval(interval);
+      events.forEach(event => window.removeEventListener(event, markActivity));
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, [isAuthenticated, currentUser?.id, currentUser?.loja_id]);
 
   // 1. Se não estiver autenticado, exibe a tela de login
   if (!isAuthenticated) {
