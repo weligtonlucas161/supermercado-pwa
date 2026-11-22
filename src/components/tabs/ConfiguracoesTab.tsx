@@ -174,7 +174,7 @@ export const ConfiguracoesTab: React.FC = () => {
 
       {/* 1. SEÇÃO DE SEGURANÇA: ALTERAÇÃO DE SENHA */}
       <div className={`p-4 sm:p-5 rounded-3xl border ${
-        darkMode ? 'bg-slate-800/80 border-slate-700' : 'bg-white border-slate-200'
+        darkMode ? 'bg-slate-800/80 border-slate-700' : 'bg-white dark:bg-slate-900 border-slate-200'
       } shadow-sm space-y-4`}>
         <div className="flex items-center gap-2.5">
           <div className="p-2.5 rounded-2xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
@@ -261,7 +261,7 @@ export const ConfiguracoesTab: React.FC = () => {
 
       {/* 2. SEÇÃO: PREFERÊNCIAS OPERACIONAIS */}
       <div className={`p-4 sm:p-5 rounded-3xl border ${
-        darkMode ? 'bg-slate-800/80 border-slate-700' : 'bg-white border-slate-200'
+        darkMode ? 'bg-slate-800/80 border-slate-700' : 'bg-white dark:bg-slate-900 border-slate-200'
       } shadow-sm space-y-4`}>
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2.5">
@@ -349,7 +349,7 @@ export const ConfiguracoesTab: React.FC = () => {
 
       {/* 4. SEÇÃO: DADOS DO PERFIL & SESSÃO */}
       <div className={`rounded-3xl border divide-y ${
-        darkMode ? 'bg-slate-800/80 border-slate-700 divide-slate-700' : 'bg-white border-slate-200 divide-slate-100'
+        darkMode ? 'bg-slate-800/80 border-slate-700 divide-slate-700' : 'bg-white dark:bg-slate-900 border-slate-200 divide-slate-100'
       } shadow-sm overflow-hidden text-xs`}>
         <div className="p-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
