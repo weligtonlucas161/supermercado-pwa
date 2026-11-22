@@ -102,7 +102,7 @@ export const FirstLoginPasswordModal: React.FC<FirstLoginPasswordModalProps> = (
       return;
     }
 
-    if (!isSaasAdmin && !/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(newEmail.trim())) {
+    if (!isSaasAdmin && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(newEmail.trim())) {
       setErrorMessage('Informe um e-mail pessoal válido.');
       return;
     }
