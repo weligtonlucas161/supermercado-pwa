@@ -2,6 +2,26 @@
 
 @custom-variant dark (&:where(.dark, .dark *));
 
+/* Paleta grafite neutra para o modo escuro: substitui o azul dos tons slate.
+   Variáveis limitadas a .dark, preservando integralmente o tema claro. */
+.dark {
+  color-scheme: dark;
+  --color-slate-950: #141414;
+  --color-slate-900: #1b1b1b;
+  --color-slate-850: #222222;
+  --color-slate-800: #292929;
+  --color-slate-750: #303030;
+  --color-slate-700: #3a3a3a;
+  --color-slate-600: #505050;
+  --color-slate-500: #858585;
+  --color-slate-400: #a3a3a3;
+  --color-slate-300: #d0d0d0;
+  --color-slate-200: #e2e2e2;
+  --color-slate-100: #f0f0f0;
+  --color-slate-50: #fafafa;
+}
+
+
 @layer base {
   /* Prevent blue tap highlights and pull-to-refresh reload flicker on mobile PWA */
   html, body {
