@@ -112,7 +112,7 @@ interface AppContextType {
   logout: () => void;
   disconnectedMessage: string | null;
   clearDisconnectedMessage: () => void;
-  updateUserPassword: (newPassword: string) => Promise<{ success: boolean; message?: string }>;
+  updateUserPassword: (newPassword: string, newEmail?: string) => Promise<{ success: boolean; message?: string }>;
 
   // Lojas & Funcionários (SaaS Admin & Gerente)
   stores: Store[];
@@ -523,9 +523,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setDisconnectedMessage(null);
   };
 
-  const updateUserPassword = async (newPassword: string): Promise<{ success: boolean; message?: string }> => {
+  const updateUserPassword = async (newPassword: string, newEmail?: string): Promise<{ success: boolean; message?: string }> => {
     if (!currentUser) return { success: false, message: 'Nenhum usuário conectado.' };
-    const res = await changeUserPassword(currentUser.matricula, newPassword);
+    const res = await changeUserPassword(currentUser.matricula, newPassword, newEmail);
     if (res.success) {
       const updatedUser: AuthUser = {
         ...currentUser,
