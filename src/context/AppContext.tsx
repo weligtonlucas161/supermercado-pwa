@@ -109,7 +109,7 @@ interface AppContextType {
   isSaasAdmin: boolean;
   isGerente: boolean;
   login: (matricula: string, senha: string) => Promise<{ success: boolean; message?: string }>;
-  logout: () => void;
+  logout: (force?: boolean) => void;
   disconnectedMessage: string | null;
   clearDisconnectedMessage: () => void;
   updateUserPassword: (newPassword: string, newEmail?: string) => Promise<{ success: boolean; message?: string }>;
@@ -614,8 +614,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
   }, [isAuthenticated, currentUser, operator.store, operator.loja_id]);
 
-  const logout = () => {
-    if (isInventoryLocked) return;
+  const logout = (force = false) => {
+    if (isInventoryLocked && !force) return;
     void logoutUser();
     setCurrentUser(null);
     setIsAuthenticated(false);
