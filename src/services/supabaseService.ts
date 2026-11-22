@@ -894,7 +894,7 @@ export async function fetchStoreEmployees(lojaId?: string): Promise<StoreEmploye
   const allEmps = getStoredEmployees().map(e => ({
     ...e,
     nome: decryptSingleField(e.nome),
-    senha: e.senha ? decryptSingleField(e.senha, undefined, { skipSanitize: true }) : '',
+    senha: '', // Senhas não devem ser recuperadas do cache local.
   }));
   const filtered = allEmps.filter(e => !cleanLojaId || e.loja_id === cleanLojaId || cleanLojaId === 'todas');
 
@@ -962,7 +962,7 @@ export async function saveStoreEmployee(emp: StoreEmployee): Promise<{ success: 
   }
 
   const encryptedNome = encryptSingleField(cleanEmp.nome);
-  const encryptedSenha = cleanEmp.senha ? encryptSingleField(cleanEmp.senha, undefined, { skipSanitize: true }) : '';
+  const encryptedSenha = ''; // Nunca persistir credenciais no perfil ou cache.
 
   if (client && isSupabaseConfigured()) {
     try {
@@ -1016,7 +1016,6 @@ export async function saveStoreEmployee(emp: StoreEmployee): Promise<{ success: 
         id: finalId,
         matricula: cleanEmp.matricula,
         nome: encryptedNome,
-        senha: encryptedSenha,
         cargo: cleanEmp.cargo,
         codigo_fornecedor: cleanEmp.cargo.trim().toLowerCase() === 'promotor' ? cleanEmp.codigo_fornecedor : null,
         setor: cleanEmp.setor_restrito,
@@ -1042,7 +1041,7 @@ export async function saveStoreEmployee(emp: StoreEmployee): Promise<{ success: 
   const storedRecord: StoreEmployee = {
     ...cleanEmp,
     nome: encryptedNome,
-    senha: encryptedSenha,
+    senha: '',
   };
   const updated = [storedRecord, ...allEmps.filter(e => e.id !== cleanEmp.id && e.matricula !== cleanEmp.matricula)];
   if (typeof window !== 'undefined') {
