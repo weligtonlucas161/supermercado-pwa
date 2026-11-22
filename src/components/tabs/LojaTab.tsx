@@ -324,7 +324,7 @@ export const LojaTab: React.FC = () => {
       
       {/* Header Gestão de Loja */}
       <div
-        className="p-4 sm:p-5 rounded-3xl bg-white border border-slate-200/80 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4 relative overflow-hidden"
+        className="p-4 sm:p-5 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200/80 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4 relative overflow-hidden"
         style={{ borderColor: `${storeColor}35` }}
       >
         <div
@@ -395,14 +395,14 @@ export const LojaTab: React.FC = () => {
       {/* Navegação entre Sub-Abas da Loja */}
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 pb-2">
         <div className="flex flex-wrap gap-2">
-          <button onClick={() => setActiveSubTab('resumo')} className={`py-2 px-3.5 rounded-2xl text-xs font-bold ${activeSubTab==='resumo'?'bg-emerald-600 text-white':'bg-white text-slate-600 border'}`}>Desempenho por setor</button>
-          <button onClick={() => setActiveSubTab('setores')} className={`py-2 px-3.5 rounded-2xl text-xs font-bold ${activeSubTab==='setores'?'bg-emerald-600 text-white':'bg-white text-slate-600 border'}`}>Gerenciar setores</button>
+          <button onClick={() => setActiveSubTab('resumo')} className={`py-2 px-3.5 rounded-2xl text-xs font-bold ${activeSubTab==='resumo'?'bg-emerald-600 text-white':'bg-white dark:bg-slate-900 text-slate-600 border'}`}>Desempenho por setor</button>
+          <button onClick={() => setActiveSubTab('setores')} className={`py-2 px-3.5 rounded-2xl text-xs font-bold ${activeSubTab==='setores'?'bg-emerald-600 text-white':'bg-white dark:bg-slate-900 text-slate-600 border'}`}>Gerenciar setores</button>
           <button
             onClick={() => setActiveSubTab('funcionarios')}
             className={`py-2 px-3.5 rounded-2xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
               activeSubTab === 'funcionarios'
                 ? 'bg-emerald-600 text-white shadow-md'
-                : 'bg-white text-slate-600 border border-slate-200'
+                : 'bg-white dark:bg-slate-900 text-slate-600 border border-slate-200'
             }`}
           >
             <Users className="w-4 h-4" />
@@ -414,7 +414,7 @@ export const LojaTab: React.FC = () => {
             className={`py-2 px-3.5 rounded-2xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
               activeSubTab === 'cargos'
                 ? 'bg-emerald-600 text-white shadow-md'
-                : 'bg-white text-slate-600 border border-slate-200'
+                : 'bg-white dark:bg-slate-900 text-slate-600 border border-slate-200'
             }`}
           >
             <Briefcase className="w-4 h-4" />
@@ -430,7 +430,7 @@ export const LojaTab: React.FC = () => {
             className={`py-2 px-3.5 rounded-2xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
               activeSubTab === 'identidade'
                 ? 'bg-emerald-600 text-white shadow-md'
-                : 'bg-white text-slate-600 border border-slate-200'
+                : 'bg-white dark:bg-slate-900 text-slate-600 border border-slate-200'
             }`}
           >
             <Palette className="w-4 h-4" />
@@ -684,7 +684,7 @@ export const LojaTab: React.FC = () => {
       {activeSubTab === 'identidade' && (
         <form
           onSubmit={handleSaveStoreIdentity}
-          className="p-5 rounded-3xl bg-white border border-slate-200/90 shadow-sm space-y-5 max-w-2xl"
+          className="p-5 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200/90 shadow-sm space-y-5 max-w-2xl"
         >
           <div className="flex items-start justify-between gap-3 pb-3 border-b border-slate-100">
             <div className="flex items-center gap-2.5">
@@ -744,7 +744,7 @@ export const LojaTab: React.FC = () => {
                     className={`p-2 rounded-2xl border flex flex-col items-center gap-1 transition cursor-pointer ${
                       selected
                         ? 'border-slate-900 bg-slate-50 shadow-xs scale-[1.03]'
-                        : 'border-slate-200 hover:border-slate-300 bg-white'
+                        : 'border-slate-200 hover:border-slate-300 bg-white dark:bg-slate-900'
                     }`}
                     title={preset.name}
                   >
@@ -769,7 +769,7 @@ export const LojaTab: React.FC = () => {
                   type="color"
                   value={editStoreColor}
                   onChange={(e) => setEditStoreColor(e.target.value)}
-                  className="w-9 h-7 rounded-lg border border-slate-200 cursor-pointer bg-white p-0.5"
+                  className="w-9 h-7 rounded-lg border border-slate-200 cursor-pointer bg-white dark:bg-slate-900 p-0.5"
                 />
               </label>
               <span className="text-[10px] text-slate-400">
