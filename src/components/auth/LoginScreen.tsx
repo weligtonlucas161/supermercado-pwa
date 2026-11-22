@@ -10,15 +10,17 @@ import {
   FileText,
   Building2,
   Camera,
-  Bell
+  Bell,
+  Fingerprint
 } from 'lucide-react';
+import { supportsPasskeys } from '../../services/passkeyService';
 import { useApp } from '../../context/AppContext';
 import { PatchNotesModal } from '../modals/PatchNotesModal';
 import { TermsModal } from '../modals/TermsModal';
 import { sanitizeIdentifier } from '../../utils/security';
 
 export const LoginScreen: React.FC = () => {
-  const { login, darkMode, disconnectedMessage, clearDisconnectedMessage } = useApp();
+  const { login, loginWithPasskey, darkMode, disconnectedMessage, clearDisconnectedMessage } = useApp();
 
   const [matricula, setMatricula] = useState('');
   const [senha, setSenha] = useState('');
@@ -262,6 +264,18 @@ export const LoginScreen: React.FC = () => {
               )}
             </button>
           </form>
+          {supportsPasskeys() && (
+            <button type="button" disabled={isLoading} onClick={async () => {
+              setIsLoading(true);
+              setErrorMessage(null);
+              try {
+                const result = await loginWithPasskey();
+                if (!result.success) setErrorMessage(result.message || 'Não foi possível entrar com a chave de acesso.');
+              } finally { setIsLoading(false); }
+            }} className="w-full flex items-center justify-center gap-2 rounded-xl border border-emerald-500/40 px-4 py-3 font-semibold text-sm text-emerald-700 dark:text-emerald-300 disabled:opacity-50">
+              <Fingerprint className="w-5 h-5" /> Entrar com chave de acesso
+            </button>
+          )}
         </div>
       </div>
 
