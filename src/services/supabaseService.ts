@@ -138,8 +138,13 @@ export function getStoredEmployees(): StoreEmployee[] {
   try {
     const raw = localStorage.getItem(LOCAL_STORAGE_EMPLOYEES_KEY);
     const parsed = raw ? JSON.parse(raw) : [];
-    // O cache é apenas informativo: nunca autenticar por senhas armazenadas nele.
-    return Array.isArray(parsed) ? parsed : [];
+    // Remoção progressiva das senhas legadas já gravadas em navegadores existentes.
+    if (!Array.isArray(parsed)) return [];
+    const sanitized = parsed.map((employee: StoreEmployee) => ({ ...employee, senha: '' }));
+    if (parsed.some((employee: StoreEmployee) => Boolean(employee?.senha))) {
+      localStorage.setItem(LOCAL_STORAGE_EMPLOYEES_KEY, JSON.stringify(sanitized));
+    }
+    return sanitized;
   } catch {
     return [];
   }
