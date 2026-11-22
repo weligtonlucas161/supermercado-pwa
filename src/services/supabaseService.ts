@@ -171,7 +171,8 @@ export function getStoredRoles(): StoreRole[] {
  */
 export async function changeUserPassword(
   matricula: string,
-  newPassword: string
+  newPassword: string,
+  newEmail?: string
 ): Promise<{ success: boolean; message?: string }> {
   if (!client || !isSupabaseConfigured() || newPassword.length < 12 || newPassword.length > 128) {
     return { success: false, message: 'Conexão necessária e senha de 12 a 128 caracteres.' };
@@ -186,10 +187,18 @@ export async function changeUserPassword(
       String(employee.matricula).toLowerCase().replace(/^@/, '') !== matricula.trim().toLowerCase().replace(/^@/, '')) {
     return { success: false, message: 'Não é permitido alterar a senha de outra conta.' };
   }
+  if (newEmail !== undefined) {
+    const email = newEmail.trim().toLowerCase();
+    if (!/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(email)) {
+      return { success: false, message: 'Informe um e-mail válido.' };
+    }
+    const { error: emailError } = await client.auth.updateUser({ email });
+    if (emailError) return { success: false, message: 'Não foi possível solicitar a troca de e-mail: ' + emailError.message };
+  }
   const { error } = await client.auth.updateUser({ password: newPassword });
   if (error) return { success: false, message: 'Não foi possível atualizar a senha no Supabase Auth.' };
   await client.from('usuarios').update({ primeiro_login: false }).eq('auth_user_id', identity.user.id);
-  return { success: true, message: 'Senha alterada com sucesso!' };
+  return { success: true, message: newEmail ? 'Senha atualizada. Confirme o novo e-mail pela mensagem recebida para concluir a substituição.' : 'Senha alterada com sucesso!' };
 }
 
 export function verifyUserStillActive(matricula: string, lojaId?: string): { active: boolean; companyName?: string } {
