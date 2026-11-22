@@ -24,6 +24,8 @@ import { useApp } from '../../context/AppContext';
 import { StoreEmployee, StoreRole, SETORES_DISPONIVEIS, SetorLoja } from '../../types';
 import { triggerScanBeep } from '../../utils/haptics';
 import { EmployeeDetailModal } from '../modals/EmployeeDetailModal';
+import { getDbClient } from '../../services/db/client';
+import { encryptSingleField } from '../../utils/encryptionUtils';
 
 const STORE_PALETTE_PRESETS = [
   { name: 'Esmeralda', hex: '#059669' },
@@ -64,6 +66,9 @@ export const LojaTab: React.FC = () => {
   const [isRoleModalOpen, setIsRoleModalOpen] = useState(false);
   const [editingRole, setEditingRole] = useState<StoreRole | null>(null);
 
+  const [createdCredentials, setCreatedCredentials] = useState<{matricula:string; password:string}|null>(null);
+
+  // Credenciais temporárias: exibidas somente nesta sessão, nunca armazenadas.
   // Form Funcionário
   const [empMatricula, setEmpMatricula] = useState('');
   const [empNome, setEmpNome] = useState('');
@@ -107,53 +112,44 @@ export const LojaTab: React.FC = () => {
   // Handler Adicionar Funcionário
   const handleSaveEmployee = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!empMatricula.trim() || !empNome.trim()) {
-      setNotice({ type: 'error', text: 'Preencha a matrícula e o nome do funcionário.' });
+    if (!empNome.trim()) {
+      setNotice({ type: 'error', text: 'Informe o nome do funcionário.' });
       return;
     }
-
     if (empCargo.trim().toLowerCase() === 'promotor' && !empCodigoFornecedor.trim()) {
-      setNotice({ type: 'error', text: 'Informe o código do fornecedor para cadastrar um promotor.' });
+      setNotice({ type: 'error', text: 'Informe o código do fornecedor.' });
       return;
     }
-
     if (isLimitReached) {
-      setNotice({ 
-        type: 'error', 
-        text: `Limite máximo de ${userLimit} usuários atingido para esta loja. Contate o Administrador de SaaS para ampliar a cota de licenças.` 
-      });
+      setNotice({ type: 'error', text: 'Limite de usuários da loja atingido.' });
       return;
     }
-
-    const newEmp: StoreEmployee = {
-      id: `usr_emp_${Date.now()}`,
-      matricula: empMatricula.trim(),
-      nome: empNome.trim(),
-      senha: empSenha.trim(),
-      cargo: empCargo,
-      codigo_fornecedor: empCargo.trim().toLowerCase() === 'promotor' ? empCodigoFornecedor.trim() : undefined,
-      setor_restrito: empSetorRestrito,
-      loja_id: currentLojaId,
-      ativo: true,
-      created_at: new Date().toISOString(),
-    };
-
-    const res = await addOrUpdateEmployee(newEmp);
-    if (res.success) {
-      triggerScanBeep(true);
-      setNotice({ 
-        type: 'success', 
-        text: `Funcionário "${newEmp.nome}" cadastrado com sucesso! Permissão: ${empSetorRestrito === 'TODOS' ? 'Todos os setores' : `Somente ${empSetorRestrito}`}.` 
-      });
-      setIsEmployeeModalOpen(false);
-      setEmpMatricula('');
-      setEmpNome('');
-      setEmpSenha('');
-      setEmpCodigoFornecedor('');
-      setEmpSetorRestrito('TODOS');
-    } else {
-      setNotice({ type: 'error', text: res.error || 'Erro ao cadastrar funcionário.' });
+    const db = getDbClient();
+    if (!db) {
+      setNotice({ type: 'error', text: 'Conexão com o Supabase necessária para criar usuários.' });
+      return;
     }
+    const { data, error } = await db.functions.invoke('create-store-user', {
+      body: {
+        nome: empNome.trim(),
+        nome_cifrado: encryptSingleField(empNome.trim()),
+        cargo: empCargo,
+        codigo_fornecedor: empCargo.trim().toLowerCase() === 'promotor' ? empCodigoFornecedor.trim() : null,
+        setor: empSetorRestrito,
+        loja_id: currentLojaId,
+      },
+    });
+    if (error || !data?.success || !data?.matricula || !data?.password) {
+      setNotice({ type: 'error', text: 'Não foi possível criar a conta no Supabase Auth. Verifique suas permissões e tente novamente.' });
+      return;
+    }
+    setCreatedCredentials({ matricula: data.matricula, password: data.password });
+    triggerScanBeep(true);
+    setNotice({ type: 'success', text: 'Funcionário criado e vinculado ao Supabase Auth. Copie as credenciais exibidas antes de fechar.' });
+    setIsEmployeeModalOpen(false);
+    setEmpNome('');
+    setEmpCodigoFornecedor('');
+    setEmpSetorRestrito('TODOS');
   };
 
   // Handler Salvar Cargo
@@ -224,6 +220,18 @@ export const LojaTab: React.FC = () => {
   };
 
   return (
+    <>
+      {createdCredentials && (
+        <div className="p-4 rounded-xl border-2 border-emerald-500 bg-emerald-50 dark:bg-slate-800 space-y-2">
+          <p className="font-bold text-emerald-800 dark:text-emerald-300">Credenciais do novo funcionário — copie agora</p>
+          <p className="font-mono">Matrícula: {createdCredentials.matricula}</p>
+          <p className="font-mono break-all">Senha: {createdCredentials.password}</p>
+          <button type="button" onClick={() => {
+            navigator.clipboard.writeText(`Matrícula: ${createdCredentials.matricula}\nSenha: ${createdCredentials.password}`);
+          }} className="px-3 py-2 rounded-lg bg-emerald-600 text-white">Copiar credenciais</button>
+          <button type="button" onClick={() => setCreatedCredentials(null)} className="ml-2 px-3 py-2 rounded-lg border">Ocultar</button>
+        </div>
+      )}
     <div className="space-y-5 animate-in fade-in duration-150">
       
       {/* Header Gestão de Loja */}
@@ -687,35 +695,10 @@ export const LojaTab: React.FC = () => {
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider text-[10px] block mb-1">
-                    Matrícula de Login *
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="Ex: 5044"
-                    value={empMatricula}
-                    onChange={e => setEmpMatricula(e.target.value)}
-                    className="w-full p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-mono font-bold"
-                  />
-                </div>
-
-                <div>
-                  <label className="font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider text-[10px] block mb-1">
-                    Senha de Acesso *
-                  </label>
-                  <input
-                    type="password"
-                    required
-                    placeholder="Senha do operador"
-                    value={empSenha}
-                    onChange={e => setEmpSenha(e.target.value)}
-                    className="w-full p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
-                  />
-                </div>
-              </div>
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                A matrícula e a senha segura serão geradas automaticamente ao salvar.
+                As credenciais serão mostradas uma única vez após a criação.
+              </p>
 
               <div>
                 <label className="font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider text-[10px] block mb-1">
@@ -954,5 +937,6 @@ export const LojaTab: React.FC = () => {
         onClose={() => setSelectedEmployeeForDetail(null)}
       />
     </div>
+    </>
   );
 };
