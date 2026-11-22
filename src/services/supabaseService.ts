@@ -1522,7 +1522,7 @@ export function mapProductRow(
   };
 }
 
-export async function fetchProductsFromSupabase(lojaId?: string): Promise<Product[]> {
+export async function fetchProductsFromSupabase(lojaId?: string): Promise<Product[] | null> {
   const cleanLojaId = lojaId ? sanitizeIdentifier(lojaId, 64) : '';
   if (!cleanLojaId) {
     return [];
@@ -1543,7 +1543,7 @@ export async function fetchProductsFromSupabase(lojaId?: string): Promise<Produc
         // ignore
       }
     }
-    return [];
+    return null;
   }
 
   try {
@@ -1564,7 +1564,7 @@ export async function fetchProductsFromSupabase(lojaId?: string): Promise<Produc
     return data.map((row: Record<string, unknown>) => mapProductRow(row, cleanLojaId));
   } catch (err) {
     console.warn('Erro ao consultar produtos no Supabase:', err);
-    return [];
+    return null;
   }
 }
 
