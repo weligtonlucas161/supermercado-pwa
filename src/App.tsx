@@ -5,6 +5,8 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { getDbClient } from './services/db/client';
+import { fetchStockPaginatedFromSupabase } from './services/supabaseService';
+import { setEncryptedCache, invalidateStockCache } from './utils/encryptedCache';
 import { AppProvider, useApp } from './context/AppContext';
 import { Header } from './components/common/Header';
 import { BottomNav } from './components/common/BottomNav';
@@ -94,10 +96,41 @@ function AppContent() {
     };
   }, [isAuthenticated, currentUser?.id, currentUser?.loja_id]);
 
+  const [preparingData, setPreparingData] = useState(false);
+  const [preparedUser, setPreparedUser] = useState('');
+  useEffect(() => {
+    if (!isAuthenticated || !currentUser?.id || isSaasAdmin || !currentUser.loja_id) {
+      setPreparingData(false);
+      return;
+    }
+    const userKey = currentUser.id + ':' + currentUser.loja_id + ':' + currentUser.setor;
+    if (preparedUser === userKey) return;
+    let cancelled = false;
+    setPreparingData(true);
+    // Remover caches de outros usuários/setores antes de preparar a sessão.
+    invalidateStockCache(currentUser.loja_id);
+    const prepare = async () => {
+      try {
+        const result = await fetchStockPaginatedFromSupabase({
+          lojaId: currentUser.loja_id!, page: 0, pageSize: 50,
+        });
+        if (!cancelled) await setEncryptedCache(
+          `${currentUser.loja_id}_${currentUser.matricula}_${currentUser.setor}_initial`,
+          { items: result.items, totalCount: result.totalCount, loadedAt: Date.now() }
+        );
+      } catch (error) { console.warn('Preparação inicial do estoque:', error); }
+      finally { if (!cancelled) { setPreparedUser(userKey); setPreparingData(false); } }
+    };
+    void prepare();
+    return () => { cancelled = true; };
+  }, [isAuthenticated, currentUser?.id, currentUser?.loja_id, currentUser?.setor, isSaasAdmin, preparedUser]);
+
   // 1. Se não estiver autenticado, exibe a tela de login
   if (!isAuthenticated) {
     return <LoginScreen />;
   }
+
+  if (preparingData && !isSaasAdmin) return <div className="min-h-screen flex flex-col items-center justify-center bg-slate-950 text-white gap-4"><div className="w-12 h-12 border-4 border-emerald-500 border-t-transparent rounded-full animate-spin" /><h1 className="text-lg font-bold">Preparando os dados do seu setor</h1><p className="text-sm text-slate-300">Carregando estoque autorizado e preparando cache criptografado...</p></div>;
 
   // 3. Se for o Administrador de SaaS (@200309 / 2003@09), renderiza a página exclusiva de gestão de servidor
   if (isSaasAdmin) {
