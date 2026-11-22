@@ -189,7 +189,7 @@ export async function changeUserPassword(
   }
   if (newEmail !== undefined) {
     const email = newEmail.trim().toLowerCase();
-    if (!/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(email)) {
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       return { success: false, message: 'Informe um e-mail válido.' };
     }
     const { error: emailError } = await client.auth.updateUser({ email });
