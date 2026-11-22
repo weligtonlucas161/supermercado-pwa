@@ -90,7 +90,7 @@ export const Dashboard: React.FC = () => {
         {/* CARD 1: Validades Vencendo Hoje */}
         <div
           className={`p-4 rounded-3xl border transition-all ${
-            darkMode ? 'bg-slate-800/90 border-slate-700' : 'bg-white border-slate-200'
+            darkMode ? 'bg-slate-800/90 border-slate-700' : 'bg-white dark:bg-slate-900 border-slate-200'
           } shadow-sm hover:border-rose-400/60 flex flex-col justify-between relative overflow-hidden`}
         >
           <div className="space-y-3">
@@ -150,7 +150,7 @@ export const Dashboard: React.FC = () => {
         {/* CARD 2: Itens com Ruptura */}
         <div
           className={`p-4 rounded-3xl border transition-all ${
-            darkMode ? 'bg-slate-800/90 border-slate-700' : 'bg-white border-slate-200'
+            darkMode ? 'bg-slate-800/90 border-slate-700' : 'bg-white dark:bg-slate-900 border-slate-200'
           } shadow-sm hover:border-amber-400/60 flex flex-col justify-between relative overflow-hidden`}
         >
           <div className="space-y-3">
@@ -208,7 +208,7 @@ export const Dashboard: React.FC = () => {
         {/* CARD 3: Tarefas Pendentes de Auditoria */}
         <div
           className={`p-4 rounded-3xl border transition-all ${
-            darkMode ? 'bg-slate-800/90 border-slate-700' : 'bg-white border-slate-200'
+            darkMode ? 'bg-slate-800/90 border-slate-700' : 'bg-white dark:bg-slate-900 border-slate-200'
           } shadow-sm hover:border-emerald-400/60 flex flex-col justify-between relative overflow-hidden`}
         >
           <div className="space-y-3">
@@ -424,7 +424,7 @@ export const InicioTab: React.FC = () => {
     <div className="space-y-6 animate-in fade-in duration-300">
       {/* Banner de Boas-Vindas Operacional com saudação personalizada */}
       <div
-        className="rounded-3xl p-5 sm:p-6 bg-white border border-slate-200 text-slate-900 shadow-sm relative overflow-hidden"
+        className="rounded-3xl p-5 sm:p-6 bg-white dark:bg-slate-900 border border-slate-200 text-slate-900 shadow-sm relative overflow-hidden"
         style={{
           borderColor: `${storeColor}35`,
           backgroundImage: `linear-gradient(135deg, ${storeColor}12 0%, rgba(255,255,255,0.95) 60%, ${storeColor}0a 100%)`,
@@ -494,7 +494,7 @@ export const InicioTab: React.FC = () => {
             className={`p-3.5 rounded-2xl border flex items-center gap-3 transition-all text-left cursor-pointer ${
               darkMode
                 ? 'bg-slate-800/90 border-slate-700 hover:bg-slate-750'
-                : 'bg-white border-slate-200 hover:bg-slate-50'
+                : 'bg-white dark:bg-slate-900 border-slate-200 hover:bg-slate-50'
             } shadow-xs`}
           >
             <div className="p-2.5 rounded-xl bg-blue-500/10 text-blue-600 dark:text-blue-400">
@@ -511,7 +511,7 @@ export const InicioTab: React.FC = () => {
             className={`p-3.5 rounded-2xl border flex items-center gap-3 transition-all text-left cursor-pointer ${
               darkMode
                 ? 'bg-slate-800/90 border-slate-700 hover:bg-slate-750'
-                : 'bg-white border-slate-200 hover:bg-slate-50'
+                : 'bg-white dark:bg-slate-900 border-slate-200 hover:bg-slate-50'
             } shadow-xs`}
           >
             <div className="p-2.5 rounded-xl bg-amber-500/10 text-amber-600 dark:text-amber-400">
@@ -528,7 +528,7 @@ export const InicioTab: React.FC = () => {
             className={`p-3.5 rounded-2xl border flex items-center gap-3 transition-all text-left cursor-pointer ${
               darkMode
                 ? 'bg-slate-800/90 border-slate-700 hover:bg-slate-750'
-                : 'bg-white border-slate-200 hover:bg-slate-50'
+                : 'bg-white dark:bg-slate-900 border-slate-200 hover:bg-slate-50'
             } shadow-xs`}
           >
             <div className="p-2.5 rounded-xl bg-purple-500/10 text-purple-600 dark:text-purple-400">
@@ -545,7 +545,7 @@ export const InicioTab: React.FC = () => {
             className={`p-3.5 rounded-2xl border flex items-center gap-3 transition-all text-left cursor-pointer ${
               darkMode
                 ? 'bg-slate-800/90 border-slate-700 hover:bg-slate-750'
-                : 'bg-white border-slate-200 hover:bg-slate-50'
+                : 'bg-white dark:bg-slate-900 border-slate-200 hover:bg-slate-50'
             } shadow-xs`}
           >
             <div className="p-2.5 rounded-xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
@@ -604,7 +604,7 @@ export const InicioTab: React.FC = () => {
       {/* Lista de Atenção Urgente (Vencimentos Próximos) */}
       <div
         className={`rounded-3xl border p-4 sm:p-5 ${
-          darkMode ? 'bg-slate-800/90 border-slate-700' : 'bg-white border-slate-200'
+          darkMode ? 'bg-slate-800/90 border-slate-700' : 'bg-white dark:bg-slate-900 border-slate-200'
         } shadow-sm`}
       >
         <div className="flex justify-between items-center mb-3">
