@@ -8,6 +8,7 @@ import {
   TabId, 
   OfflineAction,
   AuthUser,
+  LoginResult,
   Store,
   StoreEmployee,
   StoreRole,
@@ -26,6 +27,7 @@ import {
   loadStoredData, 
   saveStoredData 
 } from '../data/mockData';
+import { authenticateWithPasskey } from '../services/passkeyService';
 import { useOnlineStatus } from '../pwa/useOnlineStatus';
 import { useBackgroundSync } from '../pwa/useBackgroundSync';
 import { triggerScanBeep } from '../utils/haptics';
@@ -109,6 +111,7 @@ interface AppContextType {
   isSaasAdmin: boolean;
   isGerente: boolean;
   login: (matricula: string, senha: string) => Promise<{ success: boolean; message?: string }>;
+  loginWithPasskey: () => Promise<{ success: boolean; message?: string }>;
   logout: (force?: boolean) => void;
   disconnectedMessage: string | null;
   clearDisconnectedMessage: () => void;
@@ -472,10 +475,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   }, [isAuthenticated, refreshStores, refreshEmployees, refreshRoles]);
 
-  // Login
-  const login = async (matricula: string, senha: string): Promise<{ success: boolean; message?: string }> => {
-    setDisconnectedMessage(null);
-    const result = await loginUser(matricula, senha);
+  // Ambos os métodos compartilham a mesma inicialização segura da sessão.
+  const finishLogin = (result: LoginResult): { success: boolean; message?: string } => {
     if (result.success && result.user) {
       setCurrentUser(result.user);
       setIsAuthenticated(true);
@@ -515,6 +516,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return { success: true };
     }
     return { success: false, message: result.message || 'Falha na autenticação' };
+  };
+
+  const login = async (matricula: string, senha: string) => {
+    setDisconnectedMessage(null);
+    return finishLogin(await loginUser(matricula, senha));
+  };
+  const loginWithPasskey = async () => {
+    setDisconnectedMessage(null);
+    try {
+      return finishLogin(await authenticateWithPasskey() as LoginResult);
+    } catch (error) {
+      return { success: false, message: error instanceof Error ? error.message : 'Falha ao usar a chave de acesso.' };
+    }
   };
 
   const [disconnectedMessage, setDisconnectedMessage] = useState<string | null>(null);
