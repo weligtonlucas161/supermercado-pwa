@@ -9,42 +9,28 @@
 
 const CACHE_PREFIX = 'stock_cache_enc_';
 const FOUR_HOURS_MS = 4 * 60 * 60 * 1000; // 4 horas
-const CACHE_SALT = new Uint8Array([83, 116, 111, 99, 107, 67, 97, 99, 104, 101, 83, 97, 108, 116, 50, 54]);
-
+// Chave de sessão não persistente: um novo login/navegador invalida o cache antigo.
+// Rotação a cada 240 minutos; entradas antigas são descartadas ao girar a chave.
+const KEY_EPOCH_MS = FOUR_HOURS_MS;
+const CACHE_SALT = new TextEncoder().encode('superpwa-cache-v3');
 let cachedKey: CryptoKey | null = null;
-
+let cachedEpoch = -1;
+function getEpoch() { return Math.floor(Date.now() / KEY_EPOCH_MS); }
 async function getCacheKey(): Promise<CryptoKey> {
-  if (cachedKey) return cachedKey;
-
-  if (typeof window === 'undefined' || !window.crypto || !window.crypto.subtle) {
-    throw new Error('Web Crypto API não disponível no ambiente.');
+  const epoch = getEpoch();
+  if (cachedKey && cachedEpoch === epoch) return cachedKey;
+  if (!window.crypto?.subtle) throw new Error('Web Crypto API indisponível');
+  const secretKey = 'superpwa_session_cache_secret_v3';
+  let secret = sessionStorage.getItem(secretKey);
+  if (!secret) {
+    const bytes = crypto.getRandomValues(new Uint8Array(32));
+    secret = Array.from(bytes, n => n.toString(16).padStart(2, '0')).join('');
+    sessionStorage.setItem(secretKey, secret);
   }
-
-  const enc = new TextEncoder();
-  const rawSecret = 'SUPERPWA-STOCK-ENCRYPTED-CACHE-KEY-V1';
-  const keyMaterial = await window.crypto.subtle.importKey(
-    'raw',
-    enc.encode(rawSecret),
-    { name: 'PBKDF2' },
-    false,
-    ['deriveKey']
-  );
-
-  const derived = await window.crypto.subtle.deriveKey(
-    {
-      name: 'PBKDF2',
-      salt: CACHE_SALT,
-      iterations: 100000,
-      hash: 'SHA-256',
-    },
-    keyMaterial,
-    { name: 'AES-GCM', length: 256 },
-    false,
-    ['encrypt', 'decrypt']
-  );
-
-  cachedKey = derived;
-  return derived;
+  const material = await crypto.subtle.importKey('raw', new TextEncoder().encode(secret + ':' + epoch), 'PBKDF2', false, ['deriveKey']);
+  cachedKey = await crypto.subtle.deriveKey({ name: 'PBKDF2', salt: CACHE_SALT, iterations: 100000, hash: 'SHA-256' }, material, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+  cachedEpoch = epoch;
+  return cachedKey;
 }
 
 function bufferToBase64(buffer: ArrayBuffer | Uint8Array): string {
@@ -66,6 +52,7 @@ function base64ToBuffer(base64: string): Uint8Array {
 }
 
 interface EncryptedEnvelope {
+  epoch: number;
   iv: string; // Base64 (12 bytes)
   ciphertext: string; // Base64
 }
@@ -98,6 +85,7 @@ export async function setEncryptedCache<T>(key: string, data: T): Promise<void> 
     );
 
     const envelope: EncryptedEnvelope = {
+      epoch: getEpoch(),
       iv: bufferToBase64(iv),
       ciphertext: bufferToBase64(encrypted),
     };
@@ -122,7 +110,7 @@ export async function getEncryptedCache<T>(key: string): Promise<{ data: T; time
 
   try {
     const envelope: EncryptedEnvelope = JSON.parse(raw);
-    if (!envelope.iv || !envelope.ciphertext) {
+    if (!envelope.iv || !envelope.ciphertext || envelope.epoch !== getEpoch()) {
       localStorage.removeItem(storageKey);
       return null;
     }
