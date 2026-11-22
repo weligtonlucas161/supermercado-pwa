@@ -6,12 +6,12 @@
    Variáveis limitadas a .dark, preservando integralmente o tema claro. */
 .dark {
   color-scheme: dark;
-  --color-slate-950: #141414;
-  --color-slate-900: #1b1b1b;
-  --color-slate-850: #222222;
-  --color-slate-800: #292929;
+  --color-slate-950: #1A1A1A;
+  --color-slate-900: #1A1A1A;
+  --color-slate-850: #262626;
+  --color-slate-800: #262626;
   --color-slate-750: #303030;
-  --color-slate-700: #3a3a3a;
+  --color-slate-700: #343434;
   --color-slate-600: #505050;
   --color-slate-500: #858585;
   --color-slate-400: #a3a3a3;
@@ -21,6 +21,47 @@
   --color-slate-50: #fafafa;
 }
 
+
+/* Correções de compatibilidade: componentes legados usam utilitários do tema claro
+   mesmo quando .dark está ativo. Aplicar somente a superfícies neutras. */
+@layer utilities {
+  .dark .bg-white,
+  .dark .bg-white\/95,
+  .dark .bg-white\/90,
+  .dark .bg-white\/80,
+  .dark .bg-slate-50,
+  .dark .bg-slate-100,
+  .dark .bg-gray-50,
+  .dark .bg-gray-100 {
+    background-color: #262626;
+  }
+  .dark .text-slate-950,
+  .dark .text-slate-900,
+  .dark .text-slate-800,
+  .dark .text-gray-900,
+  .dark .text-gray-800 {
+    color: #E5E5E5;
+  }
+  .dark .text-slate-700,
+  .dark .text-gray-700 {
+    color: #D0D0D0;
+  }
+  .dark .border-slate-100,
+  .dark .border-slate-200,
+  .dark .border-gray-100,
+  .dark .border-gray-200 {
+    border-color: #3D3D3D;
+  }
+  .dark .hover\:bg-slate-50:hover,
+  .dark .hover\:bg-white:hover {
+    background-color: #343434;
+  }
+}
+.dark input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+.dark textarea,
+.dark select {
+  color-scheme: dark;
+}
 
 @layer base {
   /* Prevent blue tap highlights and pull-to-refresh reload flicker on mobile PWA */
