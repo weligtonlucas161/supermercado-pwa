@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Lock, 
   User, 
@@ -8,7 +8,9 @@ import {
   AlertCircle, 
   Sparkles, 
   FileText,
-  Building2
+  Building2,
+  Camera,
+  Bell
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { PatchNotesModal } from '../modals/PatchNotesModal';
@@ -23,6 +25,41 @@ export const LoginScreen: React.FC = () => {
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  // Navegadores normalmente exigem um clique para solicitar acesso à câmera e notificações.
+  const [showPermissionPrompt,setShowPermissionPrompt]=useState(false);
+  const [permissionBusy,setPermissionBusy]=useState(false);
+  const [permissionFeedback,setPermissionFeedback]=useState('');
+  useEffect(()=>{
+    if(sessionStorage.getItem('superpwa_permissions_prompted')==='1')return;
+    const cameraSupported=Boolean(navigator.mediaDevices?.getUserMedia);
+    const notificationPending=('Notification' in window)&&Notification.permission==='default';
+    if(cameraSupported||notificationPending)setShowPermissionPrompt(true);
+  },[]);
+  const requestEssentialPermissions=async()=>{
+    setPermissionBusy(true);
+    const messages:string[]=[];
+    try {
+      if(navigator.mediaDevices?.getUserMedia){
+        try {
+          const stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'},audio:false});
+          stream.getTracks().forEach(track=>track.stop());
+          messages.push('Câmera autorizada');
+        }catch {messages.push('Câmera não autorizada ou indisponível');}
+      }else messages.push('Câmera não disponível neste navegador');
+      if('Notification' in window){
+        try{
+          const status=Notification.permission==='default'?await Notification.requestPermission():Notification.permission;
+          messages.push(status==='granted'?'Notificações autorizadas':'Notificações não autorizadas');
+        }catch {messages.push('Não foi possível solicitar notificações');}
+      }else messages.push('Notificações não disponíveis neste navegador');
+    }finally{
+      sessionStorage.setItem('superpwa_permissions_prompted','1');
+      setPermissionFeedback(messages.join(' • '));
+      setPermissionBusy(false);
+      setShowPermissionPrompt(false);
+    }
+  };
 
   // Modais auxiliares
   const [showPatchNotes, setShowPatchNotes] = useState(false);
@@ -228,6 +265,19 @@ export const LoginScreen: React.FC = () => {
         </div>
       </div>
 
+      {showPermissionPrompt && (
+        <div className="fixed inset-0 z-[100] bg-slate-950/70 flex items-center justify-center p-4">
+          <div role="dialog" aria-modal="true" aria-label="Permissões do aplicativo" className="w-full max-w-sm rounded-2xl bg-white dark:bg-slate-900 p-5 shadow-2xl space-y-4">
+            <h2 className="font-black text-lg flex items-center gap-2"><Camera className="w-5 h-5"/> Permissões do aplicativo</h2>
+            <p className="text-sm text-slate-600 dark:text-slate-300">Para ler códigos de barras e receber avisos importantes, autorize o acesso à câmera e às notificações. Você pode continuar mesmo sem conceder as permissões.</p>
+            <div className="text-xs flex items-center gap-2"><Camera className="w-4 h-4"/> Câmera para leitura de produtos</div>
+            <div className="text-xs flex items-center gap-2"><Bell className="w-4 h-4"/> Notificações de lembretes e alertas</div>
+            <button type="button" disabled={permissionBusy} onClick={()=>void requestEssentialPermissions()} className="w-full rounded-xl bg-emerald-600 text-white p-3 font-bold disabled:opacity-50">{permissionBusy?'Solicitando permissões...':'Autorizar câmera e notificações'}</button>
+            <button type="button" onClick={()=>{sessionStorage.setItem('superpwa_permissions_prompted','1');setShowPermissionPrompt(false);}} className="w-full text-sm text-slate-500">Agora não</button>
+          </div>
+        </div>
+      )}
+      {permissionFeedback && <div role="status" className="fixed bottom-3 left-3 right-3 z-50 mx-auto max-w-md rounded-xl bg-slate-800 text-white p-3 text-xs text-center">{permissionFeedback}</div>}
       {/* Footer com Aviso de No-Copyright & Termos de Uso */}
       <footer className="w-full max-w-md mx-auto text-center space-y-1.5 [@media(max-height:480px)]:space-y-0.5 shrink-0">
         <div className="flex items-center justify-center gap-3 text-xs text-slate-500 dark:text-slate-400 [@media(max-height:600px)]:hidden">
