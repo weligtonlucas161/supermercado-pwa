@@ -18,7 +18,8 @@ import {
   Edit2,
   Palette,
   Save,
-  Sun
+  Sun,
+  Trash2
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { StoreEmployee, StoreRole, SETORES_DISPONIVEIS, SetorLoja } from '../../types';
@@ -108,6 +109,46 @@ export const LojaTab: React.FC = () => {
     e.matricula.toLowerCase().includes(searchTerm.toLowerCase()) ||
     e.cargo.toLowerCase().includes(searchTerm.toLowerCase())
   );
+
+  const [deletingEmployeeId, setDeletingEmployeeId] = useState<string | null>(null);
+  const [employeeListVersion, setEmployeeListVersion] = useState(0);
+  const [deletedEmployeeIds, setDeletedEmployeeIds] = useState<string[]>([]);
+  const roleRank = (role: string): number => {
+    const name = role.toLocaleLowerCase('pt-BR');
+    if (name.includes('gerente geral')) return 0;
+    if (name.includes('gerente')) return 1;
+    if (name.includes('encarregado') || name.includes('supervisor') || name.includes('líder')) return 2;
+    if (name.includes('promotor')) return 4;
+    return 3;
+  };
+  const groupedEmployees = Object.entries(
+    filteredEmployees.filter(emp => !deletedEmployeeIds.includes(emp.id)).reduce<Record<string, StoreEmployee[]>>((groups, emp) => {
+      const sector = emp.setor_restrito?.trim() || 'NÃO DEFINIDO';
+      (groups[sector] ||= []).push(emp);
+      return groups;
+    }, {})
+  ).sort(([a], [b]) => a === 'TODOS' ? -1 : b === 'TODOS' ? 1 : a.localeCompare(b, 'pt-BR'))
+   .map(([sector, members]) => [sector, [...members].sort((a,b) => roleRank(a.cargo)-roleRank(b.cargo) || a.nome.localeCompare(b.nome, 'pt-BR'))] as const);
+
+  const handleDeleteEmployee = async (employee: StoreEmployee) => {
+    if (employee.id === operator.id || employee.matricula === operator.matricula) {
+      setNotice({type:'error',text:'Não é permitido excluir o próprio usuário.'}); return;
+    }
+    if (!window.confirm(`Excluir definitivamente ${employee.nome} (${employee.matricula})? O acesso ao sistema será removido. Os registros da loja serão mantidos.`)) return;
+    const db = getDbClient();
+    if (!db) { setNotice({type:'error',text:'Conexão com o servidor indisponível.'}); return; }
+    setDeletingEmployeeId(employee.id);
+    try {
+      const { data, error } = await db.functions.invoke('delete-store-user', {body:{employeeId:employee.id}});
+      if (error || !data?.success) throw new Error(data?.error || error?.message || 'Falha ao excluir.');
+      setDeletedEmployeeIds(ids => [...ids, employee.id]);
+      setSelectedEmployeeForDetail(null);
+      setEmployeeListVersion(v => v + 1);
+      setNotice({type:'success',text:'Usuário excluído. A loja e seus registros foram preservados.'});
+    } catch (error) {
+      setNotice({type:'error',text:error instanceof Error ? error.message : 'Não foi possível excluir o usuário.'});
+    } finally { setDeletingEmployeeId(null); }
+  };
 
   // Handler Adicionar Funcionário
   const handleSaveEmployee = async (e: React.FormEvent) => {
@@ -412,8 +453,15 @@ export const LojaTab: React.FC = () => {
               <p className="text-[11px] text-slate-400 mt-0.5">Clique em "Adicionar Funcionário" para cadastrar seu primeiro operador.</p>
             </div>
           ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-              {filteredEmployees.map(emp => (
+            <div className="space-y-5" key={employeeListVersion}>
+              {groupedEmployees.map(([sector, members]) => (
+                <section key={sector} className="space-y-3">
+                  <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-700 pb-2">
+                    <h3 className="text-sm font-extrabold text-slate-800 dark:text-white flex items-center gap-2"><Tag className="w-4 h-4 text-emerald-600" />{sector === 'TODOS' ? 'Acesso a todos os setores' : `Setor: ${sector}`}</h3>
+                    <span className="text-xs text-slate-500">{members.length} usuário(s)</span>
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+              {members.map(emp => (
                 <div 
                   key={emp.id}
                   onClick={() => setSelectedEmployeeForDetail(emp)}
@@ -424,7 +472,7 @@ export const LojaTab: React.FC = () => {
                   }`}
                   title="Clique para ver senha, detalhes e editar permissões"
                 >
-                  <div className="flex items-start justify-between">
+                  <div className="flex items-start justify-between gap-2">
                     <div>
                       <h4 className="font-extrabold text-xs sm:text-sm text-slate-900 dark:text-white flex items-center gap-1.5">
                         {emp.nome}
@@ -447,6 +495,10 @@ export const LojaTab: React.FC = () => {
                     >
                       {emp.ativo ? '✓ Ativo' : 'Inativo'}
                     </button>
+                    <button type="button" disabled={deletingEmployeeId === emp.id}
+                      onClick={event => { event.stopPropagation(); void handleDeleteEmployee(emp); }}
+                      className="rounded-xl p-1.5 text-rose-600 hover:bg-rose-100 dark:hover:bg-rose-900/30 disabled:opacity-40"
+                      title="Excluir usuário definitivamente"><Trash2 className="w-4 h-4" /></button>
                   </div>
 
                   <div className="mt-3 pt-2.5 border-t border-slate-100 dark:border-slate-800 text-xs space-y-1">
@@ -469,6 +521,9 @@ export const LojaTab: React.FC = () => {
                     </div>
                   </div>
                 </div>
+              ))}
+                  </div>
+                </section>
               ))}
             </div>
           )}
