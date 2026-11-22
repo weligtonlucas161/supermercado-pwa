@@ -34,7 +34,7 @@ export const Header: React.FC = () => {
   return (
     <>
       <header
-        className="sticky top-0 z-30 px-4 py-3 flex items-center justify-between border-b border-slate-200/80 bg-white/95 backdrop-blur-md transition-colors"
+        className="sticky top-0 z-30 px-4 py-3 flex items-center justify-between border-b border-slate-200/80 dark:border-slate-700 bg-white dark:bg-slate-900/95 dark:bg-slate-900/95 backdrop-blur-md transition-colors"
         style={{ borderBottomColor: `${storeColor}30` }}
       >
         {/* Brand identity */}
