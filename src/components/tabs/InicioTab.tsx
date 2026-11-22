@@ -427,7 +427,9 @@ export const InicioTab: React.FC = () => {
         className="rounded-3xl p-5 sm:p-6 bg-white dark:bg-slate-900 border border-slate-200 text-slate-900 shadow-sm relative overflow-hidden"
         style={{
           borderColor: `${storeColor}35`,
-          backgroundImage: `linear-gradient(135deg, ${storeColor}12 0%, rgba(255,255,255,0.95) 60%, ${storeColor}0a 100%)`,
+          backgroundImage: darkMode
+            ? `linear-gradient(135deg, ${storeColor}22 0%, #262626 60%, #1A1A1A 100%)`
+            : `linear-gradient(135deg, ${storeColor}12 0%, rgba(255,255,255,0.95) 60%, ${storeColor}0a 100%)`,
         }}
       >
         <div
