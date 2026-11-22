@@ -187,7 +187,7 @@ const ProductCard: React.FC<ProductCardProps> = ({
           className="relative p-5 rounded-2xl bg-rose-600 border-2 border-rose-500 text-white shadow-xl flex flex-col items-center justify-center text-center cursor-pointer transition-all animate-in zoom-in-95 duration-200"
           title="Clique para remover este produto do estoque"
         >
-          <div className="w-12 h-12 rounded-full bg-white/20 flex items-center justify-center mb-2 shadow-inner group-hover:scale-110 transition-transform">
+          <div className="w-12 h-12 rounded-full bg-white dark:bg-slate-900/20 flex items-center justify-center mb-2 shadow-inner group-hover:scale-110 transition-transform">
             <Trash2 className="w-6 h-6 text-white" />
           </div>
           <h4 className="font-black text-sm tracking-tight">{product.name}</h4>
@@ -201,7 +201,7 @@ const ProductCard: React.FC<ProductCardProps> = ({
                 e.stopPropagation();
                 setIsRedDeleteMode(false);
               }}
-              className="px-3 py-1 rounded-xl bg-white/20 hover:bg-white/30 text-white text-[11px] font-bold transition flex items-center gap-1"
+              className="px-3 py-1 rounded-xl bg-white dark:bg-slate-900/20 hover:bg-white dark:bg-slate-900/30 text-white text-[11px] font-bold transition flex items-center gap-1"
             >
               <X className="w-3.5 h-3.5" /> Cancelar
             </button>
@@ -211,7 +211,7 @@ const ProductCard: React.FC<ProductCardProps> = ({
                 e.stopPropagation();
                 onRequestDelete(product);
               }}
-              className="px-3.5 py-1 rounded-xl bg-white text-rose-700 hover:bg-rose-50 text-[11px] font-black transition shadow-sm flex items-center gap-1"
+              className="px-3.5 py-1 rounded-xl bg-white dark:bg-slate-900 text-rose-700 hover:bg-rose-50 text-[11px] font-black transition shadow-sm flex items-center gap-1"
             >
               <Trash2 className="w-3.5 h-3.5" /> Excluir Agora
             </button>
@@ -243,7 +243,7 @@ const ProductCard: React.FC<ProductCardProps> = ({
               ? 'bg-amber-50/70 border-amber-300'
               : darkMode
               ? 'bg-slate-800/90 border-slate-700'
-              : 'bg-white border-slate-200'
+              : 'bg-white dark:bg-slate-900 border-slate-200'
           } shadow-xs hover:border-emerald-500/50 hover:shadow-md transition-all active:scale-[0.99]`}
         >
           <div className="space-y-1">
@@ -817,7 +817,7 @@ export const EstoqueTab: React.FC = () => {
             className={`w-full pl-9 pr-4 py-2.5 rounded-2xl text-xs border focus:outline-none focus:ring-2 focus:ring-emerald-500 transition ${
               darkMode
                 ? 'bg-slate-800/80 border-slate-700 text-slate-100 placeholder:text-slate-500'
-                : 'bg-white border-slate-200 text-slate-800 placeholder:text-slate-400'
+                : 'bg-white dark:bg-slate-900 border-slate-200 text-slate-800 placeholder:text-slate-400'
             }`}
           />
         </div>
@@ -831,7 +831,7 @@ export const EstoqueTab: React.FC = () => {
               className={`w-full sm:w-auto px-3.5 py-2.5 rounded-2xl text-xs font-bold border transition focus:outline-none focus:ring-2 focus:ring-emerald-500 cursor-pointer ${
                 darkMode
                   ? 'bg-slate-800 border-slate-700 text-slate-200'
-                  : 'bg-white border-slate-200 text-slate-700'
+                  : 'bg-white dark:bg-slate-900 border-slate-200 text-slate-700'
               }`}
             >
               <option value="default">Padrão (Recentes)</option>
@@ -848,7 +848,7 @@ export const EstoqueTab: React.FC = () => {
             className={`p-2.5 rounded-2xl border transition flex items-center gap-1.5 text-xs font-semibold shrink-0 cursor-pointer ${
               darkMode
                 ? 'bg-slate-800 border-slate-700 text-slate-200 hover:bg-slate-700'
-                : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
+                : 'bg-white dark:bg-slate-900 border-slate-200 text-slate-700 hover:bg-slate-50'
             }`}
             title="Bipar código de barras com Barcode Detector API"
           >
@@ -869,7 +869,7 @@ export const EstoqueTab: React.FC = () => {
                     ? 'bg-emerald-600 text-white shadow-sm'
                     : darkMode
                     ? 'bg-slate-800 text-slate-300 border border-slate-700 hover:bg-slate-750'
-                    : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-50'
+                    : 'bg-white dark:bg-slate-900 text-slate-600 border border-slate-200 hover:bg-slate-50'
                 }`}
               >
                 {cat === 'all' ? 'Todas Categorias' : cat}
