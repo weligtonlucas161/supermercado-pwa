@@ -1484,7 +1484,7 @@ export const AuditoriaTab: React.FC = () => {
       {/* =================================================================== */}
       {joinAlert && (
         <div className="fixed top-32 right-4 z-50 p-4 bg-emerald-600 text-white rounded-3xl shadow-2xl flex items-center gap-3 border border-emerald-400 animate-in slide-in-from-right-4 duration-300 max-w-sm">
-          <div className="p-2 rounded-2xl bg-white/20 text-white shrink-0">
+          <div className="p-2 rounded-2xl bg-white dark:bg-slate-900/20 text-white shrink-0">
             <UserPlus className="w-5 h-5" />
           </div>
           <div className="flex-1 min-w-0">
@@ -1496,7 +1496,7 @@ export const AuditoriaTab: React.FC = () => {
           <button
             type="button"
             onClick={() => setJoinAlert(null)}
-            className="p-1.5 rounded-xl hover:bg-white/20 text-white transition cursor-pointer"
+            className="p-1.5 rounded-xl hover:bg-white dark:bg-slate-900/20 text-white transition cursor-pointer"
             title="Fechar notificação"
           >
             <X className="w-4 h-4" />
@@ -1622,7 +1622,7 @@ export const AuditoriaTab: React.FC = () => {
       {/* =================================================================== */}
       {offlineAlert && (
         <div className="fixed top-16 right-4 z-50 p-4 bg-rose-600 text-white rounded-3xl shadow-2xl flex items-center gap-3 border border-rose-400 animate-in slide-in-from-right-4 duration-300 max-w-sm">
-          <div className="p-2 rounded-2xl bg-white/20 text-white shrink-0">
+          <div className="p-2 rounded-2xl bg-white dark:bg-slate-900/20 text-white shrink-0">
             <WifiOff className="w-5 h-5 animate-pulse" />
           </div>
           <div className="flex-1 min-w-0">
@@ -1634,7 +1634,7 @@ export const AuditoriaTab: React.FC = () => {
           <button
             type="button"
             onClick={() => setOfflineAlert(null)}
-            className="p-1.5 rounded-xl hover:bg-white/20 text-white transition cursor-pointer"
+            className="p-1.5 rounded-xl hover:bg-white dark:bg-slate-900/20 text-white transition cursor-pointer"
             title="Fechar alerta"
           >
             <X className="w-4 h-4" />
@@ -1672,7 +1672,7 @@ export const AuditoriaTab: React.FC = () => {
               ? 'bg-emerald-600 text-white border-emerald-600 shadow-md shadow-emerald-600/20 ring-2 ring-emerald-500/30'
               : darkMode
               ? 'bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-750'
-              : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
+              : 'bg-white dark:bg-slate-900 border-slate-200 text-slate-700 hover:bg-slate-50'
           }`}
         >
           <CheckSquare className="w-5 h-5" />
@@ -1688,7 +1688,7 @@ export const AuditoriaTab: React.FC = () => {
               ? 'bg-amber-500 text-slate-950 border-amber-500 shadow-md ring-2 ring-amber-400/40'
               : darkMode
               ? 'bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-750'
-              : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
+              : 'bg-white dark:bg-slate-900 border-slate-200 text-slate-700 hover:bg-slate-50'
           }`}
         >
           <Boxes className="w-5 h-5" />
@@ -1712,7 +1712,7 @@ export const AuditoriaTab: React.FC = () => {
               ? 'bg-amber-500 text-slate-950 border-amber-500 shadow-md ring-2 ring-amber-400/40'
               : darkMode
               ? 'bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-750'
-              : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
+              : 'bg-white dark:bg-slate-900 border-slate-200 text-slate-700 hover:bg-slate-50'
           }`}
         >
           <CalendarClock className="w-5 h-5" />
@@ -1734,7 +1734,7 @@ export const AuditoriaTab: React.FC = () => {
               ? 'bg-emerald-600 text-white border-emerald-600 shadow-md shadow-emerald-600/20 ring-2 ring-emerald-500/30'
               : darkMode
               ? 'bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-750'
-              : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
+              : 'bg-white dark:bg-slate-900 border-slate-200 text-slate-700 hover:bg-slate-50'
           }`}
         >
           <FileText className="w-5 h-5" />
