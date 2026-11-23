@@ -1552,24 +1552,30 @@ export async function fetchProductsFromSupabase(lojaId?: string): Promise<Produc
     const PRODUCT_COLUMNS =
       'id, nome, codigo_barras, codigo_barras_secundario, plu, codigo_fornecedor, setor, departamento, quantidade, data_vencimento, loja_id, is_encrypted, ciphertext, iv, is_locked_for_edit, locked_by, locked_at, criado_em';
 
-    // Busca estritamente pela loja específica (paginado em blocos), garantindo
-    // isolamento total de estoque entre lojas.
-    const data = await fetchPaginated(client, 'produtos', PRODUCT_COLUMNS, cleanLojaId);
-
-    if (!data || data.length === 0) {
-      return [];
-    }
-
-    // Descriptografa em lotes pequenos, cedendo o thread principal ao navegador.
-    // Evita bloquear a interface por uma única tarefa longa em aparelhos modestos.
+    // Processa cada página antes de buscar a próxima: não mantém uma segunda
+    // cópia de todas as linhas brutas (cifradas) na memória do celular.
+    // A ordenação estável mantém o mesmo resultado da leitura anterior.
     const mapped: Product[] = [];
-    const batchSize = 100;
-    for (let offset = 0; offset < data.length; offset += batchSize) {
-      const batch = data.slice(offset, offset + batchSize);
-      for (const row of batch) mapped.push(mapProductRow(row as Record<string, unknown>, cleanLojaId));
-      if (offset + batchSize < data.length && typeof window !== 'undefined') {
-        await new Promise<void>(resolve => setTimeout(resolve, 0));
+    const pageSize = 500;
+    let from = 0;
+    for (;;) {
+      const { data, error } = await client.from('produtos')
+        .select(PRODUCT_COLUMNS)
+        .eq('loja_id', cleanLojaId)
+        .order('criado_em', { ascending: false })
+        .order('id', { ascending: true })
+        .range(from, from + pageSize - 1);
+      if (error) throw new Error(`Falha ao consultar estoque: ${error.message}`);
+      const rows = data || [];
+      for (let offset = 0; offset < rows.length; offset += 100) {
+        const batch = rows.slice(offset, offset + 100);
+        for (const row of batch) mapped.push(mapProductRow(row as Record<string, unknown>, cleanLojaId));
+        if (typeof window !== 'undefined') {
+          await new Promise<void>(resolve => setTimeout(resolve, 0));
+        }
       }
+      if (rows.length < pageSize) break;
+      from += rows.length;
     }
     return mapped;
   } catch (err) {
