@@ -1615,7 +1615,7 @@ export async function fetchStockPaginatedFromSupabase(
         if (raw) {
           const parsed = JSON.parse(raw);
           if (Array.isArray(parsed)) {
-            let filtered = parsed.filter((p: any) => (!p.loja_id || p.loja_id === cleanLojaId));
+            let filtered = parsed.filter((p: any) => (p.loja_id === cleanLojaId));
             if (params.codigoFornecedor !== undefined) {
               filtered = filtered.filter((p: any) =>
                 (Boolean(codigoFornecedor) && String(p.supplierCode || p.codigo_fornecedor || '').trim() === codigoFornecedor) ||
