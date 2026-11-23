@@ -686,7 +686,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     if (!isSupabaseConfigured()) {
       const localScoped = loadStoredData<Product[]>(`superpwa_products_${lojaId}`, []);
-      setProducts(localScoped.filter(p => (!p.loja_id || p.loja_id === lojaId) && (currentUser?.cargo !== 'promotor' || (Boolean(currentUser.codigo_fornecedor) && p.supplierCode?.trim() === currentUser.codigo_fornecedor.trim()))));
+      setProducts(localScoped.filter(p => (p.loja_id === lojaId) && (currentUser?.cargo !== 'promotor' || (Boolean(currentUser.codigo_fornecedor) && p.supplierCode?.trim() === currentUser.codigo_fornecedor.trim()))));
       return;
     }
 
