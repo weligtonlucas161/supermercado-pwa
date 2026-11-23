@@ -3,27 +3,28 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, lazy, Suspense } from 'react';
 import { getDbClient } from './services/db/client';
-import { fetchStockPaginatedFromSupabase } from './services/supabaseService';
-import { setEncryptedCache, invalidateStockCache } from './utils/encryptedCache';
 import { AppProvider, useApp } from './context/AppContext';
 import { Header } from './components/common/Header';
 import { BottomNav } from './components/common/BottomNav';
 import { BarcodeModal } from './components/common/BarcodeModal';
 import { PWAUpdateToast } from './pwa/PWAUpdateToast';
 import { LoginScreen } from './components/auth/LoginScreen';
-import { AdminSaasScreen } from './components/admin/AdminSaasScreen';
 import { InicioTab } from './components/tabs/InicioTab';
-import { ValidadeTab } from './components/tabs/ValidadeTab';
-import { EstoqueTab } from './components/tabs/EstoqueTab';
-import { AuditoriaTab } from './components/tabs/AuditoriaTab';
-import { LojaTab } from './components/tabs/LojaTab';
-import { ConfiguracoesTab } from './components/tabs/ConfiguracoesTab';
 
 import { PasskeyEnrollmentModal } from './components/auth/PasskeyEnrollmentModal';
 import { FirstLoginPasswordModal } from './components/auth/FirstLoginPasswordModal';
 import { StoreChatModal } from './components/chat/StoreChatModal';
+
+const AdminSaasScreen = lazy(() => import('./components/admin/AdminSaasScreen').then(module => ({ default: module.AdminSaasScreen })));
+const ValidadeTab = lazy(() => import('./components/tabs/ValidadeTab').then(module => ({ default: module.ValidadeTab })));
+const EstoqueTab = lazy(() => import('./components/tabs/EstoqueTab').then(module => ({ default: module.EstoqueTab })));
+const AuditoriaTab = lazy(() => import('./components/tabs/AuditoriaTab').then(module => ({ default: module.AuditoriaTab })));
+const LojaTab = lazy(() => import('./components/tabs/LojaTab').then(module => ({ default: module.LojaTab })));
+const ConfiguracoesTab = lazy(() => import('./components/tabs/ConfiguracoesTab').then(module => ({ default: module.ConfiguracoesTab })));
+
+const screenLoading = <p role="status" className="p-6 text-center text-sm">Carregando tela…</p>;
 
 function AppContent() {
   const { 
@@ -33,6 +34,7 @@ function AppContent() {
     isAuthenticated, 
     isSaasAdmin, 
     currentUser, 
+    operator,
     updateUserPassword,
     logout,
     storeColor
@@ -97,47 +99,19 @@ function AppContent() {
     };
   }, [isAuthenticated, currentUser?.id, currentUser?.loja_id]);
 
-  const [preparingData, setPreparingData] = useState(false);
-  const [preparedUser, setPreparedUser] = useState('');
-  useEffect(() => {
-    if (!isAuthenticated || !currentUser?.id || isSaasAdmin || !currentUser.loja_id) {
-      setPreparingData(false);
-      return;
-    }
-    const userKey = currentUser.id + ':' + currentUser.loja_id + ':' + currentUser.setor;
-    if (preparedUser === userKey) return;
-    let cancelled = false;
-    setPreparingData(true);
-    // Remover caches de outros usuários/setores antes de preparar a sessão.
-    invalidateStockCache(currentUser.loja_id);
-    const prepare = async () => {
-      try {
-        const result = await fetchStockPaginatedFromSupabase({
-          lojaId: currentUser.loja_id!, page: 0, pageSize: 50,
-        });
-        if (!cancelled) await setEncryptedCache(
-          `${currentUser.loja_id}_${currentUser.matricula}_${currentUser.setor}_initial`,
-          { items: result.items, totalCount: result.totalCount, loadedAt: Date.now() }
-        );
-      } catch (error) { console.warn('Preparação inicial do estoque:', error); }
-      finally { if (!cancelled) { setPreparedUser(userKey); setPreparingData(false); } }
-    };
-    void prepare();
-    return () => { cancelled = true; };
-  }, [isAuthenticated, currentUser?.id, currentUser?.loja_id, currentUser?.setor, isSaasAdmin, preparedUser]);
-
   // 1. Se não estiver autenticado, exibe a tela de login
   if (!isAuthenticated) {
     return <LoginScreen />;
   }
 
-  if (preparingData && !isSaasAdmin) return <div className="min-h-screen flex flex-col items-center justify-center bg-slate-950 text-white gap-4"><div className="w-12 h-12 border-4 border-emerald-500 border-t-transparent rounded-full animate-spin" /><h1 className="text-lg font-bold">Preparando os dados do seu setor</h1><p className="text-sm text-slate-300">Carregando estoque autorizado e preparando cache criptografado...</p></div>;
 
   // 3. Se for o Administrador de SaaS (@200309 / 2003@09), renderiza a página exclusiva de gestão de servidor
   if (isSaasAdmin) {
     return (
       <>
-        <AdminSaasScreen />
+        <Suspense fallback={screenLoading}>
+          <AdminSaasScreen />
+        </Suspense>
         {currentUser && <PasskeyEnrollmentModal userId={currentUser.id} firstLogin={Boolean(currentUser.primeiro_login)} />}
         {showFirstLoginModal && (
           <FirstLoginPasswordModal
@@ -183,12 +157,14 @@ function AppContent() {
 
       {/* Conteúdo Principal Otimizado para Mobile vs Desktop */}
       <main className="flex-1 p-3 sm:p-5 md:p-6 pb-44 sm:pb-48 max-w-6xl mx-auto w-full overflow-x-hidden">
-        {activeTab === 'inicio' && <InicioTab />}
-        {activeTab === 'validade' && <ValidadeTab />}
-        {activeTab === 'estoque' && <EstoqueTab />}
-        {activeTab === 'auditoria' && <AuditoriaTab />}
-        {activeTab === 'loja' && <LojaTab />}
-        {activeTab === 'configuracoes' && <ConfiguracoesTab />}
+        <Suspense fallback={screenLoading}>
+          {activeTab === 'inicio' && <InicioTab />}
+          {activeTab === 'validade' && <ValidadeTab />}
+          {activeTab === 'estoque' && <EstoqueTab key={JSON.stringify([currentUser?.id, currentUser?.loja_id, currentUser?.cargo, currentUser?.setor, currentUser?.codigo_fornecedor, operator.loja_id])} />}
+          {activeTab === 'auditoria' && <AuditoriaTab />}
+          {activeTab === 'loja' && <LojaTab />}
+          {activeTab === 'configuracoes' && <ConfiguracoesTab />}
+        </Suspense>
       </main>
 
       {/* Navegação Inferior PWA (com acesso a Loja para Gerentes) */}

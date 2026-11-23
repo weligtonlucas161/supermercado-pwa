@@ -141,7 +141,7 @@ export const Header: React.FC = () => {
             </span>
           ) : (
             <button
-              onClick={logout}
+              onClick={() => logout()}
               className="p-2 rounded-xl text-slate-500 hover:text-rose-600 dark:text-slate-400 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/30 transition cursor-pointer"
               title="Sair / Trocar Usuário"
               aria-label="Sair da Conta"

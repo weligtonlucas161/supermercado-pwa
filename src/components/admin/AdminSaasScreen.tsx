@@ -180,6 +180,7 @@ export const AdminSaasScreen: React.FC = () => {
   const [profileName, setProfileName] = useState('');
   const [profileMatricula, setProfileMatricula] = useState('');
   const [profilePassword, setProfilePassword] = useState('');
+  const [profileSupplier, setProfileSupplier] = useState('');
   const [profileCargo, setProfileCargo] = useState('Gerente Geral da Loja');
   const [profileCustomCargo, setProfileCustomCargo] = useState('');
   const [profileSetor, setProfileSetor] = useState('TODOS');
@@ -218,6 +219,7 @@ export const AdminSaasScreen: React.FC = () => {
     setProfileName('');
     setProfileMatricula('');
     setProfilePassword('');
+    setProfileSupplier('');
     setProfileCargo(defaultCargo || 'Gerente Geral da Loja');
     setProfileCustomCargo('');
     setProfileSetor('TODOS');
@@ -235,7 +237,8 @@ export const AdminSaasScreen: React.FC = () => {
     setProfileStoreId(emp.loja_id);
     setProfileName(emp.nome);
     setProfileMatricula(emp.matricula);
-    setProfilePassword(emp.senha || '');
+    setProfilePassword('');
+    setProfileSupplier(emp.codigo_fornecedor || '');
     const standardCargos = [
       'Gerente Geral da Loja',
       'Subgerente',
@@ -308,8 +311,8 @@ export const AdminSaasScreen: React.FC = () => {
       return;
     }
 
-    if (!editingEmployee && !profilePassword.trim()) {
-      setFeedbackMessage({ type: 'error', text: 'Informe a senha de acesso para o novo perfil.' });
+    if (!editingEmployee && profilePassword.trim().length < 12) {
+      setFeedbackMessage({ type: 'error', text: 'Informe uma senha com pelo menos 12 caracteres.' });
       return;
     }
 
@@ -319,7 +322,8 @@ export const AdminSaasScreen: React.FC = () => {
       id: editingEmployee ? editingEmployee.id : `usr_emp_${Date.now()}`,
       matricula: profileMatricula.trim(),
       nome: profileName.trim(),
-      senha: profilePassword.trim() || (editingEmployee?.senha || ''),
+      senha: editingEmployee ? '' : profilePassword.trim(),
+      codigo_fornecedor: profileSupplier.trim() || undefined,
       cargo: finalCargo || 'Operador',
       setor_restrito: profileSetor,
       loja_id: targetStoreId,
@@ -327,7 +331,7 @@ export const AdminSaasScreen: React.FC = () => {
       created_at: editingEmployee?.created_at || new Date().toISOString(),
     };
 
-    const res = await addOrUpdateEmployee(empToSave);
+    const res = await addOrUpdateEmployee(empToSave, !editingEmployee);
     setIsSavingProfile(false);
 
     if (res.success) {
@@ -426,7 +430,7 @@ export const AdminSaasScreen: React.FC = () => {
             </span>
 
             <button
-              onClick={logout}
+              onClick={() => logout()}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-rose-600 hover:bg-rose-700 text-white shadow-md shadow-rose-600/20 transition cursor-pointer"
               title="Encerrar Sessão de Administrador SaaS"
             >
@@ -1756,19 +1760,24 @@ export const AdminSaasScreen: React.FC = () => {
                 </div>
               </div>
 
-              <div>
-                <label className="font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider text-[10px] block mb-1">
-                  {editingEmployee ? 'Nova Senha de Acesso (deixe em branco para manter a atual)' : 'Senha de Acesso *'}
-                </label>
-                <input
-                  type="password"
-                  required={!editingEmployee}
-                  placeholder={editingEmployee ? 'Manter senha atual ou digitar nova' : 'Digite uma senha segura'}
-                  value={profilePassword}
-                  onChange={e => setProfilePassword(e.target.value)}
-                  className="w-full p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-mono focus:outline-none focus:ring-2 focus:ring-rose-500"
-                />
-              </div>
+              {!editingEmployee && (
+                <div>
+                  <label className="font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider text-[10px] block mb-1">
+                    Senha inicial *
+                  </label>
+                  <input
+                    type="password"
+                    required
+                    minLength={12}
+                    maxLength={128}
+                    autoComplete="new-password"
+                    placeholder="Pelo menos 12 caracteres"
+                    value={profilePassword}
+                    onChange={e => setProfilePassword(e.target.value)}
+                    className="w-full p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-mono focus:outline-none focus:ring-2 focus:ring-rose-500"
+                  />
+                </div>
+              )}
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
@@ -1787,6 +1796,7 @@ export const AdminSaasScreen: React.FC = () => {
                     <option value="Conferente de Estoque">Conferente de Estoque</option>
                     <option value="Operador de Gôndola">Operador de Gôndola</option>
                     <option value="Fiscal de Prevenção">Fiscal de Prevenção</option>
+                    <option value="Promotor">Promotor</option>
                     <option value="Outro">Outro (personalizado)</option>
                   </select>
                 </div>
@@ -1808,6 +1818,14 @@ export const AdminSaasScreen: React.FC = () => {
                   </select>
                 </div>
               </div>
+
+              {(profileCargo === 'Outro' ? profileCustomCargo : profileCargo).trim().toLowerCase() === 'promotor' && (
+                <label className="block">
+                  Código do fornecedor *
+                  <input value={profileSupplier} onChange={event => setProfileSupplier(event.target.value)}
+                    required maxLength={64} className="w-full p-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent" />
+                </label>
+              )}
 
               {profileCargo === 'Outro' && (
                 <div>
