@@ -674,7 +674,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [isSyncingWithDatabase, setIsSyncingWithDatabase] = useState(false);
   const [lastDatabaseSyncTime, setLastDatabaseSyncTime] = useState<string | null>(null);
 
+  const productSyncGeneration = useRef(0);
   const refreshProductsFromDatabase = useCallback(async () => {
+    const generation = ++productSyncGeneration.current;
     const lojaId = currentUser?.loja_id || operator.loja_id;
     if (!lojaId) {
       setProducts([]);
@@ -691,6 +693,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setIsSyncingWithDatabase(true);
     try {
       const dbProducts = await fetchProductsFromSupabase(lojaId);
+      if (generation !== productSyncGeneration.current || dbProducts === null) return;
       const visibleProducts = currentUser?.cargo === 'promotor'
         ? dbProducts.filter(p => Boolean(currentUser.codigo_fornecedor) && p.supplierCode?.trim() === currentUser.codigo_fornecedor.trim())
         : dbProducts;
@@ -711,7 +714,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch (err) {
       console.warn('Erro ao sincronizar produtos da nuvem:', err);
     } finally {
-      setIsSyncingWithDatabase(false);
+      if (generation === productSyncGeneration.current) setIsSyncingWithDatabase(false);
     }
   }, [currentUser?.loja_id, currentUser?.cargo, currentUser?.codigo_fornecedor, operator.loja_id]);
 
