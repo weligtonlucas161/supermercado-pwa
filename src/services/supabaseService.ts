@@ -1709,7 +1709,7 @@ export async function fetchStockPaginatedFromSupabase(
       (params.category && params.category !== 'all') ||
       (params.department && params.department !== 'all') ||
       params.onlyRuptures ||
-      (params.sortBy && params.sortBy !== 'default')
+      (params.sortBy && !['default', 'qtd-asc', 'qtd-desc'].includes(params.sortBy))
     );
     if (needsDecryptedFiltering) {
       const matched: Product[] = [];
