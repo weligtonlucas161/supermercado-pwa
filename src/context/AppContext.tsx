@@ -31,6 +31,7 @@ import { authenticateWithPasskey } from '../services/passkeyService';
 import { useOnlineStatus } from '../pwa/useOnlineStatus';
 import { useBackgroundSync } from '../pwa/useBackgroundSync';
 import { triggerScanBeep } from '../utils/haptics';
+import { catalogCacheScope, persistCatalogChanges, readCatalogCache } from '../utils/catalogCache';
 import { invalidateStockCache } from '../utils/encryptedCache';
 import {
   censorProfanity,
@@ -272,6 +273,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Domain Entities State (Sem produtos falsos de mock)
   const [products, setProducts] = useState<Product[]>(() => {
+    if (isSupabaseConfigured()) return [];
     const loaded = loadStoredData<Product[]>(STORAGE_KEYS.PRODUCTS, INITIAL_PRODUCTS);
     return loaded.filter(p => !['1', '2', '3', '4', '5', '6', '7', '8'].includes(p.id));
   });
@@ -478,6 +480,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Ambos os métodos compartilham a mesma inicialização segura da sessão.
   const finishLogin = (result: LoginResult): { success: boolean; message?: string } => {
     if (result.success && result.user) {
+      catalogReady.current = '';
+      productSyncGeneration.current++;
       setCurrentUser(result.user);
       setIsAuthenticated(true);
       saveStoredData(STORAGE_KEYS.AUTH_USER, result.user);
@@ -629,10 +633,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, [isAuthenticated, currentUser, operator.store, operator.loja_id]);
 
   const productSyncGeneration = useRef(0);
+  const catalogReconciliation = useRef<Map<string, Product | null> | null>(null);
 
   const logout = (force = false) => {
     if (isInventoryLocked && !force) return;
     productSyncGeneration.current++;
+    catalogReady.current = '';
     void logoutUser();
     setCurrentUser(null);
     setIsAuthenticated(false);
@@ -640,12 +646,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setValidities([]);
     setAudits([]);
     setNotifications([]);
-    setOfflineQueue([]);
     localStorage.removeItem(STORAGE_KEYS.PRODUCTS);
     localStorage.removeItem(STORAGE_KEYS.VALIDITIES);
     localStorage.removeItem(STORAGE_KEYS.AUDITS);
     localStorage.removeItem(STORAGE_KEYS.NOTIFICATIONS);
-    localStorage.removeItem(STORAGE_KEYS.OFFLINE_QUEUE);
     localStorage.removeItem(STORAGE_KEYS.AUTH_USER);
     localStorage.removeItem(STORAGE_KEYS.AUTH_TOKEN);
     setActiveTab('inicio');
@@ -655,10 +659,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return loadStoredData<NotificationItem[]>(STORAGE_KEYS.NOTIFICATIONS, INITIAL_NOTIFICATIONS);
   });
 
-  // Save to localStorage when state changes
+  const scopedCatalog = catalogCacheScope(isAuthenticated ? currentUser : null);
+  const catalogReady = useRef('');
+  const lastCatalogWrite = useRef<{ scope: string; products: Product[] }>({ scope: '', products: [] });
+  const catalogWrites = useRef(Promise.resolve());
   useEffect(() => {
-    saveStoredData(STORAGE_KEYS.PRODUCTS, products);
-  }, [products]);
+    if (!isSupabaseConfigured()) {
+      saveStoredData(STORAGE_KEYS.PRODUCTS, products);
+      return;
+    }
+    if (!scopedCatalog || catalogReady.current !== scopedCatalog) return;
+    const scopedProducts = products.filter(product => product.loja_id === currentUser?.loja_id);
+    catalogWrites.current = catalogWrites.current.then(async () => {
+      if (catalogReady.current !== scopedCatalog) return;
+      const last = lastCatalogWrite.current;
+      await persistCatalogChanges(scopedCatalog, last.scope === scopedCatalog ? last.products : [], scopedProducts);
+      lastCatalogWrite.current = { scope: scopedCatalog, products: scopedProducts };
+    }).catch(error => console.warn('Falha ao atualizar cache criptografado do catálogo:', error));
+  }, [products, scopedCatalog, currentUser?.loja_id]);
 
   useEffect(() => {
     saveStoredData(STORAGE_KEYS.VALIDITIES, validities);
@@ -693,32 +711,36 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     setIsSyncingWithDatabase(true);
+    const reconciliation = new Map<string, Product | null>();
+    catalogReconciliation.current = reconciliation;
     try {
-      const dbProducts = await fetchProductsFromSupabase(lojaId);
-      if (generation !== productSyncGeneration.current || dbProducts === null) return;
+      const dbProducts = browserOnline ? await fetchProductsFromSupabase(lojaId) : null;
+      if (generation !== productSyncGeneration.current) return;
+      const scope = catalogCacheScope(currentUser);
+      const cached = dbProducts === null && scope
+        ? await readCatalogCache(scope).catch(() => null)
+        : null;
+      if (generation !== productSyncGeneration.current || (!dbProducts && !cached)) return;
+      const base = dbProducts ?? cached!;
+      const available = reconciliation.size ? [...reconciliation.values()].filter((p): p is Product => p !== null)
+        .concat(base.filter(product => !reconciliation.has(product.id))) : base;
       const visibleProducts = currentUser?.cargo === 'promotor'
-        ? dbProducts.filter(p => Boolean(supplierCode) && p.supplierCode?.trim() === supplierCode)
-        : dbProducts;
-      if (visibleProducts !== null) {
-        if (visibleProducts.length === 0) {
-          // Se no banco de dados a loja não possuir estoque (0 produtos), limpa o local storage e o state!
-          setProducts([]);
-          saveStoredData(STORAGE_KEYS.PRODUCTS, []);
-          saveStoredData(`superpwa_products_${lojaId}`, []);
-        } else {
-          setProducts(visibleProducts);
-          saveStoredData(STORAGE_KEYS.PRODUCTS, visibleProducts);
-          saveStoredData(`superpwa_products_${lojaId}`, visibleProducts);
-        }
-        const now = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-        setLastDatabaseSyncTime(now);
+        ? available.filter(p => Boolean(supplierCode) && p.supplierCode?.trim() === supplierCode)
+        : available;
+      if (dbProducts !== null) {
+        catalogReady.current = scope;
+        saveStoredData(STORAGE_KEYS.PRODUCTS, []);
+        localStorage.removeItem(`superpwa_products_${lojaId}`);
+        setLastDatabaseSyncTime(new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
       }
+      setProducts(visibleProducts);
     } catch (err) {
       console.warn('Erro ao sincronizar produtos da nuvem:', err);
     } finally {
+      if (catalogReconciliation.current === reconciliation) catalogReconciliation.current = null;
       if (generation === productSyncGeneration.current) setIsSyncingWithDatabase(false);
     }
-  }, [currentUser?.loja_id, currentUser?.cargo, currentUser?.codigo_fornecedor, operator.loja_id]);
+  }, [browserOnline, currentUser, operator.loja_id]);
 
   const refreshAuditsFromDatabase = useCallback(async () => {
     if (!isSupabaseConfigured()) {
@@ -767,12 +789,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           refreshProductsFromDatabase();
           return;
         }
-        setProducts(prev => {
-          const next = prev.filter(p => p.id !== removedId);
-          saveStoredData(STORAGE_KEYS.PRODUCTS, next);
-          saveStoredData(`superpwa_products_${lojaId}`, next);
-          return next;
-        });
+        catalogReconciliation.current?.set(removedId, null);
+        setProducts(prev => prev.filter(p => p.id !== removedId));
         return;
       }
 
@@ -787,55 +805,61 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       const mapped = mapProductRow(event.row, lojaId);
       if (currentUser?.cargo === 'promotor' && (!currentUser.codigo_fornecedor || mapped.supplierCode?.trim() !== currentUser.codigo_fornecedor.trim())) {
+        catalogReconciliation.current?.set(mapped.id, null);
         setProducts(prev => prev.filter(p => p.id !== mapped.id));
         return;
       }
+      catalogReconciliation.current?.set(mapped.id, mapped);
       setProducts(prev => {
         const index = prev.findIndex(p => p.id === mapped.id);
         const next = index >= 0
           ? prev.map((p, i) => (i === index ? mapped : p))
           : [mapped, ...prev];
-        saveStoredData(STORAGE_KEYS.PRODUCTS, next);
-        saveStoredData(`superpwa_products_${lojaId}`, next);
         return next;
       });
+    }, () => {
+      invalidateStockCache(lojaId);
+      void refreshProductsFromDatabase();
     });
     return () => {
       unsubscribe();
     };
   }, [isAuthenticated, refreshProductsFromDatabase, operator.loja_id, currentUser?.loja_id, currentUser?.cargo, currentUser?.codigo_fornecedor]);
 
-  // Background Sync when online
-  useBackgroundSync({
-    onSyncTriggered: async () => {
-      if (offlineQueue.length > 0) {
-        const res = await syncOfflineQueueToSupabase(offlineQueue, operator.loja_id);
-        if (res.success) {
-          setOfflineQueue([]);
-          refreshProductsFromDatabase();
-        }
-      }
-    },
-    hasPendingItems: offlineQueue.length > 0
-  });
-
-  const syncOfflineQueue = async () => {
-    if (offlineQueue.length === 0) return;
-    const res = await syncOfflineQueueToSupabase(offlineQueue, operator.loja_id);
-    if (res.success) {
-      setOfflineQueue([]);
-      refreshProductsFromDatabase();
+  const queueSyncInProgress = useRef(false);
+  const syncOfflineQueue = useCallback(async () => {
+    const lojaId = currentUser?.loja_id || operator.loja_id;
+    const ownerId = currentUser?.id;
+    if (!isAuthenticated || !effectiveOnline || queueSyncInProgress.current || !ownerId || !lojaId) return;
+    const scoped = offlineQueue.filter(action => action.ownerId === ownerId && action.lojaId === lojaId);
+    if (!scoped.length) return;
+    queueSyncInProgress.current = true;
+    try {
+      const completed = new Set(await syncOfflineQueueToSupabase(scoped, lojaId, ownerId));
+      if (!completed.size) return;
+      setOfflineQueue(current => current.filter(action => !completed.has(action.id)));
+    } finally {
+      queueSyncInProgress.current = false;
     }
-  };
+  }, [currentUser?.id, currentUser?.loja_id, effectiveOnline, isAuthenticated, offlineQueue, operator.loja_id]);
+
+  useBackgroundSync({
+    onSyncTriggered: syncOfflineQueue,
+    hasPendingItems: offlineQueue.some(action => action.ownerId === currentUser?.id && Boolean(action.ownerId)),
+  });
+  useEffect(() => { void syncOfflineQueue(); }, [syncOfflineQueue]);
 
   const clearOfflineQueue = () => {
-    setOfflineQueue([]);
+    if (!currentUser?.id) return;
+    const lojaId = currentUser.loja_id || operator.loja_id;
+    setOfflineQueue(current => current.filter(action => action.ownerId !== currentUser.id || action.lojaId !== lojaId));
   };
 
   // Actions
   const addProduct = (newProductData: Omit<Product, 'id'>): Product => {
     const newProduct: Product = {
       ...newProductData,
+      loja_id: currentUser?.loja_id || operator.loja_id || newProductData.loja_id,
       id: `prod-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
       lastUpdated: new Date().toISOString(),
     };
@@ -860,7 +884,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setOfflineQueue(prev => [
         ...prev,
         {
-          id: `queue-${Date.now()}`,
+          id: crypto.randomUUID(),
+          ownerId: currentUser?.id,
+          lojaId: currentUser?.loja_id || operator.loja_id,
           type: 'ADD_PRODUCT',
           payload: newProduct,
           timestamp: new Date().toISOString(),
@@ -925,7 +951,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
 
       const updated = [...otherSectors, ...Array.from(sectorMap.values())];
-      saveStoredData(STORAGE_KEYS.PRODUCTS, updated);
       invalidateStockCache(lojaId);
       return updated;
     });
@@ -1026,7 +1051,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setOfflineQueue(prev => [
         ...prev,
         {
-          id: `queue-${Date.now()}`,
+          id: crypto.randomUUID(),
+          ownerId: currentUser?.id,
+          lojaId: currentUser?.loja_id || operator.loja_id,
           type: 'UPDATE_STOCK',
           payload: { id, ...options },
           timestamp: new Date().toISOString(),
@@ -1472,7 +1499,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
         isOnline: browserOnline,
         effectiveOnline,
-        offlineQueue,
+        offlineQueue: offlineQueue.filter(action => Boolean(currentUser?.id) && action.ownerId === currentUser?.id && action.lojaId === (currentUser?.loja_id || operator.loja_id)),
         syncOfflineQueue,
         clearOfflineQueue,
 

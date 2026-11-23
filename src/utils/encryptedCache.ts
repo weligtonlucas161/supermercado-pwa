@@ -16,7 +16,7 @@ const CACHE_SALT = new TextEncoder().encode('superpwa-cache-v3');
 let cachedKey: CryptoKey | null = null;
 let cachedEpoch = -1;
 function getEpoch() { return Math.floor(Date.now() / KEY_EPOCH_MS); }
-async function getCacheKey(): Promise<CryptoKey> {
+export async function getCacheKey(): Promise<CryptoKey> {
   const epoch = getEpoch();
   if (cachedKey && cachedEpoch === epoch) return cachedKey;
   if (!window.crypto?.subtle) throw new Error('Web Crypto API indisponível');

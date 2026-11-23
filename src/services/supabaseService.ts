@@ -1802,13 +1802,15 @@ export interface ProductRealtimeEvent {
  */
 export function subscribeToProductsRealtime(
   lojaId: string | undefined,
-  onChanged: (event: ProductRealtimeEvent) => void
+  onChanged: (event: ProductRealtimeEvent) => void,
+  onReconnected?: () => void
 ): () => void {
   if (!client) return () => {};
   const cleanLojaId = lojaId ? sanitizeIdentifier(lojaId, 64) : '';
   if (!cleanLojaId) return () => {};
 
   try {
+    let subscribed = false;
     const channel = client
       .channel(`realtime_produtos_sync_${cleanLojaId}`)
       .on(
@@ -1841,7 +1843,11 @@ export function subscribeToProductsRealtime(
           });
         }
       )
-      .subscribe();
+      .subscribe(status => {
+        if (status !== 'SUBSCRIBED') return;
+        if (subscribed) onReconnected?.();
+        subscribed = true;
+      });
 
     return () => {
       client?.removeChannel(channel);
@@ -1856,107 +1862,66 @@ export function subscribeToProductsRealtime(
  * Sincroniza a fila de ações offline com o Supabase quando restabelecida a internet
  */
 export async function syncOfflineQueueToSupabase(
-  actions: OfflineAction[],
-  lojaId = ''
-): Promise<{ success: boolean; syncedCount: number; error?: string }> {
-  if (!client || actions.length === 0) {
-    return { success: true, syncedCount: 0 };
-  }
+  actions: OfflineAction[], lojaId: string, ownerId: string
+): Promise<string[]> {
+  const completed: string[] = [];
+  if (!client || !lojaId || !ownerId) return completed;
 
-  const cleanLojaId = sanitizeIdentifier(lojaId, 64);
-  let synced = 0;
-  try {
-    // Agrega as ações por tipo para enviar em lotes (antes era 1 requisição
-    // por ação, o que tornava a fila offline lenta em grandes volumes).
-    const stockUpdates: Array<{ id: string; quantity: number }> = [];
-    const newProducts: Array<Record<string, unknown>> = [];
-
-    for (const action of actions) {
+  for (const action of actions) {
+    if (action.ownerId !== ownerId || action.lojaId !== lojaId) break;
+    try {
       if (action.type === 'UPDATE_STOCK') {
         const payload = action.payload as { id: string; exact?: number; delta?: number };
-        const cleanId = sanitizeIdentifier(payload.id, 64);
-        if (cleanId && typeof payload.exact === 'number') {
-          stockUpdates.push({ id: cleanId, quantity: validatePositiveInt(payload.exact, 0) });
-        }
-        synced++;
+        if (!payload?.id || (!Number.isInteger(payload.exact) && !Number.isInteger(payload.delta))) break;
+        const exact = Number.isInteger(payload.exact) ? payload.exact : null;
+        const { error } = await client.rpc('apply_offline_stock_change', {
+          p_operation_id: action.id,
+          p_owner_id: ownerId,
+          p_loja_id: lojaId,
+          p_product_id: payload.id,
+          p_exact: exact,
+          p_delta: exact === null ? payload.delta : null,
+        });
+        if (error) throw error;
       } else if (action.type === 'ADD_PRODUCT') {
-        const p = action.payload as Product;
-        const cleanEan = sanitizeBarcode(p.ean, 32);
-        const cleanName = sanitizeText(p.name, 200);
-        if (cleanEan && cleanName) {
-          newProducts.push({
-            loja_id: sanitizeIdentifier(p.loja_id || cleanLojaId, 64),
-            codigo_barras: encryptSingleField(cleanEan),
-            nome: encryptSingleField(cleanName),
-            plu: p.reducedCode ? encryptSingleField(sanitizeIdentifier(p.reducedCode, 32)) : null,
-            codigo_fornecedor: p.supplierCode ? encryptSingleField(sanitizeIdentifier(p.supplierCode, 32)) : null,
-            setor: sanitizeText(p.category || 'MERCEARIA', 64),
-            quantidade: validatePositiveInt(p.stock, 0),
-            is_encrypted: true,
-            ciphertext: p.encryptedPayload?.ciphertext || null,
-            iv: p.encryptedPayload?.iv || null,
-            ean_hash: await hashEan(cleanEan),
-          });
-        }
-        synced++;
+        const product = action.payload as Product;
+        const ean = sanitizeBarcode(product?.ean, 32);
+        const name = sanitizeText(product?.name, 200);
+        if (!product?.id || !ean || !name) break;
+        const { error } = await client.from('produtos').upsert({
+          id: product.id,
+          loja_id: lojaId,
+          codigo_barras: encryptSingleField(ean),
+          nome: encryptSingleField(name),
+          plu: product.reducedCode ? encryptSingleField(sanitizeIdentifier(product.reducedCode, 32)) : null,
+          codigo_fornecedor: product.supplierCode ? encryptSingleField(sanitizeIdentifier(product.supplierCode, 32)) : null,
+          setor: sanitizeText(product.category || 'MERCEARIA', 64),
+          quantidade: validatePositiveInt(product.stock, 0),
+          is_encrypted: true,
+          ciphertext: product.encryptedPayload?.ciphertext || null,
+          iv: product.encryptedPayload?.iv || null,
+          ean_hash: await hashEan(ean),
+        }, { onConflict: 'id', ignoreDuplicates: true });
+        if (error) throw error;
+        const { data: persisted, error: readError } = await client.from('produtos').select('id')
+          .eq('id', product.id).eq('loja_id', lojaId).maybeSingle();
+        if (readError || !persisted) break;
+      } else {
+        break;
       }
+      completed.push(action.id);
+    } catch (error) {
+      console.warn('Sincronização offline interrompida. As ações pendentes foram mantidas.', error);
+      break;
     }
-
-    // 1) Atualizações de estoque: uma leitura + um upsert por lote (isolado por loja_id).
-    if (stockUpdates.length > 0) {
-      const ids = stockUpdates.map(u => u.id);
-      let query = client
-        .from('produtos')
-        .select('id, nome, codigo_barras, setor, quantidade, data_vencimento, loja_id')
-        .in('id', ids);
-      if (cleanLojaId) {
-        query = query.eq('loja_id', cleanLojaId);
-      }
-      const { data: currentRows } = await query;
-
-      const byId = new Map<string, Record<string, unknown>>(
-        ((currentRows || []) as unknown as Record<string, unknown>[]).map(r => [String(r.id), r])
-      );
-
-      const rows = stockUpdates
-        .map(update => {
-          const row = byId.get(update.id);
-          if (!row) return null;
-          return {
-            id: update.id,
-            nome: String(row.nome || ''),
-            codigo_barras: String(row.codigo_barras || ''),
-            setor: String(row.setor || 'MERCEARIA'),
-            quantidade: update.quantity,
-            data_vencimento: String(row.data_vencimento || ''),
-            loja_id: String(row.loja_id || cleanLojaId),
-            updated_at: new Date().toISOString(),
-          };
-        })
-        .filter((row): row is NonNullable<typeof row> => row !== null);
-
-      for (let i = 0; i < rows.length; i += 500) {
-        const chunk = rows.slice(i, i + 500);
-        await upsertProductRows(client, chunk as ProductWriteRow[]);
-      }
-    }
-
-    // 2) Produtos novos: inserção em lote.
-    for (let i = 0; i < newProducts.length; i += 500) {
-      const chunk = newProducts.slice(i, i + 500);
-      const { error: insertError } = await client.from('produtos').insert(chunk);
-      if (insertError) throw insertError;
-    }
-
-    // O índice determinístico mudou: invalida para a próxima importação.
-    invalidateProductIndex();
-    invalidateCatalogIndex();
-
-    return { success: true, syncedCount: synced };
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return { success: false, syncedCount: synced, error: msg };
   }
+
+  if (completed.length) {
+    invalidateProductIndex(lojaId);
+    invalidateCatalogIndex();
+    invalidateStockCache(lojaId);
+  }
+  return completed;
 }
 
 // ============================================================================
@@ -2546,8 +2511,10 @@ export async function finalizeAuditSessionInDatabase(data: {
  */
 export async function fetchAuditReportsFromDatabase(
   lojaId: string,
-  options: { isManager: boolean; userSector?: string }
+  options: { isManager: boolean; userSector?: string; auditId?: string; signal?: AbortSignal }
 ): Promise<AuditItem[] | null> {
+  const auditId = options.auditId;
+  if (auditId && sanitizeIdentifier(auditId, 128) !== auditId) return null;
   const cleanLojaId = sanitizeIdentifier(lojaId, 64);
   if (!client || !isSupabaseConfigured() || !cleanLojaId) {
     if (typeof window !== 'undefined') {
@@ -2557,7 +2524,7 @@ export async function fetchAuditReportsFromDatabase(
           let list: AuditItem[] = JSON.parse(raw);
           if (Array.isArray(list)) {
             if (cleanLojaId) {
-              list = list.filter(a => !a.lojaId || a.lojaId === cleanLojaId);
+              list = list.filter(a => a.lojaId === cleanLojaId);
             }
             if (
               !options.isManager &&
@@ -2567,7 +2534,7 @@ export async function fetchAuditReportsFromDatabase(
             ) {
               list = list.filter(a => (a.department || '').toUpperCase() === options.userSector!.toUpperCase());
             }
-            return list;
+            return auditId ? list.filter(a => a.id === auditId) : list;
           }
         }
       } catch (e) {
@@ -2586,7 +2553,10 @@ export async function fetchAuditReportsFromDatabase(
       .order('data_auditoria', { ascending: false })
       .order('hora_auditoria', { ascending: false })
       .order('finalizada_em', { ascending: false })
-      .limit(100);
+      .order('id', { ascending: false })
+      .limit(auditId ? 1 : 100);
+    if (auditId) query = query.eq('id', auditId);
+    if (options.signal) query = query.abortSignal(options.signal);
 
     const sectorFilter = sanitizeText(options.userSector || '', 64);
     if (
@@ -2606,20 +2576,32 @@ export async function fetchAuditReportsFromDatabase(
 
     if (rows.length === 0) return [];
 
-    const sessionIds = rows.map(r => String(r.id));
-    const { data: prodRows } = await client
-      .from('auditoria_produtos')
-      .select('sessao_id, status_presenca, nome, codigo_barras, plu, auditado_em, operador_nome, quantidade_fisica, quantidade_sistema, divergencia')
-      .eq('loja_id', cleanLojaId)
-      .in('sessao_id', sessionIds);
-
     const prodsBySession = new Map<string, Array<Record<string, unknown>>>();
-    (prodRows || []).forEach((pr: Record<string, unknown>) => {
-      const sid = String(pr.sessao_id);
-      const arr = prodsBySession.get(sid) || [];
-      arr.push(pr);
-      prodsBySession.set(sid, arr);
-    });
+    const detailIds = rows.filter(row => auditId || row.total_esperado == null ||
+      row.total_auditado == null || row.total_divergentes == null).map(row => String(row.id));
+    if (detailIds.length) {
+      const pageSize = 500;
+      let cursor: string | undefined;
+      for (;;) {
+        options.signal?.throwIfAborted();
+        let details = client.from('auditoria_produtos')
+          .select('id, sessao_id, status_presenca, nome, codigo_barras, plu, auditado_em, operador_nome, quantidade_fisica, quantidade_sistema, divergencia')
+          .eq('loja_id', cleanLojaId).in('sessao_id', detailIds)
+          .order('id', { ascending: true }).limit(pageSize);
+        if (cursor !== undefined) details = details.gt('id', cursor);
+        if (options.signal) details = details.abortSignal(options.signal);
+        const { data: page, error: detailsError } = await details;
+        if (detailsError || !page) return null;
+        for (const product of page) {
+          const id = String(product.sessao_id);
+          const items = prodsBySession.get(id);
+          if (items) items.push(product);
+          else prodsBySession.set(id, [product]);
+        }
+        if (page.length < pageSize) break;
+        cursor = String(page[page.length - 1].id);
+      }
+    }
 
     return rows.map((row: Record<string, unknown>) => {
       const sid = String(row.id);
@@ -2655,9 +2637,9 @@ export async function fetchAuditReportsFromDatabase(
           divergence: it.divergencia !== null && it.divergencia !== undefined ? Number(it.divergencia) : undefined,
         }));
 
-      const totalEsperado = Number(row.total_esperado) || (confirmedList.length + pendingList.length);
-      const totalAuditado = Number(row.total_auditado) || confirmedList.length;
-      const totalDivergentes = Number(row.total_divergentes) || pendingList.length;
+      const totalEsperado = Number(row.total_esperado ?? (confirmedList.length + pendingList.length));
+      const totalAuditado = Number(row.total_auditado ?? confirmedList.length);
+      const totalDivergentes = Number(row.total_divergentes ?? pendingList.length);
       const rate = totalEsperado > 0 ? `${Math.round((totalAuditado / totalEsperado) * 100)}%` : '0%';
       const startedMs = Number(row.iniciada_em) || Date.now();
       const finishedMs = Number(row.finalizada_em) || startedMs;
@@ -2694,10 +2676,9 @@ export async function fetchAuditReportsFromDatabase(
         startedAtMs: startedMs,
         finishedAtMs: finishedMs,
         durationLabel: row.duracao_label ? String(row.duracao_label) : undefined,
-        cameraScansCount: Number(row.camera_scans_count) || confirmedList.length,
+        cameraScansCount: Number(row.camera_scans_count ?? totalAuditado),
         manualScansCount: 0,
-        confirmedList,
-        pendingList,
+        ...(detailIds.includes(sid) ? { confirmedList, pendingList } : {}),
       } satisfies AuditItem;
     });
   } catch (err) {

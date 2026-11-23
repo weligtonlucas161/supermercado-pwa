@@ -1,3 +1,4 @@
+import { fetchAuditReportsFromDatabase } from '../../services/supabaseService';
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { 
   CheckSquare, 
@@ -93,6 +94,7 @@ export const AuditoriaTab: React.FC = () => {
     updateAudit,
     refreshAuditsFromDatabase,
     operator,
+    currentUser,
     darkMode,
     openScanner,
     isScannerOpen,
@@ -267,6 +269,11 @@ export const AuditoriaTab: React.FC = () => {
 
   // Modal de Detalhes de Auditoria do Relatório
   const [selectedAuditForModal, setSelectedAuditForModal] = useState<AuditItem | null>(null);
+  const detailRequest = useRef<AbortController | null>(null);
+  const [auditDetailError, setAuditDetailError] = useState('');
+  const [loadingAuditId, setLoadingAuditId] = useState<string | null>(null);
+  useEffect(() => () => detailRequest.current?.abort(), [operator.loja_id, currentUser?.id]);
+
   const [modalActiveTab, setModalActiveTab] = useState<'bipados' | 'nao_bipados' | 'rupturas'>('bipados');
   const [modalFeedback, setModalFeedback] = useState<string | null>(null);
 
@@ -1335,8 +1342,32 @@ export const AuditoriaTab: React.FC = () => {
     return () => clearInterval(timer);
   }, [isAuditing, sessionStartTimeMs, isSessionCreator]);
 
-  // Exportar relatório em PDF (nativo, sem armazenamento local)
-  const handleExportAuditPDF = (audit: AuditItem) => {
+  const loadAuditDetails = async (audit: AuditItem): Promise<AuditItem | null> => {
+    detailRequest.current?.abort();
+    setAuditDetailError('');
+    setLoadingAuditId(null);
+    if (audit.confirmedList && audit.pendingList) return audit;
+    const controller = new AbortController();
+    detailRequest.current = controller;
+    setLoadingAuditId(audit.id);
+    try {
+      const detail = await fetchAuditReportsFromDatabase(operator.loja_id || currentUser?.loja_id || '', {
+        auditId: audit.id,
+        isManager: isManagerUser,
+        userSector: operator.setor_restrito || currentUser?.setor,
+        signal: controller.signal,
+      });
+      if (controller.signal.aborted) return null;
+      if (!detail?.[0]) setAuditDetailError('Não foi possível carregar os itens deste relatório. Tente novamente.');
+      return detail?.[0] ?? null;
+    } finally {
+      if (!controller.signal.aborted) setLoadingAuditId(null);
+    }
+  };
+
+  const handleExportAuditPDF = async (summary: AuditItem) => {
+    const audit = await loadAuditDetails(summary);
+    if (!audit) return;
     exportAuditReportToPDF(audit, {
       storeName,
       showSystemStock: isManagerUser || audit.type !== 'INVENTARIO',
@@ -2919,9 +2950,12 @@ export const AuditoriaTab: React.FC = () => {
 
                     <button
                       type="button"
-                      onClick={() => {
+                      disabled={loadingAuditId === audit.id}
+                      onClick={async () => {
+                        const detail = await loadAuditDetails(audit);
+                        if (!detail) return;
                         setModalActiveTab('bipados');
-                        setSelectedAuditForModal(audit);
+                        setSelectedAuditForModal(detail);
                       }}
                       className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition flex items-center gap-1.5 shadow-sm cursor-pointer"
                     >
@@ -2940,6 +2974,7 @@ export const AuditoriaTab: React.FC = () => {
       {/* =================================================================== */}
       {/* MODAL DE DETALHES DA AUDITORIA SELECIONADA                           */}
       {/* =================================================================== */}
+      {auditDetailError && <p role="alert" className="p-3 text-sm text-rose-700 dark:text-rose-300">{auditDetailError}</p>}
       {selectedAuditForModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4 animate-in fade-in duration-200">
           <div className="w-full max-w-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl shadow-2xl p-5 space-y-4 max-h-[90vh] flex flex-col">

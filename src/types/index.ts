@@ -279,6 +279,8 @@ export interface AvariaItem {
 
 export interface OfflineAction {
   id: string;
+  ownerId?: string;
+  lojaId?: string;
   type: 'ADD_PRODUCT' | 'UPDATE_STOCK' | 'ADD_VALIDITY' | 'ADD_AUDIT' | 'APPLY_DISCOUNT' | 'IMPORT_ENCRYPTED_SPREADSHEET' | 'REGISTRAR_AVARIA';
   payload: unknown;
   timestamp: string;
