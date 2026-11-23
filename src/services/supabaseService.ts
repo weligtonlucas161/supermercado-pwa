@@ -1560,8 +1560,18 @@ export async function fetchProductsFromSupabase(lojaId?: string): Promise<Produc
       return [];
     }
 
-    // Mapeamento com descriptografia pontual na RAM para dados AES-256
-    return data.map((row: Record<string, unknown>) => mapProductRow(row, cleanLojaId));
+    // Descriptografa em lotes pequenos, cedendo o thread principal ao navegador.
+    // Evita bloquear a interface por uma única tarefa longa em aparelhos modestos.
+    const mapped: Product[] = [];
+    const batchSize = 100;
+    for (let offset = 0; offset < data.length; offset += batchSize) {
+      const batch = data.slice(offset, offset + batchSize);
+      for (const row of batch) mapped.push(mapProductRow(row as Record<string, unknown>, cleanLojaId));
+      if (offset + batchSize < data.length && typeof window !== 'undefined') {
+        await new Promise<void>(resolve => setTimeout(resolve, 0));
+      }
+    }
+    return mapped;
   } catch (err) {
     console.warn('Erro ao consultar produtos no Supabase:', err);
     return null;
