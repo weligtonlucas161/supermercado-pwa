@@ -590,8 +590,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     // 1. Verificação imediata no carregamento
     checkActive();
 
-    // 2. Verificação periódica a cada 2.5s
-    const timer = setInterval(checkActive, 2500);
+    // Realtime e foco cobrem mudanças imediatas; watchdog é apenas contingência.
+    // Evita uma consulta ao banco a cada 2,5 segundos por aba aberta.
+    const timer = setInterval(checkActive, 60_000);
 
     // 3. Assinatura em Tempo Real (Supabase Realtime) na tabela 'usuarios'
     const unsubscribeRealtime = subscribeToUserStatusRealtime(currentUser.matricula, (comp) => {
