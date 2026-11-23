@@ -1707,7 +1707,7 @@ export async function fetchStockPaginatedFromSupabase(
           .range(offset, offset + chunkSize - 1);
         if (chunkError) {
           console.warn('Erro ao buscar lote de estoque cifrado:', chunkError.message);
-          return { items: [], totalCount: 0, page, pageSize, hasMore: false };
+          throw new Error('Falha ao consultar o estoque filtrado; dados anteriores preservados.');
         }
         const rows = chunk || [];
         for (const row of rows) {
@@ -1809,7 +1809,7 @@ export async function fetchStockPaginatedFromSupabase(
 
     if (error) {
       console.warn('Erro ao consultar estoque paginado no Supabase:', error.message);
-      return { items: [], totalCount: 0, page, pageSize, hasMore: false };
+      throw new Error('Falha ao consultar a página do estoque; tente novamente.');
     }
 
     const rows = (data || []) as Record<string, unknown>[];
