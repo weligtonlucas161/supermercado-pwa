@@ -1,3 +1,4 @@
+import { ValidityAuditPanel } from './ValidityAuditPanel';
 import { fetchAuditReportsFromDatabase } from '../../services/supabaseService';
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { 
@@ -2760,66 +2761,7 @@ export const AuditoriaTab: React.FC = () => {
       )}
 
       {/* =================================================================== */}
-      {/* INTERFACE 3: AUDITORIA DE VALIDADE (EM DESENVOLVIMENTO)             */}
-      {/* =================================================================== */}
-      {activeInterface === 'validade' && (
-        <div className="space-y-4 animate-in fade-in duration-200">
-          {/* FAIXA AMARELA COM LISTRAS PRETAS SUPERIOR (CAUTION TAPE) */}
-          <div 
-            className="w-full h-8 rounded-2xl shadow-inner flex items-center justify-center overflow-hidden border border-amber-500"
-            style={{
-              backgroundImage: 'repeating-linear-gradient(-45deg, #facc15, #facc15 15px, #000000 15px, #000000 30px)',
-            }}
-          >
-            <span className="bg-black/90 text-amber-400 font-black text-[11px] tracking-widest px-4 py-1 rounded uppercase">
-              ⚠ EM DESENVOLVIMENTO • AUDITORIA DE VALIDADE • EM BREVE ⚠
-            </span>
-          </div>
-
-          {/* CARD CENTRAL DE CONSTRUÇÃO */}
-          <div className="p-8 sm:p-12 rounded-3xl bg-white dark:bg-slate-900 border-2 border-amber-500/40 text-center space-y-4 shadow-xl">
-            <div className="w-16 h-16 mx-auto rounded-3xl bg-amber-500/15 border border-amber-500/30 text-amber-500 flex items-center justify-center animate-pulse">
-              <CalendarClock className="w-8 h-8" />
-            </div>
-
-            <div className="space-y-1.5 max-w-md mx-auto">
-              <span className="text-[10px] font-black px-2.5 py-1 rounded-full bg-amber-500/15 text-amber-700 dark:text-amber-400 border border-amber-500/30 uppercase tracking-wider">
-                Módulo em Engenharia
-              </span>
-              <h3 className="text-lg font-black text-slate-900 dark:text-white">
-                Auditoria de Validade e FIFO
-              </h3>
-              <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
-                Este módulo está em desenvolvimento para o controle dinâmico de datas críticas, conferência de lotes por gôndola e rotação PEPS (Primeiro que Expira, Primeiro que Sai).
-              </p>
-            </div>
-
-            <div className="max-w-md mx-auto p-4 rounded-2xl bg-amber-500/5 dark:bg-amber-950/20 border border-amber-500/20 text-left text-xs space-y-2">
-              <div className="font-bold text-amber-800 dark:text-amber-300 flex items-center gap-1.5">
-                <AlertTriangle className="w-4 h-4 text-amber-500" />
-                <span>Recursos em preparação:</span>
-              </div>
-              <ul className="list-disc list-inside text-[11px] text-slate-600 dark:text-slate-400 space-y-1 pl-1">
-                <li>Auditoria de lotes com cálculo automático de dias para vencimento</li>
-                <li>Validação de giro e sugestão de desconto proporcional para queima de estoque</li>
-                <li>Alerta sonoro imediato ao identificar lote com data vencida na gôndola</li>
-              </ul>
-            </div>
-          </div>
-
-          {/* FAIXA AMARELA COM LISTRAS PRETAS INFERIOR (CAUTION TAPE) */}
-          <div 
-            className="w-full h-8 rounded-2xl shadow-inner flex items-center justify-center overflow-hidden border border-amber-500"
-            style={{
-              backgroundImage: 'repeating-linear-gradient(-45deg, #facc15, #facc15 15px, #000000 15px, #000000 30px)',
-            }}
-          >
-            <span className="bg-black/90 text-amber-400 font-black text-[11px] tracking-widest px-4 py-1 rounded uppercase">
-              ⚠ EM DESENVOLVIMENTO • CONTROLE DE PERDAS • OPSYS ⚠
-            </span>
-          </div>
-        </div>
-      )}
+      {activeInterface === 'validade' && <ValidityAuditPanel key={currentUser?.loja_id} />}
 
       {/* =================================================================== */}
       {/* INTERFACE 4: RELATÓRIO DE AUDITORIAS                                */}
