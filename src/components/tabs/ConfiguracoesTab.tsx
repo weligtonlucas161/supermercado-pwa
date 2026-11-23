@@ -414,7 +414,7 @@ export const ConfiguracoesTab: React.FC = () => {
               {storeName}
             </span>
             <button
-              onClick={logout}
+              onClick={() => logout()}
               className="px-3 py-1.5 rounded-xl border border-rose-200 dark:border-rose-900/50 text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/20 font-bold flex items-center gap-1.5 transition cursor-pointer"
               title="Encerrar Sessão"
             >

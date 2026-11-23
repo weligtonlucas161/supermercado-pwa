@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import {
   Search,
   Plus,
@@ -385,6 +385,9 @@ export const EstoqueTab: React.FC = () => {
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [isFromEncryptedCache, setIsFromEncryptedCache] = useState(false);
   const [cacheTimestamp, setCacheTimestamp] = useState<number | null>(null);
+  const [stockError, setStockError] = useState<'initial' | 'more' | null>(null);
+  const stockRequest = useRef<AbortController | null>(null);
+  const nextPageRequest = useRef<AbortController | null>(null);
 
   const activeLojaId = currentUser?.loja_id || operator?.loja_id || '';
   const codigoFornecedorPromotor = currentUser?.cargo?.toLowerCase() === 'promotor' ? (currentUser.codigo_fornecedor?.trim() || '') : undefined;
@@ -417,27 +420,39 @@ export const EstoqueTab: React.FC = () => {
   const nomeFornecedorPromotor = currentUser?.cargo === 'promotor'
     ? (currentUser.matricula || '').replace(/[-_ ]?\d+$/, '').replace(/[-_]+$/, '').trim()
     : '';
-  const cacheKey = `${activeLojaId}_${currentUser?.matricula || ''}_${currentUser?.setor || 'SEM_SETOR'}_${effectiveSupplierCode ?? 'todos'}_${nomeFornecedorPromotor}_${mainTab}_${selectedCategory}_${debouncedSearchTerm.trim().toLowerCase()}_${sortBy}`;
+  const cacheKey = `${activeLojaId}_${JSON.stringify([
+    currentUser?.id, currentUser?.cargo, currentUser?.setor, effectiveSupplierCode,
+    nomeFornecedorPromotor, mainTab, selectedCategory, debouncedSearchTerm.trim().toLowerCase(), sortBy,
+  ])}`;
 
   // 1. Produtos em Ruptura Iminente (Estoque <= Mínimo ou Zerado)
-  const ruptureProducts = products.filter(p => p.stock <= p.minStock || p.stock === 0);
+  const ruptureProducts = useMemo(() => products.filter(p => p.stock <= p.minStock || p.stock === 0), [products]);
 
   // Categorias disponíveis
   const categories = ['all', ...SETORES_DISPONIVEIS];
 
   // Carregamento inicial ou ao mudar filtros
   const loadInitialData = useCallback(async (forceRefresh = false) => {
-    if (!activeLojaId || !currentUser) return;
+    if (!activeLojaId || !currentUser?.id) return;
+    stockRequest.current?.abort();
+    nextPageRequest.current?.abort();
+    nextPageRequest.current = null;
+    const controller = new AbortController();
+    stockRequest.current = controller;
+    setStockError(null);
+    setIsLoadingInitial(true);
+    setIsLoadingMore(false);
 
     if (!forceRefresh) {
       // Tenta recuperar do cache criptografado (expira em 4h automaticamente)
       const cached = await getEncryptedCache<{ items: Product[]; totalCount: number; hasMore: boolean; page: number }>(cacheKey);
+      if (controller.signal.aborted) return;
       const allowedSector = (sector: string) =>
         ['TODOS', 'GERAL'].includes((currentUser?.setor || '').toUpperCase()) ||
         sector.toUpperCase() === (currentUser?.setor || '').toUpperCase();
       const validCache = cached?.data && Array.isArray(cached.data.items) &&
         cached.data.items.every(p =>
-          allowedSector(p.category || '') &&
+          p.loja_id === activeLojaId && allowedSector(p.category || '') &&
           (effectiveSupplierCode === undefined ||
             (Boolean(effectiveSupplierCode) && p.supplierCode?.trim() === effectiveSupplierCode) ||
             (Boolean(nomeFornecedorPromotor) && p.name?.toLocaleLowerCase('pt-BR').includes(nomeFornecedorPromotor.toLocaleLowerCase('pt-BR'))))
@@ -454,12 +469,12 @@ export const EstoqueTab: React.FC = () => {
       }
     }
 
-    setIsLoadingInitial(true);
     setIsFromEncryptedCache(false);
 
     try {
       const res = await fetchStockPaginatedFromSupabase({
         lojaId: activeLojaId,
+        signal: controller.signal,
         codigoFornecedor: effectiveSupplierCode,
         nomeFornecedor: nomeFornecedorPromotor,
         page: 0,
@@ -470,6 +485,7 @@ export const EstoqueTab: React.FC = () => {
         onlyRuptures: mainTab === 'rupturas',
       });
 
+      if (controller.signal.aborted) return;
       setStockItems(res.items);
       setTotalCount(res.totalCount);
       setHasMore(res.hasMore);
@@ -485,14 +501,26 @@ export const EstoqueTab: React.FC = () => {
         page: 0,
       });
     } catch (err) {
-      console.warn('Erro ao carregar estoque paginado:', err);
+      if (!controller.signal.aborted) {
+        console.warn('Erro ao carregar estoque paginado:', err);
+        setStockError('initial');
+      }
     } finally {
-      setIsLoadingInitial(false);
+      if (!controller.signal.aborted) setIsLoadingInitial(false);
     }
-  }, [activeLojaId, cacheKey, debouncedSearchTerm, selectedCategory, sortBy, mainTab, effectiveSupplierCode, nomeFornecedorPromotor, currentUser?.setor]);
+  }, [activeLojaId, cacheKey, debouncedSearchTerm, selectedCategory, sortBy, mainTab, effectiveSupplierCode, nomeFornecedorPromotor, currentUser?.id, currentUser?.setor]);
 
   useEffect(() => {
-    loadInitialData();
+    setStockItems([]);
+    setTotalCount(0);
+    setPage(0);
+    setHasMore(false);
+    setCacheTimestamp(null);
+    void loadInitialData();
+    return () => {
+      stockRequest.current?.abort();
+      nextPageRequest.current?.abort();
+    };
   }, [loadInitialData]);
 
   // Sincronização incremental: a cada 90s consulta apenas logs do setor autorizado.
@@ -500,6 +528,7 @@ export const EstoqueTab: React.FC = () => {
   useEffect(() => { deltaCursor.current = Date.now(); }, [cacheKey]);
   useEffect(() => {
     if (!activeLojaId || !currentUser) return;
+    const deltaController = new AbortController();
     let busy = false;
     const refreshDelta = async () => {
       if (busy || document.visibilityState !== 'visible') return;
@@ -514,15 +543,15 @@ export const EstoqueTab: React.FC = () => {
           .eq('tabela', 'produtos').eq('loja_id', activeLojaId)
           .gt('alterado_em', new Date(since).toISOString())
           .lte('alterado_em', new Date(until).toISOString())
-          .order('alterado_em', { ascending: true }).limit(500);
-        if (error || !logs) return;
+          .order('alterado_em', { ascending: true }).limit(500).abortSignal(deltaController.signal);
+        if (deltaController.signal.aborted || error || !logs) return;
         if (logs.length >= 500 || logs.some(l => l.operacao !== 'UPDATE')) {
           await loadInitialData(true);
         } else if (logs.length) {
           const ids = [...new Set(logs.map(l => l.registro_id))];
           const { data: rows, error: rowsError } = await db.from('produtos').select('*')
-            .eq('loja_id', activeLojaId).in('id', ids);
-          if (rowsError) return;
+            .eq('loja_id', activeLojaId).in('id', ids).abortSignal(deltaController.signal);
+          if (deltaController.signal.aborted || rowsError) return;
           const updated = new Map((rows || []).map(row => [row.id, mapProductRow(row, activeLojaId)]));
           setStockItems(previous => {
             const next = previous.map(item => updated.get(item.id) || item);
@@ -535,13 +564,18 @@ export const EstoqueTab: React.FC = () => {
       } finally { busy = false; }
     };
     const timer = window.setInterval(() => { void refreshDelta(); }, 90_000);
-    return () => window.clearInterval(timer);
+    return () => {
+      deltaController.abort();
+      window.clearInterval(timer);
+    };
   }, [activeLojaId, cacheKey, currentUser?.id, currentUser?.setor, loadInitialData, totalCount, hasMore, page]);
 
   // Carregamento contínuo durante a rolagem com elemento de loading de cerca de 1 segundo
   const loadMoreItems = useCallback(async () => {
-    if (isLoadingMore || isLoadingInitial || !hasMore || !activeLojaId) return;
-
+    if (nextPageRequest.current || isLoadingInitial || !hasMore || !activeLojaId) return;
+    const controller = new AbortController();
+    nextPageRequest.current = controller;
+    setStockError(null);
     setIsLoadingMore(true);
 
     const nextPage = page + 1;
@@ -550,7 +584,9 @@ export const EstoqueTab: React.FC = () => {
       // Carrega imediatamente; sem atraso artificial. O tempo real depende da rede.
       const res = await fetchStockPaginatedFromSupabase({
           lojaId: activeLojaId,
+          signal: controller.signal,
           codigoFornecedor: effectiveSupplierCode,
+          nomeFornecedor: nomeFornecedorPromotor,
           page: nextPage,
           pageSize: 50,
           searchTerm: debouncedSearchTerm,
@@ -559,6 +595,7 @@ export const EstoqueTab: React.FC = () => {
           onlyRuptures: mainTab === 'rupturas',
         });
 
+      if (controller.signal.aborted) return;
       setStockItems(prev => {
         const existingIds = new Set(prev.map(p => p.id));
         const uniqueIncoming = res.items.filter(p => !existingIds.has(p.id));
@@ -579,11 +616,17 @@ export const EstoqueTab: React.FC = () => {
       setHasMore(res.hasMore);
       setPage(nextPage);
     } catch (err) {
-      console.warn('Erro ao carregar mais itens:', err);
+      if (!controller.signal.aborted) {
+        console.warn('Erro ao carregar mais itens:', err);
+        setStockError('more');
+      }
     } finally {
-      setIsLoadingMore(false);
+      if (nextPageRequest.current === controller) {
+        nextPageRequest.current = null;
+        if (!controller.signal.aborted) setIsLoadingMore(false);
+      }
     }
-  }, [isLoadingMore, isLoadingInitial, hasMore, activeLojaId, page, debouncedSearchTerm, selectedCategory, sortBy, mainTab, cacheKey, effectiveSupplierCode, nomeFornecedorPromotor]);
+  }, [isLoadingInitial, hasMore, activeLojaId, page, debouncedSearchTerm, selectedCategory, sortBy, mainTab, cacheKey, effectiveSupplierCode, nomeFornecedorPromotor]);
 
   // Observer do elemento sentinela no fim da lista
   const observerTargetRef = useRef<HTMLDivElement | null>(null);
@@ -594,7 +637,7 @@ export const EstoqueTab: React.FC = () => {
 
     const observer = new IntersectionObserver(
       entries => {
-        if (entries[0].isIntersecting && hasMore && !isLoadingMore && !isLoadingInitial) {
+        if (entries[0].isIntersecting && !stockError && hasMore && !isLoadingMore && !isLoadingInitial) {
           loadMoreItems();
         }
       },
@@ -606,7 +649,7 @@ export const EstoqueTab: React.FC = () => {
     return () => {
       observer.unobserve(currentTarget);
     };
-  }, [hasMore, isLoadingMore, isLoadingInitial, loadMoreItems]);
+  }, [hasMore, isLoadingMore, isLoadingInitial, loadMoreItems, stockError]);
 
   const handleScanForSearch = () => {
     openScanner((scannedEan) => {
@@ -879,6 +922,15 @@ export const EstoqueTab: React.FC = () => {
 
           {/* Cards de Produtos com Suporte a Rolagem Contínua (50 itens por bloco), Press/Long-Press e Swipe */}
           <div className="space-y-2.5">
+            {stockError && (
+              <div role="alert" className="flex items-center justify-between gap-3 px-3 py-2 text-sm">
+                <span>Não foi possível carregar {stockError === 'more' ? 'mais produtos' : 'o estoque'}.</span>
+                <button type="button" className="font-bold text-emerald-600" onClick={() => {
+                  if (stockError === 'more') void loadMoreItems();
+                  else void loadInitialData(true);
+                }}>Tentar novamente</button>
+              </div>
+            )}
             {isLoadingInitial ? (
               <div className="text-center py-16 rounded-3xl border border-dashed border-slate-200 dark:border-slate-800 space-y-3">
                 <RefreshCw className="w-8 h-8 text-emerald-500 animate-spin mx-auto" />
@@ -889,7 +941,7 @@ export const EstoqueTab: React.FC = () => {
                   Consulta paginada no Supabase via .range(0, 49) com projeção estrita
                 </p>
               </div>
-            ) : stockItems.length === 0 ? (
+            ) : stockItems.length === 0 && stockError ? null : stockItems.length === 0 ? (
               <div className="text-center py-12 rounded-3xl border border-dashed border-slate-200 dark:border-slate-800">
                 <Package className="w-8 h-8 text-slate-400 mx-auto mb-2" />
                 <p className="text-xs font-bold text-slate-600 dark:text-slate-300">Nenhum produto encontrado</p>

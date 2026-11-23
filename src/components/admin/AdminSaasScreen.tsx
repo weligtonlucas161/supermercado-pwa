@@ -426,7 +426,7 @@ export const AdminSaasScreen: React.FC = () => {
             </span>
 
             <button
-              onClick={logout}
+              onClick={() => logout()}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-rose-600 hover:bg-rose-700 text-white shadow-md shadow-rose-600/20 transition cursor-pointer"
               title="Encerrar Sessão de Administrador SaaS"
             >

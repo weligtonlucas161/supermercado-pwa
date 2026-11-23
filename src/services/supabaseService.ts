@@ -1595,6 +1595,7 @@ export interface FetchStockPaginatedParams {
   department?: string;
   sortBy?: 'default' | 'qtd-desc' | 'qtd-asc' | 'name-asc' | 'name-desc' | 'forn-asc';
   onlyRuptures?: boolean;
+  signal?: AbortSignal;
 }
 
 export interface FetchStockPaginatedResult {
@@ -1612,6 +1613,7 @@ export interface FetchStockPaginatedResult {
 export async function fetchStockPaginatedFromSupabase(
   params: FetchStockPaginatedParams
 ): Promise<FetchStockPaginatedResult> {
+  params.signal?.throwIfAborted();
   const cleanLojaId = params.lojaId ? sanitizeIdentifier(params.lojaId, 64) : '';
   const pageSize = Math.max(1, Math.min(100, params.pageSize || 50));
   const page = Math.max(0, params.page || 0);
@@ -1695,160 +1697,128 @@ export async function fetchStockPaginatedFromSupabase(
     return { items: [], totalCount: 0, page, pageSize, hasMore: false };
   }
 
-  try {
-    const PRODUCT_COLUMNS =
-      'id, nome, codigo_barras, codigo_barras_secundario, plu, codigo_fornecedor, setor, departamento, quantidade, data_vencimento, loja_id, is_encrypted, ciphertext, iv, is_locked_for_edit, locked_by, locked_at, criado_em';
+  const PRODUCT_COLUMNS =
+    'id, nome, codigo_barras, codigo_barras_secundario, plu, codigo_fornecedor, setor, departamento, quantidade, data_vencimento, loja_id, is_encrypted, ciphertext, iv, is_locked_for_edit, locked_by, locked_at, criado_em';
 
-    // Campos de produto são cifrados com IV aleatório. SQL não pode comparar
-    // codigo_fornecedor/nome cifrados com o texto informado pelo usuário.
-    // Para filtros de conteúdo, varremos em lotes e filtramos após descriptografar.
-    const needsDecryptedFiltering = Boolean(
-      params.codigoFornecedor !== undefined ||
-      Boolean(nomeFornecedor) ||
-      (params.searchTerm && params.searchTerm.trim()) ||
-      (params.category && params.category !== 'all') ||
-      (params.department && params.department !== 'all') ||
-      params.onlyRuptures ||
-      (params.sortBy && !['default', 'qtd-asc', 'qtd-desc'].includes(params.sortBy))
-    );
-    if (needsDecryptedFiltering) {
-      const matched: Product[] = [];
-      const chunkSize = 500;
-      let offset = 0;
-      const term = params.searchTerm?.trim().toLocaleLowerCase('pt-BR') || '';
-      while (true) {
-        const { data: chunk, error: chunkError } = await client.from('produtos')
-          .select(PRODUCT_COLUMNS).eq('loja_id', cleanLojaId)
-          .order('id', { ascending: true })
-          .range(offset, offset + chunkSize - 1);
-        if (chunkError) {
-          console.warn('Erro ao buscar lote de estoque cifrado:', chunkError.message);
-          throw new Error('Falha ao consultar o estoque filtrado; dados anteriores preservados.');
+  // Campos de produto são cifrados com IV aleatório. SQL não pode comparar
+  // codigo_fornecedor/nome cifrados com o texto informado pelo usuário.
+  // Para filtros de conteúdo, varremos em lotes e filtramos após descriptografar.
+  const from = page * pageSize;
+  const needsDecryptedFiltering = Boolean(
+    params.codigoFornecedor !== undefined ||
+    Boolean(nomeFornecedor) ||
+    (params.searchTerm && params.searchTerm.trim()) ||
+    (params.category && params.category !== 'all') ||
+    (params.department && params.department !== 'all') ||
+    (params.sortBy && !['default', 'qtd-asc', 'qtd-desc'].includes(params.sortBy))
+  );
+  if (needsDecryptedFiltering) {
+    const matched: Product[] = [];
+    const needsLocalSort = Boolean(params.sortBy && params.sortBy !== 'default');
+    let totalMatches = 0;
+    const chunkSize = 500;
+    let lastId: string | undefined;
+    const term = params.searchTerm?.trim().toLocaleLowerCase('pt-BR') || '';
+    while (true) {
+      params.signal?.throwIfAborted();
+      let chunkQuery = client.from('produtos')
+        .select(PRODUCT_COLUMNS).eq('loja_id', cleanLojaId)
+        .order('id', { ascending: true }).limit(chunkSize);
+      if (params.onlyRuptures) chunkQuery = chunkQuery.lte('quantidade', 10);
+      if (lastId !== undefined) chunkQuery = chunkQuery.gt('id', lastId);
+      if (params.signal) chunkQuery = chunkQuery.abortSignal(params.signal);
+      const { data: chunk, error: chunkError } = await chunkQuery;
+      params.signal?.throwIfAborted();
+      if (chunkError) {
+        console.warn('Erro ao buscar lote de estoque cifrado:', chunkError.message);
+        throw new Error('Falha ao consultar o estoque filtrado; dados anteriores preservados.');
+      }
+      const rows = chunk || [];
+      for (const row of rows) {
+        const p = mapProductRow(row as Record<string, unknown>, cleanLojaId);
+        if (params.codigoFornecedor !== undefined &&
+            !((Boolean(codigoFornecedor) && String(p.supplierCode || '').trim() === codigoFornecedor) ||
+              (Boolean(nomeFornecedor) && String(p.name || '').toLocaleLowerCase('pt-BR').includes(nomeFornecedor)))) continue;
+        if (params.category && params.category !== 'all' && p.category !== params.category) continue;
+        if (params.department && params.department !== 'all') {
+          const dep = p.department || 'Outros';
+          if (params.department === 'Outros' ? dep !== 'Outros' : dep !== params.department) continue;
         }
-        const rows = chunk || [];
-        for (const row of rows) {
-          const p = mapProductRow(row as Record<string, unknown>, cleanLojaId);
-          if (params.codigoFornecedor !== undefined &&
-              !((Boolean(codigoFornecedor) && String(p.supplierCode || '').trim() === codigoFornecedor) ||
-                (Boolean(nomeFornecedor) && String(p.name || '').toLocaleLowerCase('pt-BR').includes(nomeFornecedor)))) continue;
-          if (params.category && params.category !== 'all' && p.category !== params.category) continue;
-          if (params.department && params.department !== 'all') {
-            const dep = p.department || 'Outros';
-            if (params.department === 'Outros' ? dep !== 'Outros' : dep !== params.department) continue;
-          }
-          if (params.onlyRuptures && p.stock > (p.minStock ?? 10)) continue;
-          if (term && ![p.name, p.ean, p.reducedCode, p.supplierCode]
-            .some(v => String(v || '').toLocaleLowerCase('pt-BR').includes(term))) continue;
+        if (term && ![p.name, p.ean, p.reducedCode, p.supplierCode]
+          .some(v => String(v || '').toLocaleLowerCase('pt-BR').includes(term))) continue;
+        if (needsLocalSort || (totalMatches >= from && totalMatches < from + pageSize)) {
           matched.push(p);
         }
-        offset += rows.length;
-        if (rows.length < chunkSize) break;
-        // Permite que a interface responda entre lotes enquanto filtros cifrados
-        // ainda precisam ser avaliados no cliente. Evita longos bloqueios da UI.
-        if (typeof window !== 'undefined') {
-          await new Promise<void>(resolve => setTimeout(resolve, 0));
-        }
+        totalMatches++;
       }
-      switch (params.sortBy) {
-        case 'qtd-desc': matched.sort((a,b) => b.stock - a.stock); break;
-        case 'qtd-asc': matched.sort((a,b) => a.stock - b.stock); break;
-        case 'name-asc': matched.sort((a,b) => a.name.localeCompare(b.name, 'pt-BR')); break;
-        case 'name-desc': matched.sort((a,b) => b.name.localeCompare(a.name, 'pt-BR')); break;
-        case 'forn-asc': matched.sort((a,b) => (a.supplierCode || '').localeCompare(b.supplierCode || '', 'pt-BR')); break;
-      }
-      const from = page * pageSize;
-      return {
-        items: matched.slice(from, from + pageSize),
-        totalCount: matched.length,
-        page, pageSize,
-        hasMore: from + pageSize < matched.length,
-      };
-    }
-
-    let query = client
-      .from('produtos')
-      .select(PRODUCT_COLUMNS, { count: 'exact' })
-      .eq('loja_id', cleanLojaId);
-
-    if (params.codigoFornecedor !== undefined) {
-      query = codigoFornecedor ? query.eq('codigo_fornecedor', codigoFornecedor) : query.eq('codigo_fornecedor', '__SEM_FORNECEDOR__');
-    }
-
-    if (params.category && params.category !== 'all') {
-      query = query.eq('setor', params.category);
-    }
-
-    if (params.department && params.department !== 'all') {
-      if (params.department === 'Outros') {
-        query = query.or('departamento.is.null,departamento.eq.Outros');
-      } else {
-        query = query.eq('departamento', params.department);
+      if (rows.length < chunkSize) break;
+      lastId = rows[rows.length - 1].id;
+      // Permite que a interface responda entre lotes enquanto filtros cifrados
+      // ainda precisam ser avaliados no cliente. Evita longos bloqueios da UI.
+      if (typeof window !== 'undefined') {
+        await new Promise<void>(resolve => setTimeout(resolve, 0));
       }
     }
-
-    if (params.onlyRuptures) {
-      query = query.lte('quantidade', 10);
-    }
-
-    if (params.searchTerm && params.searchTerm.trim()) {
-      const cleanTerm = params.searchTerm.trim().replace(/[%_,()]/g, '');
-      if (cleanTerm) {
-        query = query.or(
-          `nome.ilike.%${cleanTerm}%,codigo_barras.ilike.%${cleanTerm}%,plu.ilike.%${cleanTerm}%,codigo_fornecedor.ilike.%${cleanTerm}%`
-        );
-      }
-    }
-
     switch (params.sortBy) {
-      case 'qtd-desc':
-        query = query.order('quantidade', { ascending: false }).order('id', { ascending: true });
-        break;
-      case 'qtd-asc':
-        query = query.order('quantidade', { ascending: true }).order('id', { ascending: true });
-        break;
-      case 'name-asc':
-        query = query.order('nome', { ascending: true }).order('id', { ascending: true });
-        break;
-      case 'name-desc':
-        query = query.order('nome', { ascending: false }).order('id', { ascending: true });
-        break;
-      case 'forn-asc':
-        query = query.order('codigo_fornecedor', { ascending: true }).order('id', { ascending: true });
-        break;
-      case 'default':
-      default:
-        query = query.order('criado_em', { ascending: false }).order('id', { ascending: true });
-        break;
+      case 'qtd-desc': matched.sort((a,b) => b.stock - a.stock); break;
+      case 'qtd-asc': matched.sort((a,b) => a.stock - b.stock); break;
+      case 'name-asc': matched.sort((a,b) => a.name.localeCompare(b.name, 'pt-BR')); break;
+      case 'name-desc': matched.sort((a,b) => b.name.localeCompare(a.name, 'pt-BR')); break;
+      case 'forn-asc': matched.sort((a,b) => (a.supplierCode || '').localeCompare(b.supplierCode || '', 'pt-BR')); break;
     }
-
-    const from = page * pageSize;
-    const to = from + pageSize - 1;
-
-    query = query.range(from, to);
-
-    const { data, count, error } = await query;
-
-    if (error) {
-      console.warn('Erro ao consultar estoque paginado no Supabase:', error.message);
-      throw new Error('Falha ao consultar a página do estoque; tente novamente.');
-    }
-
-    const rows = (data || []) as Record<string, unknown>[];
-    const items = rows.map(r => mapProductRow(r, cleanLojaId));
-    const totalCount = typeof count === 'number' ? count : items.length;
-    const hasMore = from + items.length < totalCount;
-
     return {
-      items,
-      totalCount,
-      page,
-      pageSize,
-      hasMore,
+      items: needsLocalSort ? matched.slice(from, from + pageSize) : matched,
+      totalCount: totalMatches,
+      page, pageSize,
+      hasMore: from + pageSize < totalMatches,
     };
-  } catch (err) {
-    console.warn('Exceção ao consultar estoque paginado:', err);
-    return { items: [], totalCount: 0, page, pageSize, hasMore: false };
   }
+
+  let query = client
+    .from('produtos')
+    .select(PRODUCT_COLUMNS, { count: 'exact' })
+    .eq('loja_id', cleanLojaId);
+  if (params.onlyRuptures) query = query.lte('quantidade', 10);
+
+  switch (params.sortBy) {
+    case 'qtd-desc':
+      query = query.order('quantidade', { ascending: false }).order('id', { ascending: true });
+      break;
+    case 'qtd-asc':
+      query = query.order('quantidade', { ascending: true }).order('id', { ascending: true });
+      break;
+    case 'default':
+    default:
+      if (!params.onlyRuptures) query = query.order('criado_em', { ascending: false });
+      query = query.order('id', { ascending: true });
+      break;
+  }
+
+  const to = from + pageSize - 1;
+
+  query = query.range(from, to);
+
+  if (params.signal) query = query.abortSignal(params.signal);
+  const { data, count, error } = await query;
+  params.signal?.throwIfAborted();
+
+  if (error) {
+    console.warn('Erro ao consultar estoque paginado no Supabase:', error.message);
+    throw new Error('Falha ao consultar a página do estoque; tente novamente.');
+  }
+
+  const rows = (data || []) as Record<string, unknown>[];
+  const items = rows.map(r => mapProductRow(r, cleanLojaId));
+  const totalCount = typeof count === 'number' ? count : items.length;
+  const hasMore = from + items.length < totalCount;
+
+  return {
+    items,
+    totalCount,
+    page,
+    pageSize,
+    hasMore,
+  };
 }
 
 /**

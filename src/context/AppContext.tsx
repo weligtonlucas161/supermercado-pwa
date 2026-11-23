@@ -628,8 +628,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
   }, [isAuthenticated, currentUser, operator.store, operator.loja_id]);
 
+  const productSyncGeneration = useRef(0);
+
   const logout = (force = false) => {
     if (isInventoryLocked && !force) return;
+    productSyncGeneration.current++;
     void logoutUser();
     setCurrentUser(null);
     setIsAuthenticated(false);
@@ -673,10 +676,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [isSyncingWithDatabase, setIsSyncingWithDatabase] = useState(false);
   const [lastDatabaseSyncTime, setLastDatabaseSyncTime] = useState<string | null>(null);
 
-  const productSyncGeneration = useRef(0);
   const refreshProductsFromDatabase = useCallback(async () => {
     const generation = ++productSyncGeneration.current;
     const lojaId = currentUser?.loja_id || operator.loja_id;
+    const supplierCode = currentUser?.codigo_fornecedor?.trim();
     if (!lojaId) {
       setProducts([]);
       saveStoredData(STORAGE_KEYS.PRODUCTS, []);
@@ -685,7 +688,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     if (!isSupabaseConfigured()) {
       const localScoped = loadStoredData<Product[]>(`superpwa_products_${lojaId}`, []);
-      setProducts(localScoped.filter(p => (p.loja_id === lojaId) && (currentUser?.cargo !== 'promotor' || (Boolean(currentUser.codigo_fornecedor) && p.supplierCode?.trim() === currentUser.codigo_fornecedor.trim()))));
+      setProducts(localScoped.filter(p => (p.loja_id === lojaId) && (currentUser?.cargo !== 'promotor' || (Boolean(supplierCode) && p.supplierCode?.trim() === supplierCode))));
       return;
     }
 
@@ -694,7 +697,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const dbProducts = await fetchProductsFromSupabase(lojaId);
       if (generation !== productSyncGeneration.current || dbProducts === null) return;
       const visibleProducts = currentUser?.cargo === 'promotor'
-        ? dbProducts.filter(p => Boolean(currentUser.codigo_fornecedor) && p.supplierCode?.trim() === currentUser.codigo_fornecedor.trim())
+        ? dbProducts.filter(p => Boolean(supplierCode) && p.supplierCode?.trim() === supplierCode)
         : dbProducts;
       if (visibleProducts !== null) {
         if (visibleProducts.length === 0) {
@@ -1484,6 +1487,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         isSaasAdmin,
         isGerente,
         login,
+        loginWithPasskey,
         logout,
         disconnectedMessage,
         clearDisconnectedMessage,
