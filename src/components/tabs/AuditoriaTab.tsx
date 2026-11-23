@@ -1,3 +1,4 @@
+import { OperationsPanelHeader } from '../common/OperationsPanelHeader';
 import { ValidityAuditPanel } from './ValidityAuditPanel';
 import { fetchAuditReportsFromDatabase } from '../../services/supabaseService';
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
@@ -1852,19 +1853,11 @@ export const AuditoriaTab: React.FC = () => {
               )}
 
               <div className="p-5 sm:p-6 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xl space-y-5">
-                <div className="flex items-center gap-3 pb-3 border-b border-slate-100 dark:border-slate-800">
-                  <div className="p-2.5 rounded-2xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
-                    <CheckSquare className="w-6 h-6" />
-                  </div>
-                  <div>
-                    <h3 className="font-black text-base text-slate-900 dark:text-white">
-                      Iniciar Nova Auditoria de Presença
-                    </h3>
-                    <p className="text-xs text-slate-500 dark:text-slate-400">
-                      Selecione o setor da loja para conferir presença exclusivamente via leitura de código de barras pela câmera.
-                    </p>
-                  </div>
-                </div>
+                <OperationsPanelHeader
+                  icon={CheckSquare}
+                  title="Iniciar Nova Auditoria de Presença"
+                  description="Selecione o setor da loja para conferir presença via leitura de código de barras."
+                />
 
               {/* Botões dos 6 Setores Oficiais */}
               <div className="space-y-2.5">

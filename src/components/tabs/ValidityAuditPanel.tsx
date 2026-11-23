@@ -1,10 +1,13 @@
+import { OperationsPanelHeader } from '../common/OperationsPanelHeader';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
-import { Barcode, Camera, X } from 'lucide-react';
+import { Barcode, CalendarClock, Camera, X } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import type { Product } from '../../types';
 import { readValidityCounts, saveValidityCount, type ValidityCount } from '../../services/validityAudit';
 
-const field = 'w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900';
+const field = 'w-full min-w-0 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500/40 dark:border-slate-700 dark:bg-slate-800 dark:text-white';
+const primary = 'inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-2.5 text-xs font-bold text-white shadow-md shadow-emerald-600/20 transition hover:bg-emerald-700 disabled:opacity-50';
+const secondary = 'inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-xs font-bold text-slate-700 transition hover:bg-slate-50 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200';
 
 export function ValidityAuditPanel() {
   const { products, currentUser, openScanner, setActiveTab, isScannerOpen } = useApp();
@@ -90,17 +93,17 @@ export function ValidityAuditPanel() {
   };
 
   return (
-    <section className="space-y-4 rounded-2xl border border-slate-200 bg-white p-4">
-      <h3 className="font-bold text-slate-900">Auditoria de validade</h3>
+    <section className="space-y-5 rounded-3xl border border-slate-200 bg-white p-5 shadow-xl sm:p-6 dark:border-slate-800 dark:bg-slate-900">
+      <OperationsPanelHeader icon={CalendarClock} title="Auditoria de Validade" description="Bipe o produto para registrar a data de validade e a quantidade encontrada." />
       <form className="space-y-2" onSubmit={event => { event.preventDefault(); identify(code); }}>
         <label htmlFor="validity-scan" className="text-sm font-semibold">Código do produto</label>
-        <div className="flex flex-wrap gap-2">
+        <div className="grid grid-cols-2 gap-2 sm:flex">
           <input id="validity-scan" ref={input} value={code} onChange={event => setCode(event.target.value)}
             onKeyDown={event => { if (event.key === 'Tab' && code) { event.preventDefault(); identify(code); } }}
-            inputMode="none" autoComplete="off" placeholder="Bipe com o coletor (Enter ou Tab)" className={field + ' flex-1'} />
-          <button type="submit" className="flex items-center gap-2 rounded-xl bg-emerald-700 px-3 py-2 text-sm font-bold text-white"><Barcode size={16} /> Identificar</button>
+            inputMode="none" autoComplete="off" placeholder="Bipe com o coletor (Enter ou Tab)" className={field + ' col-span-2 sm:flex-1'} />
+          <button type="submit" className={primary}><Barcode size={16} /> Identificar</button>
           <button type="button" onClick={() => openScanner(identify, { cameraOnly: true })}
-            className="flex items-center gap-2 rounded-xl border border-slate-300 px-3 py-2 text-sm font-bold"><Camera size={16} /> Câmera</button>
+            className={secondary}><Camera size={16} /> Câmera</button>
         </div>
       </form>
       <button type="button" onClick={() => setActiveTab('validade')} className="text-sm font-bold text-emerald-700">Ver produtos em Validade</button>
@@ -114,15 +117,15 @@ export function ValidityAuditPanel() {
                 event.preventDefault();
               }
             }}
-            className="w-full max-w-md space-y-3 rounded-2xl bg-white p-4 text-slate-900 shadow-xl">
+            className="w-full max-w-md space-y-4 rounded-3xl border border-slate-200 bg-white p-5 text-slate-900 shadow-xl dark:border-slate-800 dark:bg-slate-900 dark:text-white">
             <div className="flex justify-between gap-2">
               <h4 id="validity-product" className="font-bold">{product.name}</h4>
               <button type="button" aria-label="Fechar" disabled={saving} onClick={() => { setProduct(null); setError(''); }}><X size={20} /></button>
             </div>
-            <dl className="space-y-1 text-sm">
-              <div>Código de barras <strong>{product.ean || '—'}</strong></div>
-              <div>Código reduzido <strong>{product.reducedCode || '—'}</strong></div>
-              <div>Quantidade em estoque <strong>{product.stock}</strong></div>
+            <dl className="grid grid-cols-2 gap-3 rounded-2xl border border-slate-100 bg-slate-50 p-3 text-xs dark:border-slate-800 dark:bg-slate-800">
+              <div><dt className="text-slate-500 dark:text-slate-400">Código de barras</dt><dd className="break-all font-mono font-bold">{product.ean || '—'}</dd></div>
+              <div><dt className="text-slate-500 dark:text-slate-400">Código reduzido</dt><dd className="break-all font-mono font-bold">{product.reducedCode || '—'}</dd></div>
+              <div><dt className="text-slate-500 dark:text-slate-400">Quantidade em estoque</dt><dd className="font-bold">{product.stock}</dd></div>
             </dl>
             <label className="block text-sm font-semibold">Data de validade
               <input autoFocus type="date" required value={date} onChange={event => setDate(event.target.value)} className={field} />
@@ -136,10 +139,10 @@ export function ValidityAuditPanel() {
             <div className="flex flex-wrap gap-2">
               {previous > 0 ? (
                 <>
-                  <button disabled={saving || !counts} name="mode" value="replace" className="rounded-xl border border-slate-300 px-3 py-2 text-sm font-bold">Corrigir total</button>
-                  <button disabled={saving || !counts} name="mode" value="add" className="rounded-xl bg-emerald-700 px-3 py-2 text-sm font-bold text-white">Somar unidades</button>
+                  <button disabled={saving || !counts} name="mode" value="replace" className={secondary}>Corrigir total</button>
+                  <button disabled={saving || !counts} name="mode" value="add" className={primary}>Somar unidades</button>
                 </>
-              ) : <button disabled={saving || !counts} name="mode" value="save" className="rounded-xl bg-emerald-700 px-3 py-2 text-sm font-bold text-white">{saving ? 'Salvando…' : 'Salvar validade'}</button>}
+              ) : <button disabled={saving || !counts} name="mode" value="save" className={primary}>{saving ? 'Salvando…' : 'Salvar validade'}</button>}
             </div>
           </form>
         </div>

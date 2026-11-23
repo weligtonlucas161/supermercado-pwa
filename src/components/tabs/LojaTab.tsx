@@ -1,5 +1,7 @@
+import { OperationsPanelHeader } from '../common/OperationsPanelHeader';
 import React, { useState, useEffect } from 'react';
 import { 
+  BarChart3,
   Building2, 
   Users, 
   UserPlus, 
@@ -395,8 +397,32 @@ export const LojaTab: React.FC = () => {
       {/* Navegação entre Sub-Abas da Loja */}
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 pb-2">
         <div className="flex flex-wrap gap-2">
-          <button onClick={() => setActiveSubTab('resumo')} className={`py-2 px-3.5 rounded-2xl text-xs font-bold ${activeSubTab==='resumo'?'bg-emerald-600 text-white':'bg-white dark:bg-slate-900 text-slate-600 border'}`}>Desempenho por setor</button>
-          <button onClick={() => setActiveSubTab('setores')} className={`py-2 px-3.5 rounded-2xl text-xs font-bold ${activeSubTab==='setores'?'bg-emerald-600 text-white':'bg-white dark:bg-slate-900 text-slate-600 border'}`}>Gerenciar setores</button>
+          <button
+            type="button"
+            onClick={() => setActiveSubTab('resumo')}
+            aria-pressed={activeSubTab === 'resumo'}
+            className={`flex items-center gap-1.5 rounded-2xl border px-3.5 py-2 text-xs font-bold transition ${
+              activeSubTab === 'resumo'
+                ? 'border-emerald-600 bg-emerald-600 text-white shadow-md shadow-emerald-600/20 ring-2 ring-emerald-500/30'
+                : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-200'
+            }`}
+          >
+            <BarChart3 className="h-4 w-4" aria-hidden="true" />
+            Desempenho por setor
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveSubTab('setores')}
+            aria-pressed={activeSubTab === 'setores'}
+            className={`flex items-center gap-1.5 rounded-2xl border px-3.5 py-2 text-xs font-bold transition ${
+              activeSubTab === 'setores'
+                ? 'border-emerald-600 bg-emerald-600 text-white shadow-md shadow-emerald-600/20 ring-2 ring-emerald-500/30'
+                : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-200'
+            }`}
+          >
+            <Tag className="h-4 w-4" aria-hidden="true" />
+            Gerenciar setores
+          </button>
           <button
             onClick={() => setActiveSubTab('funcionarios')}
             className={`py-2 px-3.5 rounded-2xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
@@ -478,32 +504,74 @@ export const LojaTab: React.FC = () => {
         )}
       </div>
 
-      {activeSubTab==='resumo' && <div className="space-y-4">
-        <h2 className="text-lg font-bold">Resultados operacionais por setor</h2>
-        <p className="text-xs text-slate-500">Indicadores disponíveis no banco. Pedidos de rebaixa, aprovações e rupturas corrigidas ainda não possuem histórico consolidado para pontuação confiável.</p>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-        {sectors.map(sector=><div key={sector.id} className="rounded-2xl border p-4 bg-white dark:bg-slate-800">
-          <h3 className="font-bold">{sector.nome}</h3>
-          <p className="text-sm mt-2">Avarias registradas: <strong>{sectorMetrics[sector.nome]?.avarias??0}</strong></p>
-          <p className="text-sm">Rupturas atuais: <strong>{sectorMetrics[sector.nome]?.rupturas??0}</strong></p>
-          <p className="text-xs text-slate-500 mt-2">Pontuação pendente de histórico completo dos quatro indicadores.</p>
-        </div>)}
-        </div>
-      </div>}
-      {activeSubTab==='setores' && <div className="space-y-4">
-        <h2 className="text-lg font-bold">Setores da loja</h2>
-        <div className="flex gap-2">
-          <input value={newSectorName} onChange={e=>setNewSectorName(e.target.value)} placeholder="Nome do setor" className="flex-1 min-w-0 rounded-xl border px-3 py-2 bg-white dark:bg-slate-800" />
-          <button onClick={()=>void saveSector()} className="rounded-xl bg-emerald-600 text-white px-4">{editingSectorId?'Salvar':'Criar'}</button>
-        </div>
-        {sectors.map(sector=><div key={sector.id} className="flex items-center justify-between gap-2 p-3 rounded-xl border">
-          <strong className="text-sm">{sector.nome}</strong>
-          <div className="flex gap-2">
-            <button onClick={()=>{setEditingSectorId(sector.id);setNewSectorName(sector.nome);}} className="text-xs text-emerald-600">Editar</button>
-            <button onClick={()=>void deleteSector(sector)} className="text-xs text-rose-600">Excluir</button>
+      {activeSubTab === 'resumo' && (
+        <section className="space-y-5 rounded-3xl border border-slate-200 bg-white p-5 shadow-xl sm:p-6 dark:border-slate-800 dark:bg-slate-900">
+          <OperationsPanelHeader
+            icon={BarChart3}
+            title="Desempenho por setor"
+            description="Acompanhe as avarias registradas e as rupturas atuais. A pontuação depende de histórico completo dos indicadores."
+          />
+          {sectors.length === 0 ? (
+            <p className="rounded-2xl border border-dashed border-slate-200 p-5 text-center text-xs text-slate-500 dark:border-slate-700">Nenhum setor cadastrado.</p>
+          ) : (
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {sectors.map(sector => (
+                <article key={sector.id} className="min-w-0 rounded-2xl border border-slate-200 p-3.5 shadow-sm dark:border-slate-800">
+                  <h4 className="flex items-center gap-2 break-words text-sm font-black text-slate-900 dark:text-white">
+                    <Tag className="h-4 w-4 shrink-0 text-emerald-600" aria-hidden="true" />{sector.nome}
+                  </h4>
+                  <dl className="mt-3 grid grid-cols-2 gap-2 text-xs">
+                    <div className="rounded-xl bg-slate-50 p-2.5 dark:bg-slate-800">
+                      <dt className="text-slate-500 dark:text-slate-400">Avarias registradas</dt>
+                      <dd className="mt-1 text-lg font-black">{sectorMetrics[sector.nome]?.avarias ?? 0}</dd>
+                    </div>
+                    <div className="rounded-xl bg-slate-50 p-2.5 dark:bg-slate-800">
+                      <dt className="text-slate-500 dark:text-slate-400">Rupturas atuais</dt>
+                      <dd className="mt-1 text-lg font-black">{sectorMetrics[sector.nome]?.rupturas ?? 0}</dd>
+                    </div>
+                  </dl>
+                </article>
+              ))}
+            </div>
+          )}
+        </section>
+      )}
+      {activeSubTab === 'setores' && (
+        <section className="space-y-5 rounded-3xl border border-slate-200 bg-white p-5 shadow-xl sm:p-6 dark:border-slate-800 dark:bg-slate-900">
+          <OperationsPanelHeader icon={Tag} title="Gerenciar setores" description="Cadastre ou renomeie os setores da loja." />
+          <form className="space-y-2" onSubmit={event => { event.preventDefault(); void saveSector(); }}>
+            <label htmlFor="store-sector-name" className="text-xs font-bold text-slate-900 dark:text-white">Nome do setor</label>
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <input id="store-sector-name" value={newSectorName} onChange={event => setNewSectorName(event.target.value)}
+                className="min-w-0 flex-1 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/40 dark:border-slate-700 dark:bg-slate-800" />
+              <button type="submit" className="rounded-xl bg-emerald-600 px-4 py-2.5 text-xs font-bold text-white shadow-md shadow-emerald-600/20 transition hover:bg-emerald-700">
+                {editingSectorId ? 'Salvar setor' : 'Criar setor'}
+              </button>
+              {editingSectorId && <button type="button" onClick={() => { setEditingSectorId(null); setNewSectorName(''); }} className="rounded-xl border border-slate-200 px-4 py-2.5 text-xs font-bold dark:border-slate-700">Cancelar edição</button>}
+            </div>
+          </form>
+          <div className="space-y-2">
+            {sectors.length === 0 && <p className="rounded-2xl border border-dashed border-slate-200 p-5 text-center text-xs text-slate-500 dark:border-slate-700">Nenhum setor cadastrado.</p>}
+            {sectors.map(sector => (
+              <div key={sector.id} className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-slate-200 p-3.5 shadow-sm dark:border-slate-800">
+                <strong className="flex min-w-0 items-center gap-2 break-words text-sm text-slate-900 dark:text-white">
+                  <Tag className="h-4 w-4 shrink-0 text-emerald-600" aria-hidden="true" />{sector.nome}
+                </strong>
+                <div className="flex flex-wrap gap-2">
+                  <button type="button" onClick={() => { setEditingSectorId(sector.id); setNewSectorName(sector.nome); }}
+                    className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 px-3 py-2 text-xs font-bold text-slate-700 transition hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200">
+                    <Edit2 className="h-3.5 w-3.5" aria-hidden="true" />Editar
+                  </button>
+                  <button type="button" onClick={() => void deleteSector(sector)}
+                    className="inline-flex items-center gap-1.5 rounded-xl border border-rose-200 px-3 py-2 text-xs font-bold text-rose-700 transition hover:bg-rose-50 dark:border-rose-900 dark:text-rose-400">
+                    <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />Excluir
+                  </button>
+                </div>
+              </div>
+            ))}
           </div>
-        </div>)}
-      </div>}
+        </section>
+      )}
       {/* =================================================================== */}
       {/* SUB-ABA 1: FUNCIONÁRIOS DA LOJA */}
       {/* =================================================================== */}
