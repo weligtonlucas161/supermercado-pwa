@@ -1737,6 +1737,11 @@ export async function fetchStockPaginatedFromSupabase(
         }
         offset += rows.length;
         if (rows.length < chunkSize) break;
+        // Permite que a interface responda entre lotes enquanto filtros cifrados
+        // ainda precisam ser avaliados no cliente. Evita longos bloqueios da UI.
+        if (typeof window !== 'undefined') {
+          await new Promise<void>(resolve => setTimeout(resolve, 0));
+        }
       }
       switch (params.sortBy) {
         case 'qtd-desc': matched.sort((a,b) => b.stock - a.stock); break;
