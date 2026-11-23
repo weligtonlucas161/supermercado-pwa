@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
+  Fingerprint,
   KeyRound, 
   Lock, 
   Eye, 
@@ -39,6 +40,30 @@ export const ConfiguracoesTab: React.FC = () => {
     storeName,
     storeColor
   } = useApp();
+
+  // Detecção não invasiva: nunca solicita biometria sem consentimento.
+  // Suporte WebAuthn não significa que uma digital/face esteja cadastrada.
+  const [passkeySupport, setPasskeySupport] = useState<'checking' | 'available' | 'unavailable'>('checking');
+  useEffect(() => {
+    let active = true;
+    const check = async () => {
+      const supported = window.isSecureContext &&
+        typeof PublicKeyCredential !== 'undefined' &&
+        typeof PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable === 'function';
+      if (!supported) {
+        if (active) setPasskeySupport('unavailable');
+        return;
+      }
+      try {
+        const available = await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable();
+        if (active) setPasskeySupport(available ? 'available' : 'unavailable');
+      } catch {
+        if (active) setPasskeySupport('unavailable');
+      }
+    };
+    void check();
+    return () => { active = false; };
+  }, []);
 
   // Estados de Alteração de Senha
   const [currentPasswordInput, setCurrentPasswordInput] = useState('');
@@ -188,6 +213,24 @@ export const ConfiguracoesTab: React.FC = () => {
               Altere a sua senha de login no sistema SuperPWA OpSys (mínimo de 7 caracteres).
             </p>
           </div>
+        </div>
+
+        <div className="rounded-2xl border border-slate-200 dark:border-slate-700 p-3.5 space-y-2" aria-live="polite">
+          <div className="flex items-center gap-2">
+            <Fingerprint className="w-5 h-5 text-emerald-600" aria-hidden="true" />
+            <span className="text-sm font-bold text-slate-900 dark:text-white">Chave de acesso (biometria ou reconhecimento facial)</span>
+          </div>
+          <p className="text-xs text-slate-500 dark:text-slate-400">
+            {passkeySupport === 'checking' ? 'Verificando compatibilidade do dispositivo...' :
+              passkeySupport === 'available' ? 'Este dispositivo oferece um autenticador seguro compatível com WebAuthn.' :
+              'Este navegador ou dispositivo não oferece um autenticador de plataforma compatível.'}
+          </p>
+          <p className="text-xs text-amber-700 dark:text-amber-300">
+            O cadastro de chaves de acesso estará disponível após a integração segura com o servidor. Sua matrícula e senha continuam funcionando normalmente.
+          </p>
+          <button type="button" disabled className="px-3 py-2 rounded-xl bg-slate-100 dark:bg-slate-700 text-slate-500 text-xs font-semibold cursor-not-allowed" title="Aguardando validação de passkeys no servidor">
+            Ativar chave de acesso (em preparação)
+          </button>
         </div>
 
         {passwordNotice && (
