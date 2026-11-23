@@ -125,7 +125,7 @@ interface AppContextType {
   updateStoreUserLimit: (storeId: string, newLimit: number) => Promise<{ success: boolean; error?: string }>;
   employees: StoreEmployee[];
   refreshEmployees: (lojaId?: string) => Promise<void>;
-  addOrUpdateEmployee: (emp: StoreEmployee) => Promise<{ success: boolean; error?: string }>;
+  addOrUpdateEmployee: (emp: StoreEmployee, create?: boolean) => Promise<{ success: boolean; error?: string }>;
   deleteEmployee: (empId: string, matricula?: string) => Promise<{ success: boolean; error?: string }>;
   toggleEmployeeStatus: (empId: string, active: boolean) => Promise<void>;
   roles: StoreRole[];
@@ -431,8 +431,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return res;
   };
 
-  const addOrUpdateEmployee = async (emp: StoreEmployee) => {
-    const res = await saveStoreEmployee(emp);
+  const addOrUpdateEmployee = async (emp: StoreEmployee, create = false) => {
+    const res = await saveStoreEmployee(emp, create);
     if (res.success) {
       await refreshEmployees(isSaasAdmin ? 'todas' : emp.loja_id);
       if (emp.loja_id && emp.loja_id === (operator.loja_id || '')) {

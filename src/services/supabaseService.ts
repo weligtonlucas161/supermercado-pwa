@@ -940,7 +940,7 @@ export async function fetchStoreEmployees(lojaId?: string): Promise<StoreEmploye
   return filtered;
 }
 
-export async function saveStoreEmployee(emp: StoreEmployee): Promise<{ success: boolean; error?: string }> {
+export async function saveStoreEmployee(emp: StoreEmployee, create = false): Promise<{ success: boolean; error?: string }> {
   const cleanEmp: StoreEmployee = {
     ...emp,
     id: sanitizeIdentifier(emp.id, 64),
@@ -967,82 +967,47 @@ export async function saveStoreEmployee(emp: StoreEmployee): Promise<{ success: 
   }
 
   const encryptedNome = encryptSingleField(cleanEmp.nome);
-  const encryptedSenha = ''; // Nunca persistir credenciais no perfil ou cache.
-
-  if (client && isSupabaseConfigured()) {
-    try {
-      // 1. Verifica se a loja existe no banco de dados para evitar violação de FK
-      const { data: storeRow, error: storeErr } = await client
-        .from('lojas')
-        .select('id, nome_loja, limite_usuarios')
-        .eq('id', cleanEmp.loja_id)
-        .maybeSingle();
-
-      if (storeErr || !storeRow) {
-        return { 
-          success: false, 
-          error: `A loja selecionada (ID: "${cleanEmp.loja_id}") não foi encontrada no banco de dados. Atualize a lista de lojas.` 
-        };
-      }
-
-      // 2. Verifica se o usuário já existe pela matrícula para reaproveitar o ID correto (evita conflito de chave única)
-      const { data: existingUser, error: checkErr } = await client
-        .from('usuarios')
-        .select('id, matricula, loja_id')
-        .eq('matricula', cleanEmp.matricula)
-        .maybeSingle();
-
-      if (checkErr && checkErr.code !== 'PGRST116') {
-        console.warn('Aviso ao consultar usuário existente:', checkErr);
-      }
-
-      const finalId = existingUser?.id || cleanEmp.id;
-      const isNewUser = !existingUser;
-
-      // 3. Verifica o limite de licenças da loja se for um novo usuário
-      if (isNewUser) {
-        const { count: usersCount, error: countErr } = await client
-          .from('usuarios')
-          .select('*', { count: 'exact', head: true })
-          .eq('loja_id', cleanEmp.loja_id)
-          .neq('cargo', 'saas_admin');
-
-        const userLimit = storeRow.limite_usuarios || 15;
-        if (!countErr && usersCount !== null && usersCount >= userLimit) {
-          return {
-            success: false,
-            error: `Limite de licenças (${userLimit}) atingido para a loja "${storeRow.nome_loja}". Amplie a cota antes de cadastrar novos perfis.`
-          };
-        }
-      }
-
-      // 4. Salva no banco de dados Supabase
-      const { error: upsertErr } = await client.from('usuarios').upsert({
-        id: finalId,
+  if (create) {
+    if (!client || !isSupabaseConfigured()) {
+      return { success: false, error: 'Conecte-se ao Supabase para criar o acesso.' };
+    }
+    const { data, error } = await client.functions.invoke('create-store-user', {
+      body: {
+        nome: cleanEmp.nome,
+        nome_cifrado: encryptedNome,
         matricula: cleanEmp.matricula,
-        nome: encryptedNome,
+        password: cleanEmp.senha,
         cargo: cleanEmp.cargo,
-        codigo_fornecedor: cleanEmp.cargo.trim().toLowerCase() === 'promotor' ? cleanEmp.codigo_fornecedor : null,
+        codigo_fornecedor: cleanEmp.codigo_fornecedor ?? null,
         setor: cleanEmp.setor_restrito,
         loja_id: cleanEmp.loja_id,
         ativo: cleanEmp.ativo,
-      });
-
-      if (upsertErr) {
-        console.error('Erro ao salvar funcionário no banco:', upsertErr);
-        return { success: false, error: `Erro no banco de dados: ${upsertErr.message}` };
-      }
-
-      // A criação de credenciais é feita exclusivamente pelo Supabase Auth.
-      // Nunca sincronizar senhas por RPC privilegiada a partir do navegador.
-    } catch (err: any) {
-      console.error('Exceção ao salvar funcionário no banco:', err);
-      return { success: false, error: err?.message || 'Falha de comunicação com o servidor ao salvar perfil.' };
+      },
+    });
+    if (error || data?.success !== true || !data.user_id) {
+      return { success: false, error: 'Não foi possível criar a conta. Confira a matrícula, a senha e a cota da loja.' };
     }
+    return { success: true };
+  }
+
+  if (client && isSupabaseConfigured()) {
+    const { data, error } = await client.from('usuarios').update({
+      matricula: cleanEmp.matricula,
+      nome: encryptedNome,
+      cargo: cleanEmp.cargo,
+      codigo_fornecedor: cleanEmp.cargo.toLowerCase() === 'promotor' ? cleanEmp.codigo_fornecedor : null,
+      setor: cleanEmp.setor_restrito,
+      loja_id: cleanEmp.loja_id,
+      ativo: cleanEmp.ativo,
+    }).eq('id', cleanEmp.id).select('id').maybeSingle();
+    if (error || !data) return { success: false, error: 'Não foi possível atualizar o perfil existente.' };
   }
 
   // Atualização no armazenamento local (cache / offline)
   const allEmps = getStoredEmployees();
+  if (!client && !allEmps.some(employee => employee.id === cleanEmp.id)) {
+    return { success: false, error: 'Perfil existente não encontrado no dispositivo.' };
+  }
   const storedRecord: StoreEmployee = {
     ...cleanEmp,
     nome: encryptedNome,
