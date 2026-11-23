@@ -510,9 +510,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setActiveTab('inicio');
       }
 
-      setTimeout(() => {
-        refreshProductsFromDatabase();
-      }, 100);
+      // A sincronização é iniciada pelo efeito de autenticação abaixo.
+      // Evita duas consultas integrais concorrentes ao estoque no login.
       return { success: true };
     }
     return { success: false, message: result.message || 'Falha na autenticação' };
