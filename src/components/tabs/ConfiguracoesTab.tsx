@@ -1,3 +1,4 @@
+import { requestAccountEmailChange } from '../../services/supabaseService';
 import React, { useState, useEffect } from 'react';
 import { 
   Fingerprint,
@@ -40,6 +41,26 @@ export const ConfiguracoesTab: React.FC = () => {
     storeName,
     storeColor
   } = useApp();
+
+  const [accountEmail, setAccountEmail] = useState('');
+  const [emailNotice, setEmailNotice] = useState<{ success: boolean; message: string } | null>(null);
+  const [emailPending, setEmailPending] = useState(false);
+
+  const saveAccountEmail = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (emailPending) return;
+    setEmailPending(true);
+    setEmailNotice(null);
+    try {
+      const result = await requestAccountEmailChange(accountEmail);
+      setEmailNotice(result);
+      if (result.success) setAccountEmail('');
+    } catch {
+      setEmailNotice({ success: false, message: 'Falha de comunicação ao solicitar a troca de e-mail.' });
+    } finally {
+      setEmailPending(false);
+    }
+  };
 
   // Detecção não invasiva: nunca solicita biometria sem consentimento.
   // Suporte WebAuthn não significa que uma digital/face esteja cadastrada.
@@ -232,6 +253,20 @@ export const ConfiguracoesTab: React.FC = () => {
             Ativar chave de acesso (em preparação)
           </button>
         </div>
+
+        {currentUser && (
+          <form onSubmit={saveAccountEmail} className="space-y-2 rounded-2xl border border-slate-200 p-3.5 dark:border-slate-700">
+            <label className="block text-sm font-bold">Alterar e-mail da conta
+              <input type="email" required autoComplete="email" value={accountEmail}
+                onChange={event => setAccountEmail(event.target.value)}
+                className="mt-1 block w-full rounded-xl border border-slate-200 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-800" />
+            </label>
+            <button type="submit" disabled={emailPending} className="rounded-xl bg-emerald-700 px-3 py-2 text-xs font-bold text-white disabled:opacity-50">
+              {emailPending ? 'Solicitando…' : 'Solicitar troca'}
+            </button>
+            {emailNotice && <p role={emailNotice.success ? 'status' : 'alert'} className="text-xs">{emailNotice.message}</p>}
+          </form>
+        )}
 
         {passwordNotice && (
           <div className={`p-3.5 rounded-2xl text-xs flex items-center gap-2 animate-in fade-in ${

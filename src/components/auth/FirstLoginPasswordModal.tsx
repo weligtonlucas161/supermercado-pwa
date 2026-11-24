@@ -102,7 +102,7 @@ export const FirstLoginPasswordModal: React.FC<FirstLoginPasswordModalProps> = (
       return;
     }
 
-    if (!isSaasAdmin && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(newEmail.trim())) {
+    if (!isSaasAdmin && newEmail.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(newEmail.trim())) {
       setErrorMessage('Informe um e-mail pessoal válido.');
       return;
     }
@@ -114,7 +114,7 @@ export const FirstLoginPasswordModal: React.FC<FirstLoginPasswordModalProps> = (
 
     setIsLoading(true);
     try {
-      const result = await onPasswordChanged(newPassword, isSaasAdmin ? undefined : newEmail);
+      const result = await onPasswordChanged(newPassword, isSaasAdmin ? undefined : newEmail.trim() || undefined);
       if (!result.success) {
         setErrorMessage(result.message || 'Erro ao atualizar a senha. Tente novamente.');
       }
@@ -175,16 +175,17 @@ export const FirstLoginPasswordModal: React.FC<FirstLoginPasswordModalProps> = (
         )}
 
         {/* Formulário */}
+
         <form onSubmit={handleSubmit} className="space-y-4 text-xs">
           {!isSaasAdmin && (
             <div className="space-y-1.5">
               <label className="font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider text-[11px] block">
-                E-mail pessoal *
+                E-mail pessoal (opcional)
               </label>
-              <input type="email" required value={newEmail} onChange={e => setNewEmail(e.target.value)}
+              <input type="email" autoComplete="email" value={newEmail} onChange={e => setNewEmail(e.target.value)}
                 placeholder="seuemail@exemplo.com"
                 className="w-full px-3 py-3 rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800" />
-              <p className="text-slate-500">Você receberá um e-mail de confirmação para substituir o endereço provisório de autenticação.</p>
+              <p className="text-slate-500">Você pode deixar o e-mail em branco e concluir com a nova senha. A troca fica disponível em Ajustes.</p>
             </div>
           )}
           {/* Nova Senha */}

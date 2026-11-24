@@ -192,18 +192,34 @@ export async function changeUserPassword(
       String(employee.matricula).toLowerCase().replace(/^@/, '') !== matricula.trim().toLowerCase().replace(/^@/, '')) {
     return { success: false, message: 'Não é permitido alterar a senha de outra conta.' };
   }
-  if (newEmail !== undefined) {
-    const email = newEmail.trim().toLowerCase();
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      return { success: false, message: 'Informe um e-mail válido.' };
-    }
-    const { error: emailError } = await client.auth.updateUser({ email });
-    if (emailError) return { success: false, message: 'Não foi possível solicitar a troca de e-mail: ' + emailError.message };
+  if (newEmail?.trim()) {
+    const emailChange = await requestAccountEmailChange(newEmail);
+    if (!emailChange.success) return emailChange;
   }
   const { error } = await client.auth.updateUser({ password: newPassword });
   if (error) return { success: false, message: 'Não foi possível atualizar a senha no Supabase Auth.' };
   await client.from('usuarios').update({ primeiro_login: false }).eq('auth_user_id', identity.user.id);
   return { success: true, message: newEmail ? 'Senha atualizada. Confirme o novo e-mail pela mensagem recebida para concluir a substituição.' : 'Senha alterada com sucesso!' };
+}
+
+export async function requestAccountEmailChange(address: string): Promise<{ success: boolean; message: string }> {
+  if (!client || !isSupabaseConfigured()) return { success: false, message: 'Conecte-se para alterar o e-mail.' };
+  const email = address.trim().toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.endsWith('@superpwa.app')) {
+    return { success: false, message: 'Informe um e-mail pessoal válido.' };
+  }
+  const { error } = await client.auth.updateUser({ email });
+  if (!error) return { success: true, message: 'Solicitação registrada. Siga as instruções de confirmação enviadas pelo serviço de e-mail.' };
+  if (error.code === 'email_exists' || error.code === 'user_already_exists') {
+    return { success: false, message: 'Este e-mail já está associado a outra conta.' };
+  }
+  if (error.code === 'over_email_send_rate_limit') {
+    return { success: false, message: 'O limite de envio foi atingido. Aguarde para tentar novamente.' };
+  }
+  if (error.code === 'email_address_not_authorized' || error.code === 'email_address_invalid') {
+    return { success: false, message: 'O serviço de confirmação recusou um dos endereços da troca. Se você está no primeiro acesso, pode continuar apenas com a nova senha.' };
+  }
+  return { success: false, message: 'Não foi possível solicitar a confirmação do e-mail. Tente novamente mais tarde.' };
 }
 
 export function verifyUserStillActive(matricula: string, lojaId?: string): { active: boolean; companyName?: string } {
