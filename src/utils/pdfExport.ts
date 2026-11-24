@@ -23,8 +23,13 @@ function toWinAnsiBytes(text: string): number[] {
   return bytes;
 }
 
-function escapePdfLiteral(text: string): string {
-  return text.replace(/\\/g, '\\\\').replace(/\(/g, '\\(').replace(/\)/g, '\\)');
+function encodePdfLiteral(text: string): string {
+  // Octal escapes keep the content stream ASCII while preserving WinAnsi glyphs.
+  return toWinAnsiBytes(text).map(byte => {
+    if (byte === 40 || byte === 41 || byte === 92) return '\\' + String.fromCharCode(byte);
+    if (byte > 126) return '\\' + byte.toString(8).padStart(3, '0');
+    return String.fromCharCode(byte);
+  }).join('');
 }
 
 function wrapText(text: string, maxChars: number): string[] {
@@ -37,7 +42,12 @@ function wrapText(text: string, maxChars: number): string[] {
       current = current ? `${current} ${w}` : w;
     } else {
       if (current) lines.push(current);
-      current = w.length > maxChars ? w.slice(0, maxChars) : w;
+      let remainder = w;
+      while (remainder.length > maxChars) {
+        lines.push(remainder.slice(0, maxChars));
+        remainder = remainder.slice(maxChars);
+      }
+      current = remainder;
     }
   }
   if (current) lines.push(current);
@@ -157,7 +167,7 @@ export function exportAuditReportToPDF(
     if (line.text) {
       const font = line.bold ? '/F2' : '/F1';
       const x = marginLeft + (line.indent ?? 0);
-      currentOps.push(`BT ${font} ${fontSize} Tf ${x} ${y.toFixed(1)} Td (${escapePdfLiteral(line.text)}) Tj ET`);
+      currentOps.push(`BT ${font} ${fontSize} Tf ${x} ${y.toFixed(1)} Td (${encodePdfLiteral(line.text)}) Tj ET`);
     }
     y -= step;
   }
@@ -187,11 +197,12 @@ export function exportAuditReportToPDF(
   objects[pagesIdPlaceholder - 1] = `<< /Type /Pages /Kids [${pageIds.map(id => `${id} 0 R`).join(' ')}] /Count ${pageIds.length} >>`;
   const catalogId = addObj(`<< /Type /Catalog /Pages ${pagesIdPlaceholder} 0 R >>`);
 
-  // Constrói arquivo binário com offsets exatos em WinAnsi
-  const chunks: number[][] = [];
+  // Preserve os delimitadores do formato e conte os bytes usados no xref.
+  const encoder = new TextEncoder();
+  const chunks: Uint8Array[] = [];
   let offset = 0;
   const pushText = (s: string) => {
-    const b = toWinAnsiBytes(s);
+    const b = encoder.encode(s);
     chunks.push(b);
     offset += b.length;
   };
@@ -208,7 +219,7 @@ export function exportAuditReportToPDF(
   for (let i = 1; i <= objects.length; i++) {
     pushText(`${String(offsets[i]).padStart(10, '0')} 00000 n \n`);
   }
-  pushText(`trailer\n<< /Size ${objects.length + 1} /Root ${catalogId} 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`);
+  pushText(`trailer\n<< /Size ${objects.length + 1} /Root ${catalogId} 0 R >>\nstartxref\n${xrefOffset}\n%%EOF\n`);
 
   const totalLen = chunks.reduce((sum, arr) => sum + arr.length, 0);
   const pdfBytes = new Uint8Array(totalLen);
@@ -222,11 +233,12 @@ export function exportAuditReportToPDF(
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   const safeSetor = (audit.department || 'geral').replace(/[^a-zA-Z0-9_-]/g, '_');
+  const safeDate = dateLabel.replace(/[^a-zA-Z0-9_-]/g, '-');
   const safeTime = (timeLabel || '00-00-00').replace(/:/g, '-');
   link.href = url;
-  link.download = `auditoria_${safeSetor}_${dateLabel}_${safeTime}.pdf`;
+  link.download = `auditoria_${safeSetor}_${safeDate}_${safeTime}.pdf`;
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
-  setTimeout(() => URL.revokeObjectURL(url), 3000);
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }
