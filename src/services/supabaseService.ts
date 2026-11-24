@@ -179,7 +179,7 @@ export async function changeUserPassword(
   newPassword: string,
   newEmail?: string
 ): Promise<{ success: boolean; message?: string }> {
-  if (!client || !isSupabaseConfigured() || newPassword.length < 12 || newPassword.length > 128) {
+  if (!client || !isSupabaseConfigured() || newPassword === '1234567890123' || newPassword.length < 12 || newPassword.length > 128) {
     return { success: false, message: 'Conexão necessária e senha de 12 a 128 caracteres.' };
   }
   const { data: identity, error: identityError } = await client.auth.getUser();
@@ -202,7 +202,9 @@ export async function changeUserPassword(
   }
   const { error } = await client.auth.updateUser({ password: newPassword });
   if (error) return { success: false, message: 'Não foi possível atualizar a senha no Supabase Auth.' };
-  await client.from('usuarios').update({ primeiro_login: false }).eq('auth_user_id', identity.user.id);
+  const { data: updated, error: profileError } = await client.from('usuarios').update({ primeiro_login: false })
+    .eq('auth_user_id', identity.user.id).select('id').maybeSingle();
+  if (profileError || !updated) return { success: false, message: 'A senha foi atualizada, mas não foi possível concluir o primeiro acesso. Tente novamente.' };
   return { success: true, message: newEmail ? 'Senha atualizada. Confirme o novo e-mail pela mensagem recebida para concluir a substituição.' : 'Senha alterada com sucesso!' };
 }
 
