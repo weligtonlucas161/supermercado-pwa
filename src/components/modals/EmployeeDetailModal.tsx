@@ -19,7 +19,7 @@ import {
   Lock,
   Layers
 } from 'lucide-react';
-import { StoreEmployee, SETORES_DISPONIVEIS, SetorLoja } from '../../types';
+import { StoreEmployee, SETORES_DE_EQUIPE, SetorLoja } from '../../types';
 import { useApp } from '../../context/AppContext';
 import { triggerScanBeep } from '../../utils/haptics';
 import { sanitizeText, sanitizeIdentifier } from '../../utils/security';
@@ -349,7 +349,7 @@ export const EmployeeDetailModal: React.FC<EmployeeDetailModalProps> = ({
                 >
                   Todos os Setores
                 </button>
-                {SETORES_DISPONIVEIS.map(s => (
+                {SETORES_DE_EQUIPE.map(s => (
                   <button
                     key={s}
                     type="button"

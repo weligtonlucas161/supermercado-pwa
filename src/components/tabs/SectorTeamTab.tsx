@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { UserPlus, Users } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { getDbClient } from '../../services/db/client';
-import { SETORES_DISPONIVEIS, type AuthUser } from '../../types';
+import { SETORES_DE_EQUIPE, type AuthUser } from '../../types';
 import { decryptSingleField, encryptSingleField } from '../../utils/encryptionUtils';
 import { isSectorManager } from '../../utils/sectorManager';
 import { OperationsPanelHeader } from '../common/OperationsPanelHeader';
@@ -24,8 +24,8 @@ export function SectorTeamTab() {
 function SectorTeam({ user }: { user: AuthUser }) {
   const assigned = user.setor!.trim();
   const all = assigned.toUpperCase() === 'TODOS';
-  const [sector, setSector] = useState(all ? SETORES_DISPONIVEIS[0] : assigned);
-  const [sectors, setSectors] = useState<string[]>(SETORES_DISPONIVEIS);
+  const [sector, setSector] = useState(all ? SETORES_DE_EQUIPE[0] : assigned);
+  const [sectors, setSectors] = useState<string[]>(SETORES_DE_EQUIPE);
   const [name, setName] = useState('');
   const [users, setUsers] = useState<SectorEmployee[]>([]);
   const [page, setPage] = useState(0);
@@ -44,7 +44,7 @@ function SectorTeam({ user }: { user: AuthUser }) {
     if (!db) return;
     let active = true;
     void db.from('setores_loja').select('nome').eq('loja_id', user.loja_id).then(({ data }) => {
-      if (active && data) setSectors([...new Set([...SETORES_DISPONIVEIS,
+      if (active && data) setSectors([...new Set([...SETORES_DE_EQUIPE,
         ...data.map(row => String(row.nome || '').trim().toUpperCase()).filter(name => name && !['TODOS', 'GERAL'].includes(name))])]);
     });
     return () => { active = false; };

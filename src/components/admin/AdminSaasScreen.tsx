@@ -38,7 +38,7 @@ import {
   Filter
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
-import { Store, StoreEmployee, SETORES_DISPONIVEIS } from '../../types';
+import { Store, StoreEmployee, SETORES_DE_EQUIPE } from '../../types';
 import { triggerScanBeep } from '../../utils/haptics';
 import { 
   fetchSaasTelemetry, 
@@ -1810,7 +1810,7 @@ export const AdminSaasScreen: React.FC = () => {
                     onChange={e => setProfileSetor(e.target.value)}
                     className="w-full p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-bold focus:outline-none focus:ring-2 focus:ring-rose-500"
                   >
-                    {SETORES_DISPONIVEIS.map(setor => (
+                    {SETORES_DE_EQUIPE.map(setor => (
                       <option key={setor} value={setor}>
                         {setor}
                       </option>

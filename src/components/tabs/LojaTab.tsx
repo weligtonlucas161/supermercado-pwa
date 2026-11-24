@@ -24,7 +24,7 @@ import {
   Trash2
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
-import { StoreEmployee, StoreRole, SETORES_DISPONIVEIS, SetorLoja } from '../../types';
+import { StoreEmployee, StoreRole, SETORES_DE_EQUIPE, SETOR_PREVENCAO, SetorLoja } from '../../types';
 import { triggerScanBeep } from '../../utils/haptics';
 import { EmployeeDetailModal } from '../modals/EmployeeDetailModal';
 import { getDbClient } from '../../services/db/client';
@@ -511,11 +511,11 @@ export const LojaTab: React.FC = () => {
             title="Desempenho por setor"
             description="Acompanhe as avarias registradas e as rupturas atuais. A pontuação depende de histórico completo dos indicadores."
           />
-          {sectors.length === 0 ? (
+          {sectors.every(sector => sector.nome.trim().toUpperCase() === SETOR_PREVENCAO) ? (
             <p className="rounded-2xl border border-dashed border-slate-200 p-5 text-center text-xs text-slate-500 dark:border-slate-700">Nenhum setor cadastrado.</p>
           ) : (
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              {sectors.map(sector => (
+              {sectors.filter(sector => sector.nome.trim().toUpperCase() !== SETOR_PREVENCAO).map(sector => (
                 <article key={sector.id} className="min-w-0 rounded-2xl border border-slate-200 p-3.5 shadow-sm dark:border-slate-800">
                   <h4 className="flex items-center gap-2 break-words text-sm font-black text-slate-900 dark:text-white">
                     <Tag className="h-4 w-4 shrink-0 text-emerald-600" aria-hidden="true" />{sector.nome}
@@ -959,7 +959,7 @@ export const LojaTab: React.FC = () => {
                     Acesso a Todos
                   </button>
 
-                  {SETORES_DISPONIVEIS.map(setor => (
+                  {SETORES_DE_EQUIPE.map(setor => (
                     <button
                       key={setor}
                       type="button"
@@ -1102,7 +1102,7 @@ export const LojaTab: React.FC = () => {
                   className="w-full p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-bold"
                 >
                   <option value="TODOS">Todos os Setores (Geral)</option>
-                  {SETORES_DISPONIVEIS.map(s => (
+                  {SETORES_DE_EQUIPE.map(s => (
                     <option key={s} value={s}>Somente {s}</option>
                   ))}
                 </select>

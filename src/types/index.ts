@@ -15,6 +15,9 @@ export const SETORES_DISPONIVEIS: SetorLoja[] = [
   'BAZAR',
 ];
 
+export const SETOR_PREVENCAO = 'PREVENÇÃO';
+export const SETORES_DE_EQUIPE = [...SETORES_DISPONIVEIS, SETOR_PREVENCAO];
+
 export interface Product {
   id: string;
   name: string;
