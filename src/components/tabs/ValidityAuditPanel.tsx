@@ -1,3 +1,5 @@
+import { readAuditParticipation, writeAuditParticipation } from '../../services/auditParticipation';
+import { AUDIT_SESSION_MAX_INACTIVITY_MS } from '../../services/supabaseService';
 import { ValidityModalFrame } from '../modals/ValidityModalFrame';
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { Barcode, CalendarClock, Camera, Check, Play, Plus, Search, ShieldCheck, Tag } from 'lucide-react';
@@ -9,19 +11,24 @@ const field = 'w-full min-w-0 rounded-xl border border-slate-200 bg-slate-50 px-
 const primary = 'inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-2.5 text-xs font-bold text-white shadow-md shadow-emerald-600/20 transition hover:bg-emerald-700 disabled:opacity-50';
 const secondary = 'inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-xs font-bold text-slate-700 transition hover:bg-slate-50 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200';
 
-export function ValidityAuditPanel() {
+export function ValidityAuditPanel({ auditKey, hasHostedAudit }: { auditKey: string; hasHostedAudit: boolean }) {
   const { products, currentUser, operator, openScanner, setActiveTab, isScannerOpen } = useApp();
   const store = currentUser?.loja_id || '';
   const input = useRef<HTMLInputElement>(null);
   const savingRef = useRef(false);
   const [selectedSector, setSelectedSector] = useState('');
-  const [activeSector, setActiveSector] = useState('');
+  const [restored] = useState(() => {
+    const entry = readAuditParticipation(auditKey);
+    return entry?.type === 'VALIDADE' && entry.store === store ? entry : null;
+  });
+  const [activeSector, setActiveSector] = useState(restored?.sector || '');
+  const [startedMs, setStartedMs] = useState(restored?.startedAt ?? 0);
   const [selectionSector, setSelectionSector] = useState('');
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set(restored?.selected));
   const [query, setQuery] = useState('');
   const [selectionLimit, setSelectionLimit] = useState(30);
-  const [startedAt, setStartedAt] = useState('');
-  const [confirmed, setConfirmed] = useState<Set<string>>(() => new Set());
+  const startedAt = startedMs ? new Date(startedMs).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '';
+  const [confirmed, setConfirmed] = useState<Set<string>>(() => new Set(restored?.confirmed));
   const [list, setList] = useState<'pending' | 'confirmed'>('pending');
   const [visibleCount, setVisibleCount] = useState(30);
   const sectorProductCounts = new Map<string, number>();
@@ -52,8 +59,11 @@ export function ValidityAuditPanel() {
   [activeSector, products, selectedIds, store]);
   const confirmedCount = activeProducts.filter(item => confirmed.has(item.id)).length;
   const progress = activeProducts.length ? Math.round(confirmedCount / activeProducts.length * 100) : 0;
-  const visibleProducts = activeProducts.filter(item => confirmed.has(item.id) === (list === 'confirmed'));
   const [code, setCode] = useState('');
+  const searchTerm = code.trim().toLocaleLowerCase('pt-BR');
+  const visibleProducts = activeProducts.filter(item => confirmed.has(item.id) === (list === 'confirmed') &&
+    [item.name, item.ean, item.secondaryEan, item.reducedCode, item.supplierCode]
+      .some(value => value?.toLocaleLowerCase('pt-BR').includes(searchTerm)));
   const [product, setProduct] = useState<Product | null>(null);
   const [counts, setCounts] = useState<ValidityCount[] | null>(null);
   const [date, setDate] = useState('');
@@ -62,6 +72,19 @@ export function ValidityAuditPanel() {
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const previous = counts?.find(count => count.expires_on === date)?.quantity ?? 0;
+
+  useEffect(() => {
+    if (!startedMs || !activeSector) return;
+    const timer = window.setTimeout(() => {
+      const entry = readAuditParticipation(auditKey);
+      if (!entry || entry.startedAt === startedMs) writeAuditParticipation(auditKey, null);
+      setActiveSector('');
+      setProduct(null);
+      setCode('');
+      setMessage('A auditoria atingiu o limite de 5 horas.');
+    }, Math.max(0, startedMs + AUDIT_SESSION_MAX_INACTIVITY_MS - Date.now()));
+    return () => window.clearTimeout(timer);
+  }, [activeSector, auditKey, startedMs]);
 
   useEffect(() => {
     if (activeSector && !product && !isScannerOpen) input.current?.focus();
@@ -78,19 +101,19 @@ export function ValidityAuditPanel() {
     return () => { active = false; };
   }, [product, store]);
 
-  const identify = (value: string) => {
+  const identify = (value: string, selectedProduct?: Product) => {
     const normalize = (code?: string) => (code || '').replace(/[^a-z0-9]/gi, '').toUpperCase();
     const scanned = normalize(value);
-    if (!activeSector || !scanned) return;
-    const matches = activeProducts.filter(item =>
+    if (!activeSector || (!scanned && !selectedProduct)) return;
+    const matches = selectedProduct ? [selectedProduct] : activeProducts.filter(item =>
       [item.ean, item.secondaryEan, item.reducedCode].some(identifier => normalize(identifier) === scanned));
-    setCode('');
     setError('');
     setMessage('');
     if (matches.length !== 1) {
       setError(matches.length ? 'Código associado a mais de um produto. Confira o código da embalagem.' : 'Produto não está entre os selecionados para esta auditoria.');
       return;
     }
+    setCode('');
     setDate('');
     setQuantity('');
     setCounts(null);
@@ -120,7 +143,12 @@ export function ValidityAuditPanel() {
         setError('A quantidade mudou durante a conferência. Confira o novo total antes de salvar.');
         return;
       }
-      setConfirmed(current => new Set([...current, product.id]));
+      const entry = readAuditParticipation(auditKey);
+      if (entry?.type === 'VALIDADE' && entry.startedAt === startedMs) {
+        const next = [...new Set([...(entry.confirmed ?? []), product.id])];
+        writeAuditParticipation(auditKey, { ...entry, confirmed: next });
+        setConfirmed(new Set(next));
+      }
       setMessage(`Validade de ${product.name} salva.`);
       setProduct(null);
     } catch {
@@ -181,14 +209,23 @@ export function ValidityAuditPanel() {
         {results.length === 0 && <p className="text-sm text-slate-500">Nenhum produto encontrado.</p>}
         {selectionLimit < results.length && <button type="button" className={secondary}
           onClick={() => setSelectionLimit(limit => limit + 30)}>Mostrar mais</button>}
+        {error && <p role="alert" className="text-sm text-rose-700">{error}</p>}
         <div className="sticky bottom-2 z-10 flex flex-wrap justify-end gap-2 rounded-2xl border border-slate-200 bg-white p-2.5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
           <button type="button" className={secondary} onClick={() => setSelectionSector('')}>Voltar aos setores</button>
           <button type="button" className={primary} disabled={chosen.length === 0} onClick={() => {
-            setSelectedIds(new Set(chosen.map(item => item.id)));
+            if (!auditKey || readAuditParticipation(auditKey) || hasHostedAudit) {
+              setError('Você já participa de uma auditoria. Finalize a sessão ativa antes de iniciar outra.');
+              return;
+            }
+            const startedAt = Date.now();
+            const selected = chosen.map(item => item.id);
+            writeAuditParticipation(auditKey, { type: 'VALIDADE', startedAt, store, sector: selectionSector, selected, confirmed: [] });
+            setError('');
+            setSelectedIds(new Set(selected));
             setConfirmed(new Set());
             setList('pending');
             setVisibleCount(30);
-            setStartedAt(new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }));
+            setStartedMs(startedAt);
             setActiveSector(selectionSector);
             setSelectionSector('');
           }}><Play size={16} /> Iniciar Auditoria ({chosen.length})</button>
@@ -200,6 +237,7 @@ export function ValidityAuditPanel() {
   if (!activeSector) {
     return (
       <section className="space-y-5 rounded-3xl border border-slate-200 bg-white p-5 shadow-xl sm:p-6 dark:border-slate-800 dark:bg-slate-900">
+        {message && <p role="status" className="text-sm text-slate-600">{message}</p>}
         <header className="flex items-center gap-3 border-b border-slate-100 pb-3 dark:border-slate-800">
           <div className="rounded-2xl bg-amber-500/15 p-2.5 text-amber-600"><CalendarClock className="h-6 w-6" /></div>
           <div>
@@ -266,7 +304,10 @@ export function ValidityAuditPanel() {
         <div className="flex flex-wrap gap-2">
           <button type="button" className={secondary} onClick={() => input.current?.focus()}><Barcode size={14} /> Coletor pronto</button>
           <button type="button" className="inline-flex items-center gap-2 rounded-xl bg-amber-500 px-4 py-2.5 text-xs font-black text-slate-950 hover:bg-amber-600"
-            onClick={() => { setActiveSector(''); setCode(''); setMessage(''); setError(''); }}><Check size={16} /> Concluir conferência</button>
+            onClick={() => {
+              if (readAuditParticipation(auditKey)?.startedAt === startedMs) writeAuditParticipation(auditKey, null);
+              setActiveSector(''); setCode(''); setMessage(''); setError('');
+            }}><Check size={16} /> Concluir conferência</button>
         </div>
       </div>
       <dl className="grid grid-cols-3 gap-2 text-center">
@@ -290,13 +331,18 @@ export function ValidityAuditPanel() {
         </div>
       </div>
       <form className="space-y-2" onSubmit={event => { event.preventDefault(); identify(code); }}>
-        <label htmlFor="validity-scan" className="text-sm font-semibold">Código do produto</label>
+        <label htmlFor="validity-scan" className="text-sm font-semibold">Código ou nome do produto</label>
         <div className="grid grid-cols-2 gap-2 sm:flex">
-          <input id="validity-scan" ref={input} value={code} onChange={event => setCode(event.target.value)}
-            onKeyDown={event => { if (event.key === 'Tab' && code) { event.preventDefault(); identify(code); } }}
-            inputMode="none" autoComplete="off" placeholder="Bipe com o coletor (Enter ou Tab)" className={field + ' col-span-2 sm:flex-1'} />
+          <input id="validity-scan" ref={input} value={code} onChange={event => { setCode(event.target.value); setVisibleCount(30); }}
+            onKeyDown={event => {
+              if (event.key !== 'Tab' || event.shiftKey || !code.trim()) return;
+              if (!activeProducts.some(item => [item.ean, item.secondaryEan, item.reducedCode].some(value => value?.toUpperCase() === code.trim().toUpperCase()))) return;
+              event.preventDefault();
+              identify(code);
+            }}
+            autoComplete="off" placeholder="Bipe ou pesquise por nome ou código" className={field + ' col-span-2 sm:flex-1'} />
           <button type="submit" className={primary}><Barcode size={16} /> Identificar</button>
-          <button type="button" onClick={() => openScanner(identify, { cameraOnly: true })}
+          <button type="button" onClick={() => openScanner(value => identify(value), { cameraOnly: true })}
             className={secondary}><Camera size={16} /> Câmera</button>
         </div>
       </form>
@@ -312,11 +358,14 @@ export function ValidityAuditPanel() {
           <ul className="space-y-1.5">
             {visibleProducts.slice(0, visibleCount).map(item => (
               <li key={item.id} className="flex flex-wrap justify-between gap-2 rounded-xl border border-slate-200 px-3 py-2 text-xs dark:border-slate-700">
-                <span className="font-bold">{item.name}</span><span className="font-mono text-slate-500">{item.ean}</span>
+                <button type="button" className="flex w-full flex-wrap justify-between gap-2 text-left"
+                  onClick={() => identify(item.ean, item)}>
+                  <span className="font-bold">{item.name}</span><span className="font-mono text-slate-500">{item.ean}</span>
+                </button>
               </li>
             ))}
           </ul>
-        ) : <p className="text-xs text-slate-500">{list === 'pending' ? 'Todos os produtos selecionados foram conferidos.' : 'Nenhum produto conferido nesta auditoria.'}</p>}
+        ) : <p className="text-xs text-slate-500">{searchTerm ? 'Nenhum produto encontrado nesta lista.' : list === 'pending' ? 'Todos os produtos selecionados foram conferidos.' : 'Nenhum produto conferido nesta auditoria.'}</p>}
         {visibleCount < visibleProducts.length && <button type="button" className={secondary} onClick={() => setVisibleCount(count => count + 30)}>Mostrar mais</button>}
       </div>
       {product && (

@@ -1,3 +1,4 @@
+import { readAuditParticipation, writeAuditParticipation } from '../../services/auditParticipation';
 import { OperationsPanelHeader } from '../common/OperationsPanelHeader';
 import { ValidityAuditPanel } from './ValidityAuditPanel';
 import { fetchAuditReportsFromDatabase } from '../../services/supabaseService';
@@ -127,6 +128,7 @@ export const AuditoriaTab: React.FC = () => {
   // ESTADOS DA SESSÃO ATIVA (PRESENÇA E INVENTÁRIO CEGO)
   // =========================================================================
   const [selectedSetor, setSelectedSetor] = useState<SetorLoja>('MERCEARIA');
+  const auditKey = currentUser?.id ? `superpwa:audit:${currentUser.id}` : '';
   const [isAuditing, setIsAuditing] = useState(false);
   const [sessionTipo, setSessionTipo] = useState<'PRESENCA' | 'INVENTARIO'>('PRESENCA');
   const sessionTipoRef = useRef<'PRESENCA' | 'INVENTARIO'>('PRESENCA');
@@ -437,6 +439,7 @@ export const AuditoriaTab: React.FC = () => {
   // Encerramento automático quando o anfitrião finaliza a sessão
   const handleRemoteSessionClosed = useCallback(
     (closedSessionId: string, closedByName?: string) => {
+      if (readAuditParticipation(auditKey)?.sessionId === closedSessionId) writeAuditParticipation(auditKey, null);
       if (!currentSessionIdRef.current || closedSessionId !== currentSessionIdRef.current) return;
       stopScanningRef.current();
       setPendingInventoryCountItem(null);
@@ -460,7 +463,7 @@ export const AuditoriaTab: React.FC = () => {
       });
       setActiveInterface('relatorio');
     },
-    [refreshRemoteSessions, refreshAuditsFromDatabase, setIsInventoryLocked]
+    [auditKey, refreshRemoteSessions, refreshAuditsFromDatabase, setIsInventoryLocked]
   );
 
   // Assinatura em Tempo Real (Supabase Realtime Channel com push instantâneo)
@@ -966,6 +969,10 @@ export const AuditoriaTab: React.FC = () => {
   // AÇÕES DA AUDITORIA (PRESENÇA E INVENTÁRIO CEGO) COM TEMPO REAL
   // =========================================================================
   const handleStartAuditSession = (tipo: 'PRESENCA' | 'INVENTARIO' = 'PRESENCA') => {
+    if (readAuditParticipation(auditKey) || activeRemoteSessions.some(session => session.iniciada_por_matricula === myMatricula)) {
+      setLastBipFeedback({ type: 'warning', message: 'Retome e finalize sua auditoria ativa antes de iniciar outra.' });
+      return;
+    }
     const isManager = operator.role === 'gerente' || operator.role === 'saas_admin' || operator.role === 'adm';
     if (!isManager && operator.setor_restrito && operator.setor_restrito !== 'TODOS') {
       if (operator.setor_restrito.toUpperCase() !== selectedSetor.toUpperCase()) {
@@ -992,6 +999,8 @@ export const AuditoriaTab: React.FC = () => {
     }
 
     const nowMs = Date.now();
+    const participation = { type: tipo, startedAt: nowMs, store: operator.loja_id || '', sector: selectedSetor };
+    writeAuditParticipation(auditKey, participation);
     const startTimeFormatted = new Date(nowMs).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
 
     const creatorName = operator.name || 'Operador';
@@ -1028,6 +1037,9 @@ export const AuditoriaTab: React.FC = () => {
       matricula: operator.code || operator.matricula || '',
     }).then(result => {
       if (result.session?.id) {
+        if (readAuditParticipation(auditKey)?.startedAt === nowMs) {
+          writeAuditParticipation(auditKey, { ...participation, sessionId: result.session.id });
+        }
         setCurrentSessionId(result.session.id);
         currentSessionIdRef.current = result.session.id;
         refreshRemoteSessions();
@@ -1039,6 +1051,12 @@ export const AuditoriaTab: React.FC = () => {
 
   // Entrar em sessão já iniciada por outro operador do mesmo setor
   const handleJoinActiveSession = async (sess: DbActiveAuditSession) => {
+    const active = readAuditParticipation(auditKey);
+    if ((active && (active.type === 'VALIDADE' || active.sessionId !== sess.id)) ||
+        activeRemoteSessions.some(session => session.id !== sess.id && session.iniciada_por_matricula === myMatricula)) {
+      setLastBipFeedback({ type: 'warning', message: 'Você já participa de outra auditoria. Retome a sessão ativa.' });
+      return;
+    }
     const isManager = operator.role === 'gerente' || operator.role === 'saas_admin' || operator.role === 'adm';
     if (!isManager && operator.setor_restrito && operator.setor_restrito !== 'TODOS') {
       if (operator.setor_restrito.toUpperCase() !== sess.setor.toUpperCase()) {
@@ -1060,6 +1078,7 @@ export const AuditoriaTab: React.FC = () => {
     setSessionTipo(sessTipo);
     sessionTipoRef.current = sessTipo;
     setActiveInterface(sessTipo === 'INVENTARIO' ? 'inventario' : 'presenca');
+    writeAuditParticipation(auditKey, { type: sessTipo, startedAt: sess.timestamp, store: operator.loja_id || '', sector: sess.setor, sessionId: sess.id });
     setCurrentSessionId(sess.id);
     currentSessionIdRef.current = sess.id;
     setSessionSetor(sess.setor as SetorLoja);
@@ -1306,6 +1325,7 @@ export const AuditoriaTab: React.FC = () => {
     });
 
     setCurrentSessionId(null);
+    if (readAuditParticipation(auditKey)?.type !== 'VALIDADE') writeAuditParticipation(auditKey, null);
     currentSessionIdRef.current = null;
     setIsAuditing(false);
     setIsInventoryLocked(false);
@@ -1750,9 +1770,6 @@ export const AuditoriaTab: React.FC = () => {
         >
           <CalendarClock className="w-5 h-5" />
           <span>Auditoria de Validade</span>
-          <span className="text-[9px] font-black px-1.5 py-0.2 rounded-md bg-amber-400 text-slate-900 border border-amber-600/30 uppercase">
-            Em Breve
-          </span>
         </button>
 
         {/* 4. Relatório de Auditorias */}
@@ -2754,7 +2771,10 @@ export const AuditoriaTab: React.FC = () => {
       )}
 
       {/* =================================================================== */}
-      {activeInterface === 'validade' && <ValidityAuditPanel key={JSON.stringify([currentUser?.id, currentUser?.loja_id, operator.setor_restrito, operator.role])} />}
+      {activeInterface === 'inventario' && !isSessionActive && lastBipFeedback?.type === 'warning' && (
+        <p role="status" className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">{lastBipFeedback.message}</p>
+      )}
+      {activeInterface === 'validade' && <ValidityAuditPanel auditKey={auditKey} hasHostedAudit={activeRemoteSessions.some(session => session.iniciada_por_matricula === myMatricula)} key={JSON.stringify([currentUser?.id, currentUser?.loja_id, operator.setor_restrito, operator.role])} />}
 
       {/* =================================================================== */}
       {/* INTERFACE 4: RELATÓRIO DE AUDITORIAS                                */}
