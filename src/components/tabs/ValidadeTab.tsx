@@ -1,13 +1,50 @@
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Search, Plus, Calendar, Tag, Check, Filter } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
+import { formatValidityDate, readValidityCounts, type ValidityCount } from '../../services/validityAudit';
 import { NewValidityModal } from '../modals/NewValidityModal';
 
 export const ValidadeTab: React.FC = () => {
-  const { validities, darkMode, applyDiscount, storeColor } = useApp();
+  const { validities, darkMode, applyDiscount, storeColor, products, currentUser } = useApp();
   const [searchTerm, setSearchTerm] = useState('');
   const [filter, setFilter] = useState<'all' | 'urgent' | 'warning' | 'ok'>('all');
   const [isModalOpen, setIsModalOpen] = useState(false);
+
+  const store = currentUser?.loja_id || '';
+  const auditScope = JSON.stringify([store, currentUser?.id, currentUser?.setor, currentUser?.cargo]);
+  const [auditResults, setAuditResults] = useState<{ scope: string; rows: ValidityCount[]; error?: boolean } | null>(null);
+  useEffect(() => {
+    if (!store) return;
+    let active = true;
+    readValidityCounts(store).then(rows => {
+      if (active) setAuditResults({ scope: auditScope, rows });
+    }).catch(() => {
+      if (active) setAuditResults({ scope: auditScope, rows: [], error: true });
+    });
+    return () => { active = false; };
+  }, [store, auditScope]);
+
+  const auditCards = useMemo(() => {
+    if (!auditResults || auditResults.scope !== auditScope) return [];
+    const grouped = new Map<string, ValidityCount[]>();
+    for (const count of auditResults.rows) {
+      const rows = grouped.get(count.product_id);
+      if (rows) rows.push(count);
+      else grouped.set(count.product_id, [count]);
+    }
+    const today = new Date();
+    const todayUtc = Date.UTC(today.getFullYear(), today.getMonth(), today.getDate());
+    return products.flatMap(product => {
+      const rows = product.loja_id === store ? grouped.get(product.id) : undefined;
+      if (!rows?.length) return [];
+      const days = (Date.parse(rows[0].expires_on) - todayUtc) / 86400000;
+      const status = days < 5 ? 'urgent' : days < 15 ? 'warning' : 'ok';
+      const term = searchTerm.trim().toLowerCase();
+      if ((filter !== 'all' && filter !== status) ||
+          ![product.name, product.ean, product.reducedCode ?? ''].some(value => value.toLowerCase().includes(term))) return [];
+      return [{ product, rows, days, total: rows.reduce((sum, row) => sum + row.quantity, 0) }];
+    }).sort((a, b) => a.days - b.days);
+  }, [auditResults, auditScope, store, products, filter, searchTerm]);
 
   const filtered = validities.filter(item => {
     const matchesSearch =
@@ -51,7 +88,7 @@ export const ValidadeTab: React.FC = () => {
           <Search className="w-4 h-4 absolute left-3 top-3 text-slate-400" />
           <input
             type="text"
-            placeholder="Buscar por produto ou lote..."
+            placeholder="Buscar por produto, código ou lote..."
             value={searchTerm}
             onChange={e => setSearchTerm(e.target.value)}
             className={`w-full pl-9 pr-4 py-2.5 rounded-2xl text-xs border focus:outline-none focus:ring-2 focus:ring-emerald-500 transition ${
@@ -71,7 +108,7 @@ export const ValidadeTab: React.FC = () => {
                 : 'bg-white dark:bg-slate-900 border-slate-200 text-slate-700'
             }`}
           >
-            <option value="all">Todos os Status ({validities.length})</option>
+            <option value="all">Todos os status</option>
             <option value="urgent">Urgentes (&lt; 5 dias)</option>
             <option value="warning">Atenção (&lt; 15 dias)</option>
             <option value="ok">Regulares (&gt; 15 dias)</option>
@@ -81,7 +118,26 @@ export const ValidadeTab: React.FC = () => {
 
       {/* Lista de Validades */}
       <div className="space-y-2.5">
-        {filtered.length === 0 ? (
+        {store && auditResults?.scope !== auditScope && <p role="status" className="text-sm text-slate-500">Carregando validades conferidas…</p>}
+        {store && auditResults?.scope === auditScope && auditResults.error && <p role="alert" className="text-sm text-rose-700">Não foi possível consultar as validades conferidas.</p>}
+        {auditCards.map(({ product, rows, days, total }) => (
+          <details key={product.id} className="rounded-2xl border border-slate-200 bg-white p-3.5">
+            <summary className="cursor-pointer text-sm font-bold text-slate-900">
+              {product.name}
+              <span className="ml-2 text-xs font-normal text-slate-600">{total} unidades conferidas · {rows.length} {rows.length === 1 ? 'validade' : 'validades'}</span>
+              <p className={`mt-1 text-xs ${days < 5 ? 'text-rose-700' : days < 15 ? 'text-amber-800' : 'text-slate-600'}`}>
+                {days < 0 ? 'Validade vencida' : 'Validade mais próxima'} {formatValidityDate(rows[0].expires_on)}
+              </p>
+            </summary>
+            <table className="mt-3 w-full border-t border-slate-200 text-left text-xs">
+              <thead><tr><th className="py-2" scope="col">Validade</th><th className="py-2" scope="col">Unidades conferidas</th></tr></thead>
+              <tbody>
+                {rows.map(row => <tr key={row.expires_on}><td className="py-1">{formatValidityDate(row.expires_on)}</td><td className="py-1">{row.quantity}</td></tr>)}
+              </tbody>
+            </table>
+          </details>
+        ))}
+        {filtered.length === 0 && auditCards.length === 0 && (!store || (auditResults?.scope === auditScope && !auditResults.error)) ? (
           <div className="text-center py-12 rounded-3xl border border-dashed border-slate-200 dark:border-slate-800">
             <Calendar className="w-8 h-8 text-slate-400 mx-auto mb-2" />
             <p className="text-xs font-bold text-slate-600 dark:text-slate-300">Nenhum lote encontrado</p>
