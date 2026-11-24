@@ -22,6 +22,7 @@ const ValidadeTab = lazy(() => import('./components/tabs/ValidadeTab').then(modu
 const EstoqueTab = lazy(() => import('./components/tabs/EstoqueTab').then(module => ({ default: module.EstoqueTab })));
 const AuditoriaTab = lazy(() => import('./components/tabs/AuditoriaTab').then(module => ({ default: module.AuditoriaTab })));
 const LojaTab = lazy(() => import('./components/tabs/LojaTab').then(module => ({ default: module.LojaTab })));
+const SectorTeamTab = lazy(() => import('./components/tabs/SectorTeamTab').then(module => ({ default: module.SectorTeamTab })));
 const ConfiguracoesTab = lazy(() => import('./components/tabs/ConfiguracoesTab').then(module => ({ default: module.ConfiguracoesTab })));
 
 const screenLoading = <p role="status" className="p-6 text-center text-sm">Carregando tela…</p>;
@@ -162,6 +163,7 @@ function AppContent() {
           {activeTab === 'validade' && <ValidadeTab />}
           {activeTab === 'estoque' && <EstoqueTab key={JSON.stringify([currentUser?.id, currentUser?.loja_id, currentUser?.cargo, currentUser?.setor, currentUser?.codigo_fornecedor, operator.loja_id])} />}
           {activeTab === 'auditoria' && <AuditoriaTab />}
+          {activeTab === 'equipe' && <SectorTeamTab />}
           {activeTab === 'loja' && <LojaTab />}
           {activeTab === 'configuracoes' && <ConfiguracoesTab />}
         </Suspense>

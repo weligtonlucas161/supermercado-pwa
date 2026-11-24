@@ -2,7 +2,7 @@ export type UrgencyStatus = 'urgent' | 'warning' | 'ok';
 
 export type AuditStatus = 'Concluída' | 'Em Andamento' | 'Pendente';
 
-export type TabId = 'inicio' | 'validade' | 'estoque' | 'auditoria' | 'loja' | 'configuracoes';
+export type TabId = 'inicio' | 'validade' | 'estoque' | 'auditoria' | 'equipe' | 'loja' | 'configuracoes';
 
 export type SetorLoja = 'FRIOS' | 'AÇOUGUE' | 'PEIXARIA' | 'MERCEARIA' | 'PADARIA' | 'BAZAR';
 

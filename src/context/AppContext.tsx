@@ -191,7 +191,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [activeTab, setActiveTabState] = useState<TabId>(() => {
     if (typeof window !== 'undefined') {
       const saved = localStorage.getItem(STORAGE_KEYS.ACTIVE_TAB) as TabId;
-      if (saved && ['inicio', 'validade', 'estoque', 'auditoria', 'loja', 'configuracoes'].includes(saved)) {
+      if (saved && ['inicio', 'validade', 'estoque', 'auditoria', 'equipe', 'loja', 'configuracoes'].includes(saved)) {
         return saved;
       }
     }

@@ -1,5 +1,6 @@
+import { isSectorManager } from '../../utils/sectorManager';
 import React, { useState } from 'react';
-import { Home, Calendar, Package, ClipboardCheck, Settings, Building2 } from 'lucide-react';
+import { Home, Calendar, Package, ClipboardCheck, Settings, Building2, Users } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { TabId } from '../../types';
 
@@ -120,6 +121,10 @@ export const BottomNav: React.FC = () => {
             zoomed={touchedTab === 'loja'}
             onClick={() => setActiveTab('loja')}
           />
+        )}
+        {isSectorManager(currentUser) && (
+          <NavItem tabId="equipe" icon={<Users className="w-5 h-5" />} label="Equipe"
+            active={activeTab === 'equipe'} zoomed={touchedTab === 'equipe'} onClick={() => setActiveTab('equipe')} />
         )}
         <NavItem
           tabId="configuracoes"
