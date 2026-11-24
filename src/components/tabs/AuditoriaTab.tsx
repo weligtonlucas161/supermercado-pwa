@@ -1,3 +1,4 @@
+import { AuditTutorial, type AuditInterface } from './AuditTutorial';
 import { readAuditParticipation, writeAuditParticipation } from '../../services/auditParticipation';
 import { OperationsPanelHeader } from '../common/OperationsPanelHeader';
 import { ValidityAuditPanel } from './ValidityAuditPanel';
@@ -65,7 +66,7 @@ import {
   DbAuditBip,
 } from '../../services/supabaseService';
 
-type AuditoriaInterface = 'presenca' | 'inventario' | 'validade' | 'relatorio';
+type AuditoriaInterface = AuditInterface;
 
 interface ConfirmedProductItem {
   id: string;
@@ -1795,6 +1796,8 @@ export const AuditoriaTab: React.FC = () => {
       {/* =================================================================== */}
       {/* INTERFACE 1: AUDITORIA DE PRESENÇA (CONFIGURAÇÃO)                   */}
       {/* =================================================================== */}
+      <AuditTutorial key={activeInterface} mode={activeInterface} />
+
       {activeInterface === 'presenca' && (!isAuditing || sessionTipo !== 'PRESENCA') && (
         <div className="space-y-4">
               {/* SESSÕES ATIVAS EM TEMPO REAL DE PRESENÇA */}
