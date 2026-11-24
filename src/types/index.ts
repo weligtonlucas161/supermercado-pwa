@@ -189,13 +189,16 @@ export interface AuditItem {
   pendingItems?: number;
   presenceRate?: string;
   startedBy?: string;
+  startedByRegistration?: string;
+  closedByTimeout?: boolean;
   participants?: string[];
   startedAtMs?: number;
   finishedAtMs?: number;
   durationLabel?: string;
   cameraScansCount?: number;
   manualScansCount?: number;
-  confirmedList?: Array<{ 
+  confirmedList?: Array<{
+    productId?: string; 
     name: string; 
     ean: string; 
     scannedAt: string; 
@@ -207,7 +210,8 @@ export interface AuditItem {
     systemQuantity?: number;
     divergence?: number;
   }>;
-  pendingList?: Array<{ 
+  pendingList?: Array<{
+    productId?: string; 
     name: string; 
     ean: string;
     reducedCode?: string;

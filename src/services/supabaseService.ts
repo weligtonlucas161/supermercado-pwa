@@ -1974,6 +1974,7 @@ export interface DbActiveAuditSession {
   iniciada_por_nome: string;
   iniciada_por_matricula: string;
   status: 'ATIVA' | 'PAUSADA' | 'CONCLUIDA';
+  retomada?: boolean;
   data_auditoria?: string;
   hora_auditoria?: string;
   chave_auditoria?: string;
@@ -2098,6 +2099,14 @@ export async function checkAuditSessionStatus(
 /**
  * Inicia uma nova sessão de auditoria com chave composta (loja + setor + data + hora)
  */
+export async function resumeAuditReport(sessionId: string, storeId: string): Promise<DbActiveAuditSession> {
+  if (!client || !isSupabaseConfigured()) throw new Error('Conecte-se para continuar a auditoria.');
+  const { data, error } = await client.rpc('resume_audit_report', { p_session: sessionId, p_store: storeId });
+  if (error || !data) throw new Error('Não foi possível retomar. Verifique se a auditoria já está ativa e se você possui acesso.');
+  const session = data as DbActiveAuditSession;
+  return { ...session, iniciada_por_nome: decryptSingleField(session.iniciada_por_nome) };
+}
+
 export async function startAuditSessionInDatabase(data: {
   lojaId: string;
   setor: string;
@@ -2364,7 +2373,7 @@ export async function finalizeAuditSessionInDatabase(data: {
       }
 
       // 2. Grava na tabela auditorias_finalizadas (fonte única de verdade — sem armazenamento local)
-      await client.from('auditorias_finalizadas').upsert({
+      const { error: reportError } = await client.from('auditorias_finalizadas').upsert({
         id: sanitizeIdentifier(data.sessaoId, 128),
         loja_id: sanitizeIdentifier(data.lojaId, 64),
         setor: sanitizeText(data.setor, 64),
@@ -2385,7 +2394,10 @@ export async function finalizeAuditSessionInDatabase(data: {
         duracao_label: data.durationLabel ? sanitizeText(data.durationLabel, 64) : null,
         camera_scans_count: validatePositiveInt(data.cameraScansCount ?? data.confirmedItems.length, 0),
         status: 'CONCLUIDA',
+        encerrada_por_tempo: false,
       });
+
+      if (reportError) throw reportError;
 
       // 3. Grava itens individuais em auditoria_produtos com isolamento direto por loja_id + chave composta
       const cleanSessaoId = sanitizeIdentifier(data.sessaoId, 128);
@@ -2454,7 +2466,12 @@ export async function finalizeAuditSessionInDatabase(data: {
       ];
 
       if (produtosPayload.length > 0) {
-        await client.from('auditoria_produtos').upsert(produtosPayload);
+        const { error: itemsError } = await client.from('auditoria_produtos').upsert(produtosPayload);
+        if (itemsError) throw itemsError;
+        const { error: cleanupError } = await client.from('auditoria_produtos').delete()
+          .eq('sessao_id', cleanSessaoId).eq('loja_id', cleanLojaId)
+          .neq('chave_auditoria', chaveAuditoria);
+        if (cleanupError) throw cleanupError;
       }
     } catch (err) {
       console.warn('Erro ao finalizar auditoria no Supabase:', err);
@@ -2580,7 +2597,7 @@ export async function fetchAuditReportsFromDatabase(
     // Projeção explícita: somente as colunas realmente consumidas.
     let query = client
       .from('auditorias_finalizadas')
-      .select('id, loja_id, setor, tipo, data_auditoria, hora_auditoria, iniciada_em, finalizada_em, chave_auditoria, total_esperado, total_auditado, total_divergentes, iniciada_por_nome, iniciada_por_matricula, finalizada_por_nome, finalizada_por_matricula, participantes, duracao_label, camera_scans_count')
+      .select('id, loja_id, setor, tipo, data_auditoria, hora_auditoria, iniciada_em, finalizada_em, chave_auditoria, total_esperado, total_auditado, total_divergentes, iniciada_por_nome, iniciada_por_matricula, finalizada_por_nome, finalizada_por_matricula, participantes, duracao_label, camera_scans_count, encerrada_por_tempo')
       .eq('loja_id', cleanLojaId)
       .order('data_auditoria', { ascending: false })
       .order('hora_auditoria', { ascending: false })
@@ -2617,7 +2634,7 @@ export async function fetchAuditReportsFromDatabase(
       for (;;) {
         options.signal?.throwIfAborted();
         let details = client.from('auditoria_produtos')
-          .select('id, sessao_id, status_presenca, nome, codigo_barras, plu, auditado_em, operador_nome, quantidade_fisica, quantidade_sistema, divergencia')
+          .select('id, sessao_id, produto_id, status_presenca, nome, codigo_barras, plu, auditado_em, operador_nome, quantidade_fisica, quantidade_sistema, divergencia')
           .eq('loja_id', cleanLojaId).in('sessao_id', detailIds)
           .order('id', { ascending: true }).limit(pageSize);
         if (cursor !== undefined) details = details.gt('id', cursor);
@@ -2644,6 +2661,7 @@ export async function fetchAuditReportsFromDatabase(
       const confirmedList = items
         .filter(it => String(it.status_presenca) === 'CONFIRMADO')
         .map(it => ({
+          productId: String(it.produto_id || ''),
           name: decryptSingleField(String(it.nome || '')),
           ean: sanitizeBarcode(decryptSingleField(String(it.codigo_barras || ''))),
           reducedCode: it.plu ? decryptSingleField(String(it.plu)) : undefined,
@@ -2660,6 +2678,7 @@ export async function fetchAuditReportsFromDatabase(
       const pendingList = items
         .filter(it => String(it.status_presenca) !== 'CONFIRMADO')
         .map(it => ({
+          productId: String(it.produto_id || ''),
           name: decryptSingleField(String(it.nome || '')),
           ean: sanitizeBarcode(decryptSingleField(String(it.codigo_barras || ''))),
           reducedCode: it.plu ? decryptSingleField(String(it.plu)) : undefined,
@@ -2701,6 +2720,8 @@ export async function fetchAuditReportsFromDatabase(
         confirmedItems: totalAuditado,
         pendingItems: totalDivergentes,
         presenceRate: rate,
+        startedByRegistration: String(row.iniciada_por_matricula || ''),
+        closedByTimeout: row.encerrada_por_tempo === true,
         startedBy: row.iniciada_por_matricula
           ? `${decIniciadaPor} (${row.iniciada_por_matricula})`
           : decIniciadaPor,

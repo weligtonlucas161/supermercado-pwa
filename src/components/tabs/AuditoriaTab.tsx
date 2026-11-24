@@ -52,6 +52,7 @@ import { useBarcodeDetector } from '../../hooks/useBarcodeDetector';
 import {
   fetchActiveAuditSessions,
   startAuditSessionInDatabase,
+  resumeAuditReport,
   fetchSessionBipsFromDatabase,
   insertAuditBipInDatabase,
   finalizeAuditSessionInDatabase,
@@ -93,6 +94,7 @@ function formatAuditDuration(ms: number): string {
 export const AuditoriaTab: React.FC = () => {
   const {
     products,
+    effectiveOnline,
     audits,
     addAudit,
     updateAudit,
@@ -280,6 +282,7 @@ export const AuditoriaTab: React.FC = () => {
   const [loadingAuditId, setLoadingAuditId] = useState<string | null>(null);
   useEffect(() => () => detailRequest.current?.abort(), [operator.loja_id, currentUser?.id]);
 
+  const [resumingAudit, setResumingAudit] = useState(false);
   const [modalActiveTab, setModalActiveTab] = useState<'bipados' | 'nao_bipados' | 'rupturas'>('bipados');
   const [modalFeedback, setModalFeedback] = useState<string | null>(null);
 
@@ -1052,7 +1055,7 @@ export const AuditoriaTab: React.FC = () => {
   };
 
   // Entrar em sessão já iniciada por outro operador do mesmo setor
-  const handleJoinActiveSession = async (sess: DbActiveAuditSession) => {
+  const handleJoinActiveSession = async (sess: DbActiveAuditSession, snapshot?: AuditItem) => {
     const active = readAuditParticipation(auditKey);
     if ((active && (active.type === 'VALIDADE' || active.sessionId !== sess.id)) ||
         activeRemoteSessions.some(session => session.id !== sess.id && session.iniciada_por_matricula === myMatricula)) {
@@ -1073,9 +1076,25 @@ export const AuditoriaTab: React.FC = () => {
     }
 
     const sessTipo: 'PRESENCA' | 'INVENTARIO' = sess.tipo === 'INVENTARIO' ? 'INVENTARIO' : 'PRESENCA';
-    const sectorProducts = products.filter(
-      p => p.category?.toUpperCase() === sess.setor.toUpperCase()
-    );
+    if (sess.retomada && !snapshot) {
+      const reports = await fetchAuditReportsFromDatabase(sess.loja_id, {
+        auditId: sess.id, isManager, userSector: operator.setor_restrito,
+      });
+      snapshot = reports?.[0];
+      if (!snapshot?.confirmedList || !snapshot.pendingList) {
+        setLastBipFeedback({ type: 'warning', message: 'Não foi possível carregar os itens salvos para retomar a auditoria.' });
+        return;
+      }
+    }
+    const catalog = products.filter(p => p.category?.toUpperCase() === sess.setor.toUpperCase());
+    const byCode = new Map(catalog.map(item => [item.ean, item]));
+    const sectorProducts = snapshot?.pendingList ? snapshot.pendingList.map(item => ({
+      ...byCode.get(item.ean),
+      id: item.productId || byCode.get(item.ean)?.id || item.ean,
+      name: item.name, ean: item.ean, reducedCode: item.reducedCode,
+      category: sess.setor, loja_id: sess.loja_id, stock: item.systemQuantity ?? item.stock ?? 0,
+      minStock: byCode.get(item.ean)?.minStock ?? 5, price: byCode.get(item.ean)?.price ?? 0,
+    })) : catalog;
 
     setSessionTipo(sessTipo);
     sessionTipoRef.current = sessTipo;
@@ -1107,7 +1126,9 @@ export const AuditoriaTab: React.FC = () => {
         if (b.operador_nome) initialParticipants.add(b.operador_nome);
       });
 
-      const initConfirmed: ConfirmedProductItem[] = [];
+      const initConfirmed: ConfirmedProductItem[] = (snapshot?.confirmedList ?? []).map(item => ({
+        ...item, id: item.productId || byCode.get(item.ean)?.id || item.ean,
+      }));
       const initPendentes: Product[] = [];
 
       sectorProducts.forEach(prod => {
@@ -1155,6 +1176,25 @@ export const AuditoriaTab: React.FC = () => {
       nome: operator.name || 'Operador',
       matricula: operator.code || operator.matricula || '',
     }).catch(() => {});
+  };
+
+  const continueReport = async (report: AuditItem) => {
+    if (resumingAudit) return;
+    if (readAuditParticipation(auditKey) || isAuditing) {
+      setModalFeedback('Finalize sua auditoria ativa antes de retomar outra.');
+      return;
+    }
+    setResumingAudit(true);
+    setModalFeedback(null);
+    try {
+      const session = await resumeAuditReport(report.id, operator.loja_id || '');
+      await handleJoinActiveSession(session, report);
+      setSelectedAuditForModal(null);
+    } catch (error) {
+      setModalFeedback(error instanceof Error ? error.message : 'Não foi possível continuar a auditoria.');
+    } finally {
+      setResumingAudit(false);
+    }
   };
 
   // Dispara a câmera em tela cheia exclusivamente via leitor óptico (sem entrada manual)
@@ -1347,8 +1387,10 @@ export const AuditoriaTab: React.FC = () => {
     if (!isAuditing) return;
     const checkExpiry = () => {
       if (Date.now() - sessionStartTimeMs >= AUDIT_SESSION_MAX_INACTIVITY_MS) {
-        if (isSessionCreator) {
-          handleFinishAndSaveAudit(true);
+        if (currentSessionIdRef.current && effectiveOnline) {
+          void refreshRemoteSessions();
+        } else if (isSessionCreator) {
+          void handleFinishAndSaveAudit(true);
         } else {
           stopScanning();
           setIsAuditing(false);
@@ -1364,7 +1406,7 @@ export const AuditoriaTab: React.FC = () => {
     };
     const timer = setInterval(checkExpiry, 30000);
     return () => clearInterval(timer);
-  }, [isAuditing, sessionStartTimeMs, isSessionCreator]);
+  }, [isAuditing, sessionStartTimeMs, isSessionCreator, effectiveOnline, refreshRemoteSessions]);
 
   const loadAuditDetails = async (audit: AuditItem): Promise<AuditItem | null> => {
     detailRequest.current?.abort();
@@ -2956,6 +2998,16 @@ export const AuditoriaTab: React.FC = () => {
               </button>
             </div>
 
+            {selectedAuditForModal.closedByTimeout && (
+              <p className="rounded-xl bg-amber-50 px-3 py-2 text-xs font-bold text-amber-800">Encerrada por tempo</p>
+            )}
+            {(selectedAuditForModal.pendingList?.length ?? 0) > 0 &&
+              (isManagerUser || selectedAuditForModal.startedByRegistration === myMatricula) && (
+              <button type="button" disabled={resumingAudit} onClick={() => void continueReport(selectedAuditForModal)}
+                className="self-start rounded-xl bg-emerald-700 px-4 py-2 text-xs font-bold text-white disabled:opacity-50">
+                {resumingAudit ? 'Retomando…' : 'Continuar auditoria'}
+              </button>
+            )}
             <div className="grid grid-cols-3 gap-2 text-center text-xs">
               <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
                 <span className="text-[10px] text-slate-400 block uppercase font-bold">Total</span>
