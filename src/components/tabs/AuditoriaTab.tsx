@@ -2754,7 +2754,7 @@ export const AuditoriaTab: React.FC = () => {
       )}
 
       {/* =================================================================== */}
-      {activeInterface === 'validade' && <ValidityAuditPanel key={currentUser?.loja_id} />}
+      {activeInterface === 'validade' && <ValidityAuditPanel key={JSON.stringify([currentUser?.id, currentUser?.loja_id, operator.setor_restrito, operator.role])} />}
 
       {/* =================================================================== */}
       {/* INTERFACE 4: RELATÓRIO DE AUDITORIAS                                */}
