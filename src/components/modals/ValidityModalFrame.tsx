@@ -5,7 +5,7 @@ export function ValidityModalFrame({ title, description, onClose, busy, children
   title: string; description: string; onClose: () => void; busy?: boolean; children: ReactNode;
 }) {
   return (
-    <div className="fixed inset-0 z-[60] grid place-items-center overflow-y-auto bg-black/60 backdrop-blur-xs p-4 animate-in fade-in">
+    <div className="fixed inset-0 z-50 grid place-items-center overflow-y-auto bg-black/60 backdrop-blur-xs p-4 animate-in fade-in">
       <div role="dialog" aria-modal="true" aria-label={title} className="w-full max-w-md bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-5 shadow-2xl">
         <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
           <div className="flex items-center gap-2">
