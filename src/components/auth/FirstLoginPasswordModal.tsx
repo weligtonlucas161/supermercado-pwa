@@ -19,6 +19,7 @@ interface FirstLoginPasswordModalProps {
   isSaasAdmin?: boolean;
   onPasswordChanged: (newPassword: string, newEmail?: string) => Promise<{ success: boolean; message?: string }>;
   onClose?: () => void;
+  onSignOut?: () => void;
 }
 
 export const FirstLoginPasswordModal: React.FC<FirstLoginPasswordModalProps> = ({
@@ -28,6 +29,7 @@ export const FirstLoginPasswordModal: React.FC<FirstLoginPasswordModalProps> = (
   isSaasAdmin = false,
   onPasswordChanged,
   onClose,
+  onSignOut,
 }) => {
   const [newPassword, setNewPassword] = useState('');
   const [newEmail, setNewEmail] = useState('');
@@ -175,6 +177,8 @@ export const FirstLoginPasswordModal: React.FC<FirstLoginPasswordModalProps> = (
         )}
 
         {/* Formulário */}
+        {onSignOut && <button type="button" disabled={isLoading} onClick={onSignOut} className="text-xs font-semibold text-slate-500 underline">Sair da conta</button>}
+
         <form onSubmit={handleSubmit} className="space-y-4 text-xs">
           {!isSaasAdmin && (
             <div className="space-y-1.5">

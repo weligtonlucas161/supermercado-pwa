@@ -14,6 +14,7 @@ import { LoginScreen } from './components/auth/LoginScreen';
 import { InicioTab } from './components/tabs/InicioTab';
 
 import { PasskeyEnrollmentModal } from './components/auth/PasskeyEnrollmentModal';
+import { SecondFactorGate } from './components/auth/SecondFactorGate';
 import { FirstLoginPasswordModal } from './components/auth/FirstLoginPasswordModal';
 import { StoreChatModal } from './components/chat/StoreChatModal';
 
@@ -28,6 +29,14 @@ const ConfiguracoesTab = lazy(() => import('./components/tabs/ConfiguracoesTab')
 const screenLoading = <p role="status" className="p-6 text-center text-sm">Carregando tela…</p>;
 
 function AppContent() {
+  const { currentUser, isAuthenticated, logout } = useApp();
+  if (!isAuthenticated || !currentUser) return <LoginScreen />;
+  return <SecondFactorGate key={currentUser.id} logout={() => logout()}>
+    <OperationalApp />
+  </SecondFactorGate>;
+}
+
+function OperationalApp() {
   const { 
     activeTab, 
     darkMode, 
@@ -42,8 +51,7 @@ function AppContent() {
   } = useApp();
 
   // Modal de Alteração de Senha no Primeiro Login com opção de fechar
-  const [isFirstLoginDismissed, setIsFirstLoginDismissed] = useState(false);
-  const showFirstLoginModal = Boolean(currentUser && currentUser.primeiro_login) && !isFirstLoginDismissed;
+  const showFirstLoginModal = Boolean(currentUser?.primeiro_login);
 
   // Presença leve: um único ping/minuto por sessão; nunca consulta catálogo.
   const lastInteraction = useRef(Date.now());
@@ -100,11 +108,13 @@ function AppContent() {
     };
   }, [isAuthenticated, currentUser?.id, currentUser?.loja_id]);
 
-  // 1. Se não estiver autenticado, exibe a tela de login
-  if (!isAuthenticated) {
-    return <LoginScreen />;
+  if (showFirstLoginModal && currentUser) {
+    return (
+      <FirstLoginPasswordModal isOpen matricula={currentUser.matricula}
+        userName={currentUser.nome} isSaasAdmin={isSaasAdmin}
+        onPasswordChanged={updateUserPassword} onSignOut={() => logout()} />
+    );
   }
-
 
   // 3. Se for o Administrador de SaaS (@200309 / 2003@09), renderiza a página exclusiva de gestão de servidor
   if (isSaasAdmin) {
@@ -114,16 +124,6 @@ function AppContent() {
           <AdminSaasScreen />
         </Suspense>
         {currentUser && <PasskeyEnrollmentModal userId={currentUser.id} firstLogin={Boolean(currentUser.primeiro_login)} />}
-        {showFirstLoginModal && (
-          <FirstLoginPasswordModal
-            isOpen={true}
-            matricula={currentUser?.matricula || ''}
-            userName={currentUser?.nome || 'Administrador SaaS'}
-            isSaasAdmin={true}
-            onPasswordChanged={updateUserPassword}
-            onClose={() => setIsFirstLoginDismissed(true)}
-          />
-        )}
       </>
     );
   }
@@ -180,15 +180,6 @@ function AppContent() {
 
       {currentUser && <PasskeyEnrollmentModal userId={currentUser.id} firstLogin={Boolean(currentUser.primeiro_login)} />}
       {/* Modal de Alteração de Senha no Primeiro Login */}
-      {showFirstLoginModal && (
-        <FirstLoginPasswordModal
-          isOpen={true}
-          matricula={currentUser?.matricula || ''}
-          userName={currentUser?.nome || 'Usuário'}
-          isSaasAdmin={false}
-          onPasswordChanged={updateUserPassword}
-        />
-      )}
     </div>
   );
 }
