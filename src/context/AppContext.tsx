@@ -337,10 +337,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, []);
 
   const refreshEmployees = useCallback(async (lojaId?: string) => {
-    const targetLoja = lojaId || (isSaasAdmin ? 'todas' : (operator.loja_id || ''));
+    const targetLoja = lojaId || (isSaasAdmin ? 'todas' : (currentUser?.loja_id || operator.loja_id || ''));
     const emps = await fetchStoreEmployees(targetLoja);
     setEmployees(emps);
-  }, [operator.loja_id, isSaasAdmin]);
+  }, [currentUser?.loja_id, operator.loja_id, isSaasAdmin]);
 
   const refreshRoles = useCallback(async () => {
     const lojaId = currentUser?.loja_id || operator.loja_id;

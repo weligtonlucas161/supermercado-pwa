@@ -44,7 +44,8 @@ const STORE_PALETTE_PRESETS = [
 
 export const LojaTab: React.FC = () => {
   const { 
-    operator, 
+    operator,
+    currentUser, 
     stores, 
     employees, 
     addOrUpdateEmployee, 
@@ -94,8 +95,8 @@ export const LojaTab: React.FC = () => {
   const [notice, setNotice] = useState<{ type: 'success' | 'warning' | 'error'; text: string } | null>(null);
 
   // Loja do gerente atual
-  const currentLojaId = operator.loja_id || stores[0]?.id || '';
-  const currentStore = stores.find(s => s.id === currentLojaId) || stores[0] || {
+  const currentLojaId = currentUser?.loja_id || operator.loja_id || '';
+  const currentStore = stores.find(s => s.id === currentLojaId) || {
     id: currentLojaId,
     nome_loja: operator.store || 'Loja Principal',
     limite_usuarios: 15,
