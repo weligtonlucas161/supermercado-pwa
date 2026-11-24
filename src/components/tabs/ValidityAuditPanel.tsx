@@ -1,6 +1,6 @@
 import { ValidityModalFrame } from '../modals/ValidityModalFrame';
-import { useEffect, useRef, useState, type FormEvent } from 'react';
-import { Barcode, CalendarClock, Camera, Check, Play, Plus, ShieldCheck, Tag } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import { Barcode, CalendarClock, Camera, Check, Play, Plus, Search, ShieldCheck, Tag } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { SETORES_DISPONIVEIS, type Product } from '../../types';
 import { readValidityCounts, saveValidityCount, type ValidityCount } from '../../services/validityAudit';
@@ -16,6 +16,10 @@ export function ValidityAuditPanel() {
   const savingRef = useRef(false);
   const [selectedSector, setSelectedSector] = useState('');
   const [activeSector, setActiveSector] = useState('');
+  const [selectionSector, setSelectionSector] = useState('');
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
+  const [query, setQuery] = useState('');
+  const [selectionLimit, setSelectionLimit] = useState(30);
   const [startedAt, setStartedAt] = useState('');
   const [confirmed, setConfirmed] = useState<Set<string>>(() => new Set());
   const [list, setList] = useState<'pending' | 'confirmed'>('pending');
@@ -34,8 +38,18 @@ export function ValidityAuditPanel() {
   if (restriction && !canUseAllSectors && !sectors.includes(restriction)) sectors.push(restriction);
   const sector = sectors.includes(selectedSector) ? selectedSector : sectors.find(name => sectorProductCounts.has(name)) ?? sectors[0];
   const sectorCount = sectorProductCounts.get(sector) ?? 0;
-  const activeProducts = activeSector ? products.filter(item => item.loja_id === store &&
-    item.category?.trim().toUpperCase() === activeSector) : [];
+  const candidates = useMemo(() => selectionSector ? products.filter(item => item.loja_id === store &&
+    item.category?.trim().toUpperCase() === selectionSector) : [], [selectionSector, products, store]);
+  const chosen = useMemo(() => candidates.filter(item => selectedIds.has(item.id)), [candidates, selectedIds]);
+  const results = useMemo(() => {
+    const term = query.trim().toLocaleLowerCase('pt-BR');
+    return term ? candidates.filter(item =>
+      [item.name, item.ean, item.secondaryEan, item.reducedCode, item.supplierCode]
+        .some(value => value?.toLocaleLowerCase('pt-BR').includes(term))) : candidates;
+  }, [candidates, query]);
+  const activeProducts = useMemo(() => activeSector ? products.filter(item => selectedIds.has(item.id) &&
+    item.loja_id === store && item.category?.trim().toUpperCase() === activeSector) : [],
+  [activeSector, products, selectedIds, store]);
   const confirmedCount = activeProducts.filter(item => confirmed.has(item.id)).length;
   const progress = activeProducts.length ? Math.round(confirmedCount / activeProducts.length * 100) : 0;
   const visibleProducts = activeProducts.filter(item => confirmed.has(item.id) === (list === 'confirmed'));
@@ -74,7 +88,7 @@ export function ValidityAuditPanel() {
     setError('');
     setMessage('');
     if (matches.length !== 1) {
-      setError(matches.length ? 'Código associado a mais de um produto. Confira o código da embalagem.' : 'Produto não encontrado no setor desta auditoria.');
+      setError(matches.length ? 'Código associado a mais de um produto. Confira o código da embalagem.' : 'Produto não está entre os selecionados para esta auditoria.');
       return;
     }
     setDate('');
@@ -117,6 +131,71 @@ export function ValidityAuditPanel() {
       setSaving(false);
     }
   };
+
+  if (!activeSector && selectionSector) {
+    return (
+      <section className="space-y-4 rounded-3xl border border-slate-200 bg-white p-5 shadow-xl sm:p-6 dark:border-slate-800 dark:bg-slate-900">
+        <header className="border-b border-slate-100 pb-3 dark:border-slate-800">
+          <h3 className="text-base font-black text-slate-900 dark:text-white">Selecionar produtos para auditar</h3>
+          <p className="text-xs text-slate-500">Setor {selectionSector} · {chosen.length} de {candidates.length} selecionados</p>
+        </header>
+        <label className="relative block">
+          <span className="sr-only">Pesquisar produtos</span>
+          <Search aria-hidden="true" className="absolute left-3 top-3 h-4 w-4 text-slate-400" />
+          <input value={query} onChange={event => { setQuery(event.target.value); setSelectionLimit(30); }}
+            type="search" placeholder="Buscar por nome, EAN, código reduzido ou fornecedor"
+            className={field + ' pl-9'} />
+        </label>
+        <div className="grid gap-2.5 sm:grid-cols-2">
+          {results.slice(0, selectionLimit).map(item => {
+            const selected = selectedIds.has(item.id);
+            return (
+              <button key={item.id} type="button" aria-pressed={selected}
+                onClick={() => setSelectedIds(current => {
+                  const next = new Set(current);
+                  if (next.has(item.id)) next.delete(item.id);
+                  else next.add(item.id);
+                  return next;
+                })}
+                className={`flex min-w-0 items-start justify-between gap-3 rounded-2xl border p-3.5 text-left transition ${
+                  selected ? 'border-amber-500 bg-amber-500/10 ring-2 ring-amber-400/40' :
+                    'border-slate-200 bg-white hover:border-amber-500/50 dark:border-slate-700 dark:bg-slate-800'
+                }`}>
+                <div className="min-w-0 space-y-1">
+                  <span className="block break-words text-sm font-bold text-slate-900 dark:text-white">{item.name}</span>
+                  <span className="block text-xs font-semibold">Estoque: {item.stock} un.</span>
+                  <span className="block break-words font-mono text-[11px] text-slate-500 dark:text-slate-400">
+                    EAN: {item.ean || '—'}
+                    {item.secondaryEan && ` · 2º EAN: ${item.secondaryEan}`}
+                    {item.reducedCode && ` · Reduzido: ${item.reducedCode}`}
+                    {item.supplierCode && ` · Forn.: ${item.supplierCode}`}
+                  </span>
+                </div>
+                <span aria-hidden="true" className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-lg border ${
+                  selected ? 'border-amber-500 bg-amber-500 text-slate-950' : 'border-slate-300 dark:border-slate-600'
+                }`}>{selected && <Check size={15} />}</span>
+              </button>
+            );
+          })}
+        </div>
+        {results.length === 0 && <p className="text-sm text-slate-500">Nenhum produto encontrado.</p>}
+        {selectionLimit < results.length && <button type="button" className={secondary}
+          onClick={() => setSelectionLimit(limit => limit + 30)}>Mostrar mais</button>}
+        <div className="sticky bottom-2 z-10 flex flex-wrap justify-end gap-2 rounded-2xl border border-slate-200 bg-white p-2.5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+          <button type="button" className={secondary} onClick={() => setSelectionSector('')}>Voltar aos setores</button>
+          <button type="button" className={primary} disabled={chosen.length === 0} onClick={() => {
+            setSelectedIds(new Set(chosen.map(item => item.id)));
+            setConfirmed(new Set());
+            setList('pending');
+            setVisibleCount(30);
+            setStartedAt(new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }));
+            setActiveSector(selectionSector);
+            setSelectionSector('');
+          }}><Play size={16} /> Iniciar Auditoria ({chosen.length})</button>
+        </div>
+      </section>
+    );
+  }
 
   if (!activeSector) {
     return (
@@ -161,11 +240,10 @@ export function ValidityAuditPanel() {
             </p>
           </div>
           <button type="button" disabled={!store || !sectorCount} onClick={() => {
-            setConfirmed(new Set());
-            setList('pending');
-            setVisibleCount(30);
-            setStartedAt(new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }));
-            setActiveSector(sector);
+            setQuery('');
+            setSelectionLimit(30);
+            setSelectedIds(new Set());
+            setSelectionSector(sector);
           }}
             className="inline-flex shrink-0 items-center justify-center gap-2 rounded-2xl bg-amber-500 px-6 py-3 text-xs font-black text-slate-950 shadow-lg shadow-amber-500/25 transition hover:bg-amber-600 disabled:opacity-50">
             <Play className="h-4 w-4" /> Iniciar Auditoria de Validade
@@ -193,7 +271,7 @@ export function ValidityAuditPanel() {
       </div>
       <dl className="grid grid-cols-3 gap-2 text-center">
         {[
-          { label: 'Total do setor', value: activeProducts.length, color: 'border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-800' },
+          { label: 'Selecionados', value: activeProducts.length, color: 'border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-800' },
           { label: 'Conferidos', value: confirmedCount, color: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400' },
           { label: 'Pendentes', value: activeProducts.length - confirmedCount, color: 'border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-400' },
         ].map(({ label, value, color }) => (
@@ -204,8 +282,12 @@ export function ValidityAuditPanel() {
         ))}
       </dl>
       <div className="space-y-1">
-        <div className="flex justify-between text-xs font-bold text-slate-500"><span>Progresso da conferência</span><span>{progress}% auditado</span></div>
-        <progress aria-label="Progresso da conferência" max={100} value={progress} className="h-3 w-full accent-emerald-600" />
+        <div className="flex justify-between text-xs font-bold text-slate-500"><span>Progresso da conferência</span><span className="text-emerald-600 dark:text-emerald-400">{progress}% auditado</span></div>
+        <div role="progressbar" aria-label="Progresso da conferência" aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress}
+          className="h-3 w-full overflow-hidden rounded-full bg-slate-100 p-0.5 dark:bg-slate-800">
+          <div className="h-full rounded-full bg-gradient-to-r from-emerald-500 to-teal-400 transition-all duration-300"
+            style={{ width: `${progress}%` }} />
+        </div>
       </div>
       <form className="space-y-2" onSubmit={event => { event.preventDefault(); identify(code); }}>
         <label htmlFor="validity-scan" className="text-sm font-semibold">Código do produto</label>
@@ -234,7 +316,7 @@ export function ValidityAuditPanel() {
               </li>
             ))}
           </ul>
-        ) : <p className="text-xs text-slate-500">{list === 'pending' ? 'Todos os produtos do setor foram conferidos.' : 'Nenhum produto conferido nesta auditoria.'}</p>}
+        ) : <p className="text-xs text-slate-500">{list === 'pending' ? 'Todos os produtos selecionados foram conferidos.' : 'Nenhum produto conferido nesta auditoria.'}</p>}
         {visibleCount < visibleProducts.length && <button type="button" className={secondary} onClick={() => setVisibleCount(count => count + 30)}>Mostrar mais</button>}
       </div>
       {product && (
