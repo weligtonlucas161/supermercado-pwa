@@ -30,7 +30,7 @@ import { sanitizeText } from '../../utils/security';
 import { decryptSingleField, encryptSingleField } from '../../utils/encryptionUtils';
 import { getDbClient } from '../../services/db/client';
 
-interface SectorMessage { id: string; remetente_nome: string; conteudo: string; created_at: string; remetente_auth_id: string; }
+interface SectorMessage { id: string; remetente_nome: string; conteudo: string; created_at: string; remetente_auth_id: string | null; }
 const SectorChat: React.FC<{ setor: string; lojaId: string; userName: string }> = ({ setor, lojaId, userName }) => {
   const [messages, setMessages] = useState<SectorMessage[]>([]);
   const [draft, setDraft] = useState('');

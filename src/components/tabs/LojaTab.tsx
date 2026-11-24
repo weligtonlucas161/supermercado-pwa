@@ -1,3 +1,4 @@
+import { deleteStoreEmployee } from '../../services/supabaseService';
 import { OperationsPanelHeader } from '../common/OperationsPanelHeader';
 import React, { useState, useEffect } from 'react';
 import { 
@@ -137,12 +138,11 @@ export const LojaTab: React.FC = () => {
       setNotice({type:'error',text:'Não é permitido excluir o próprio usuário.'}); return;
     }
     if (!window.confirm(`Excluir definitivamente ${employee.nome} (${employee.matricula})? O acesso ao sistema será removido. Os registros da loja serão mantidos.`)) return;
-    const db = getDbClient();
-    if (!db) { setNotice({type:'error',text:'Conexão com o servidor indisponível.'}); return; }
+    if (!getDbClient()) { setNotice({type:'error',text:'Conexão com o servidor indisponível.'}); return; }
     setDeletingEmployeeId(employee.id);
     try {
-      const { data, error } = await db.functions.invoke('delete-store-user', {body:{employeeId:employee.id}});
-      if (error || !data?.success) throw new Error(data?.error || error?.message || 'Falha ao excluir.');
+      const result = await deleteStoreEmployee(employee.id, employee.matricula);
+      if (!result.success) throw new Error(result.error || 'Falha ao excluir.');
       setDeletedEmployeeIds(ids => [...ids, employee.id]);
       setSelectedEmployeeForDetail(null);
       setEmployeeListVersion(v => v + 1);

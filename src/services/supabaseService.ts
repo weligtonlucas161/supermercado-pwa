@@ -1025,35 +1025,30 @@ export async function deleteStoreEmployee(empId: string, matricula?: string): Pr
   const cleanId = sanitizeIdentifier(empId, 64);
   if (!cleanId) return { success: false, error: 'ID de usuário inválido.' };
 
-  const allEmps = getStoredEmployees();
-  const targetEmp = allEmps.find(e => e.id === cleanId || (matricula && e.matricula === matricula));
-  const finalMatricula = targetEmp?.matricula || matricula;
-
-  // Remove do cache local
-  const updated = allEmps.filter(e => e.id !== cleanId && (!finalMatricula || e.matricula !== finalMatricula));
-  if (typeof window !== 'undefined') {
-    localStorage.setItem(LOCAL_STORAGE_EMPLOYEES_KEY, JSON.stringify(updated));
-  }
-
   if (client && isSupabaseConfigured()) {
     try {
-      const { error: delErr } = await client.from('usuarios').delete().eq('id', cleanId);
-      if (delErr) {
-        console.error('Erro ao excluir usuário no banco:', delErr);
-        return { success: false, error: `Erro no banco de dados: ${delErr.message}` };
+      const { data, error } = await client.functions.invoke('delete-store-user', {
+        body: { employeeId: cleanId },
+      });
+      if (error || data?.success !== true) {
+        const details = error?.context instanceof Response ? await error.context.json().catch(() => null) : data;
+        const messages: Record<string, string> = {
+          forbidden: 'Você não tem permissão para excluir usuários.',
+          forbidden_target: 'Este perfil está fora da sua loja ou é protegido contra exclusão.',
+          user_not_found: 'O perfil não existe mais. Atualize a lista.',
+          auth_delete_failed: 'Não foi possível remover o acesso no Supabase Auth.',
+          profile_delete_failed: 'Não foi possível concluir a exclusão do perfil. Tente novamente.',
+        };
+        return { success: false, error: messages[details?.error] || 'Não foi possível excluir o usuário.' };
       }
-
-      if (finalMatricula) {
-        try {
-          await client.from('sessoes_ativas').delete().eq('matricula', finalMatricula);
-        } catch {
-          // ignore
-        }
-      }
-    } catch (err: any) {
-      console.error('Erro ao excluir funcionário:', err);
-      return { success: false, error: err?.message || 'Falha de comunicação com o servidor.' };
+    } catch {
+      return { success: false, error: 'Falha de comunicação com o servidor ao excluir o usuário.' };
     }
+  }
+
+  const updated = getStoredEmployees().filter(e => e.id !== cleanId && (!matricula || e.matricula !== matricula));
+  if (typeof window !== 'undefined') {
+    localStorage.setItem(LOCAL_STORAGE_EMPLOYEES_KEY, JSON.stringify(updated));
   }
 
   return { success: true };
