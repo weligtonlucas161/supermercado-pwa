@@ -1,5 +1,6 @@
+import { ValidityModalFrame } from './ValidityModalFrame';
 import React, { useState } from 'react';
-import { X, Calendar, Plus, Barcode } from 'lucide-react';
+import { Plus, Barcode } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { UrgencyStatus } from '../../types';
 
@@ -53,23 +54,7 @@ export const NewValidityModal: React.FC<NewValidityModalProps> = ({ isOpen, onCl
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4 animate-in fade-in">
-      <div className="w-full max-w-md bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-5 shadow-2xl">
-        <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
-          <div className="flex items-center gap-2">
-            <div className="p-2 bg-amber-500/10 text-amber-500 rounded-xl">
-              <Calendar className="w-5 h-5" />
-            </div>
-            <div>
-              <h3 className="font-bold text-sm text-slate-800 dark:text-white">Lançar Novo Lote</h3>
-              <p className="text-[11px] text-slate-400">Controle de validade por lote</p>
-            </div>
-          </div>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-600 dark:hover:text-white p-1">
-            <X className="w-4 h-4" />
-          </button>
-        </div>
-
+    <ValidityModalFrame title="Lançar Novo Lote" description="Controle de validade por lote" onClose={onClose}>
         <form onSubmit={handleSubmit} className="mt-4 space-y-3.5">
           {/* Select Product */}
           <div>
@@ -158,7 +143,6 @@ export const NewValidityModal: React.FC<NewValidityModalProps> = ({ isOpen, onCl
             </button>
           </div>
         </form>
-      </div>
-    </div>
+    </ValidityModalFrame>
   );
 };
