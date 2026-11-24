@@ -56,6 +56,7 @@ import {
   saveStoreEmployee,
   deleteStoreEmployee,
   toggleStoreEmployeeActive,
+  fetchStoreRoles,
   saveStoreRole,
   getStoredStores,
   getStoredEmployees,
@@ -327,7 +328,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Lojas e Funcionários gerenciados
   const [stores, setStores] = useState<Store[]>(() => getStoredStores());
   const [employees, setEmployees] = useState<StoreEmployee[]>(() => getStoredEmployees());
-  const [roles, setRoles] = useState<StoreRole[]>(() => getStoredRoles());
+  const [loadedRoles, setRoles] = useState<StoreRole[]>([]);
+  const roles = loadedRoles.filter(role => role.loja_id === (currentUser?.loja_id || operator.loja_id));
 
   const refreshStores = useCallback(async () => {
     const s = await fetchStoresFromDatabase();
@@ -341,9 +343,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, [operator.loja_id, isSaasAdmin]);
 
   const refreshRoles = useCallback(async () => {
-    const r = getStoredRoles();
-    setRoles(r);
-  }, []);
+    const lojaId = currentUser?.loja_id || operator.loja_id;
+    if (!lojaId) return;
+    const remote = await fetchStoreRoles(lojaId, isSaasAdmin || /gerente geral/i.test(currentUser?.cargoCompleto || ''));
+    if (remote) setRoles(remote);
+  }, [currentUser?.loja_id, currentUser?.cargoCompleto, operator.loja_id, isSaasAdmin]);
 
   const addStore = async (newStore: Store) => {
     const res = await createStoreInDatabase(newStore);

@@ -37,6 +37,9 @@ export const EmployeeDetailModal: React.FC<EmployeeDetailModalProps> = ({
 }) => {
   const { addOrUpdateEmployee, toggleEmployeeStatus, roles, darkMode } = useApp();
 
+  const defaultRoles = ['Operador Geral', 'Conferente de Auditoria', 'Fiscal de Prevenção', 'Gerente de Setor (GS)', 'Supervisor', 'Promotor'];
+  const roleOptions = [...new Set([employee?.cargo || '', ...roles.map(role => role.nome), ...defaultRoles].filter(Boolean))];
+
   const [isEditing, setIsEditing] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [notice, setNotice] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
@@ -307,14 +310,7 @@ export const EmployeeDetailModal: React.FC<EmployeeDetailModalProps> = ({
                 onChange={e => setCargo(e.target.value)}
                 className="w-full p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-bold"
               >
-                {roles.map(r => (
-                  <option key={r.id} value={r.nome}>{r.nome}</option>
-                ))}
-                <option value="Operador Geral">Operador Geral</option>
-                <option value="Conferente de Auditoria">Conferente de Auditoria</option>
-                <option value="Fiscal de Prevenção">Fiscal de Prevenção</option>
-                <option value="Gerente de Setor (GS)">Gerente de Setor (GS)</option>
-                <option value="Supervisor">Supervisor</option>
+                {roleOptions.map(role => <option key={role} value={role}>{role}</option>)}
               </select>
             ) : (
               <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 flex items-center justify-between">

@@ -924,7 +924,7 @@ export async function fetchStoreEmployees(lojaId?: string): Promise<StoreEmploye
   try {
     let query = client
       .from('usuarios')
-      .select('id,matricula,nome,cargo,setor,loja_id,ativo,created_at,codigo_fornecedor')
+      .select('id,matricula,nome,cargo,setor,loja_id,ativo,created_at,codigo_fornecedor,permissoes')
       .neq('cargo', 'saas_admin')
       .order('nome', { ascending: true });
 
@@ -944,6 +944,7 @@ export async function fetchStoreEmployees(lojaId?: string): Promise<StoreEmploye
         codigo_fornecedor: typeof u.codigo_fornecedor === 'string' ? sanitizeIdentifier(u.codigo_fornecedor, 64) : undefined,
         setor_restrito: u.setor ? sanitizeText(u.setor, 64) : 'TODOS',
         loja_id: sanitizeIdentifier(u.loja_id || cleanLojaId || '', 64),
+        permissoes: u.permissoes as StoreEmployee['permissoes'],
         ativo: Boolean(u.ativo ?? true),
         created_at: String(u.created_at || new Date().toISOString()),
       }));
@@ -1015,6 +1016,7 @@ export async function saveStoreEmployee(emp: StoreEmployee, create = false): Pro
       setor: cleanEmp.setor_restrito,
       loja_id: cleanEmp.loja_id,
       ativo: cleanEmp.ativo,
+      ...(cleanEmp.permissoes && { permissoes: cleanEmp.permissoes }),
     }).eq('id', cleanEmp.id).select('id').maybeSingle();
     if (error || !data) return { success: false, error: 'Não foi possível atualizar o perfil existente.' };
   }
@@ -1091,13 +1093,32 @@ export async function toggleStoreEmployeeActive(empId: string, active: boolean):
   return true;
 }
 
+export async function fetchStoreRoles(lojaId: string, restoreLocal: boolean): Promise<StoreRole[] | null> {
+  if (!lojaId || !client || !isSupabaseConfigured()) return null;
+  const { data, error } = await client.from('cargos_loja')
+    .select('id,loja_id,nome,descricao,permissoes').eq('loja_id', lojaId).eq('ativo', true).order('nome');
+  if (error || !data) return null;
+  const remote = data as StoreRole[];
+  if (!restoreLocal) return remote;
+  const names = new Set(remote.map(role => role.nome.trim().toLowerCase()));
+  const ids = new Set(remote.map(role => role.id));
+  const legacy = getStoredRoles().filter(role => role.loja_id === lojaId && !ids.has(role.id) &&
+    role.nome?.trim() && !names.has(role.nome.trim().toLowerCase()));
+  if (!legacy.length) return remote;
+  const { data: restored, error: restoreError } = await client.from('cargos_loja')
+    .upsert(legacy.map(role => ({
+      id: role.id, loja_id: lojaId, nome: role.nome, descricao: role.descricao || null, permissoes: role.permissoes,
+    })), { onConflict: 'id', ignoreDuplicates: true }).select('id,loja_id,nome,descricao,permissoes');
+  if (restoreError || !restored) return remote;
+  return [...remote, ...restored as StoreRole[]].sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
+}
+
 export async function saveStoreRole(role: StoreRole): Promise<boolean> {
-  const allRoles = getStoredRoles();
-  const updated = [role, ...allRoles.filter(r => r.id !== role.id)];
-  if (typeof window !== 'undefined') {
-    localStorage.setItem(LOCAL_STORAGE_ROLES_KEY, JSON.stringify(updated));
-  }
-  return true;
+  if (!client || !isSupabaseConfigured() || !role.loja_id || !role.nome.trim()) return false;
+  const { data, error } = await client.from('cargos_loja').upsert({
+    id: role.id, loja_id: role.loja_id, nome: role.nome.trim(), descricao: role.descricao || null, permissoes: role.permissoes,
+  }, { onConflict: 'id' }).select('id').maybeSingle();
+  return !error && Boolean(data);
 }
 
 /**

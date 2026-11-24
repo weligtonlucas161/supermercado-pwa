@@ -77,7 +77,7 @@ export const LojaTab: React.FC = () => {
   const [empMatricula, setEmpMatricula] = useState('');
   const [empNome, setEmpNome] = useState('');
   const [empSenha, setEmpSenha] = useState('');
-  const [empCargo, setEmpCargo] = useState('Operador de Gôndola');
+  const [empCargo, setEmpCargo] = useState('Operador Geral');
   const [empCodigoFornecedor, setEmpCodigoFornecedor] = useState('');
   const [empSetorRestrito, setEmpSetorRestrito] = useState<string>('TODOS');
 
@@ -251,7 +251,7 @@ export const LojaTab: React.FC = () => {
     }
 
     const roleToSave: StoreRole = {
-      id: editingRole ? editingRole.id : `role_${Date.now()}`,
+      id: editingRole ? editingRole.id : crypto.randomUUID(),
       loja_id: currentLojaId,
       nome: roleNome.trim(),
       descricao: roleDescricao.trim() || undefined,
@@ -264,7 +264,10 @@ export const LojaTab: React.FC = () => {
       },
     };
 
-    await addOrUpdateRole(roleToSave);
+    if (!await addOrUpdateRole(roleToSave)) {
+      setNotice({ type: 'error', text: 'Não foi possível salvar o cargo no Supabase. Confira a conexão e suas permissões.' });
+      return;
+    }
     triggerScanBeep(true);
     setNotice({ 
       type: 'success', 
@@ -1131,7 +1134,7 @@ export const LojaTab: React.FC = () => {
       {/* Modal de Detalhes, Visualização de Senha e Edição do Funcionário */}
       <EmployeeDetailModal
         isOpen={Boolean(selectedEmployeeForDetail)}
-        employee={selectedEmployeeForDetail}
+        employee={storeEmployees.find(employee => employee.id === selectedEmployeeForDetail?.id) ?? selectedEmployeeForDetail}
         onClose={() => setSelectedEmployeeForDetail(null)}
       />
     </div>
