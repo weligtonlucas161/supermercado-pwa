@@ -103,6 +103,7 @@ export const AuditoriaTab: React.FC = () => {
     openScanner,
     isScannerOpen,
     storeName,
+    storeColor,
     isInventoryLocked,
     setIsInventoryLocked,
   } = useApp();
@@ -1393,6 +1394,7 @@ export const AuditoriaTab: React.FC = () => {
     if (!audit) return;
     exportAuditReportToPDF(audit, {
       storeName,
+      storeColor,
       showSystemStock: isManagerUser || audit.type !== 'INVENTARIO',
     });
   };

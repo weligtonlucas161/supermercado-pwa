@@ -1,3 +1,4 @@
+import { validateHexColor } from './security';
 import { AuditItem } from '../types';
 
 /**
@@ -59,11 +60,12 @@ interface PdfLine {
   size?: number;
   bold?: boolean;
   indent?: number;
+  section?: 'confirmed' | 'pending' | 'rupture';
 }
 
 export function exportAuditReportToPDF(
   audit: AuditItem,
-  options: { storeName?: string; showSystemStock?: boolean } = {}
+  options: { storeName?: string; storeColor?: string; showSystemStock?: boolean } = {}
 ): void {
   const isInventory = audit.type === 'INVENTARIO';
   const showSystem = Boolean(options.showSystemStock);
@@ -72,34 +74,24 @@ export function exportAuditReportToPDF(
   const participantsText = audit.participants && audit.participants.length > 0 ? audit.participants.join(', ') : audit.auditor;
 
   const lines: PdfLine[] = [
-    { text: `RELATORIO OFICIAL - ${audit.title.toUpperCase()}`, size: 13, bold: true },
     { text: `Loja: ${options.storeName || audit.lojaId || '-'}   |   Setor: ${audit.department || '-'}`, size: 9, bold: true },
     { text: `Data: ${dateLabel}   |   Hora: ${timeLabel || '-'}   |   Chave: ${audit.chaveAuditoria || audit.id}`, size: 8.5 },
     { text: `Iniciada por: ${audit.startedBy || audit.auditor}   |   Finalizada por: ${audit.auditor}`, size: 8.5 },
     { text: `Participantes: ${participantsText}`, size: 8.5 },
-    { text: `Duracao: ${audit.durationLabel || '-'}   |   Status: ${audit.status}`, size: 8.5 },
-    { text: '----------------------------------------------------------------------------------------------------', size: 8 },
-    {
-      text: isInventory
-        ? `RESUMO INVENTARIO: Total Esperado: ${audit.totalItems ?? audit.itemsCount}  |  Contados (Bip): ${audit.confirmedItems ?? audit.itemsCount}  |  Nao Bipados: ${audit.pendingItems ?? 0}`
-        : `RESUMO PRESENCA: Total Setor: ${audit.totalItems ?? audit.itemsCount}  |  Confirmados (Cam): ${audit.confirmedItems ?? audit.itemsCount}  |  Ausentes: ${audit.pendingItems ?? 0}  |  Taxa: ${audit.presenceRate || '100%'}`,
-      size: 9,
-      bold: true,
-    },
-    { text: '----------------------------------------------------------------------------------------------------', size: 8 },
+    { text: `Duração: ${audit.durationLabel || '-'}   |   Status: ${audit.status}`, size: 8.5 },
   ];
 
   // Seção 1: Itens Bipados / Contados
   const confirmed = audit.confirmedList || [];
-  lines.push({ text: `1. ITENS BIPADOS VIA CAMERA (${confirmed.length})`, size: 10, bold: true });
+  lines.push({ text: `1. ITENS BIPADOS / CONFERIDOS (${confirmed.length})`, size: 10, bold: true, section: 'confirmed' });
   if (confirmed.length === 0) {
-    lines.push({ text: 'Nenhum item bipado nesta sessao.', size: 8.5, indent: 8 });
+    lines.push({ text: 'Nenhum item bipado nesta sessão.', size: 8.5, indent: 8 });
   } else {
     confirmed.forEach((item, idx) => {
       const qtyPart = isInventory
         ? showSystem && typeof item.systemQuantity === 'number'
-          ? ` | Fisico: ${item.physicalQuantity ?? 0} | Sist: ${item.systemQuantity} | Div: ${(item.physicalQuantity ?? 0) - item.systemQuantity}`
-          : ` | Qtd. Fisica: ${item.physicalQuantity ?? 0} un`
+          ? ` | Físico: ${item.physicalQuantity ?? 0} | Sist: ${item.systemQuantity} | Div: ${(item.physicalQuantity ?? 0) - item.systemQuantity}`
+          : ` | Qtd. física: ${item.physicalQuantity ?? 0} un`
         : '';
       const raw = `${idx + 1}. ${item.name} [EAN: ${item.ean}]${qtyPart} - ${item.scannedBy || '-'} (${item.scannedAt})`;
       wrapText(raw, 92).forEach((chunk, cIdx) => {
@@ -112,7 +104,7 @@ export function exportAuditReportToPDF(
 
   // Seção 2: Itens Não Bipados / Pendentes
   const pending = audit.pendingList || [];
-  lines.push({ text: `2. ITENS NAO BIPADOS / PENDENTES (${pending.length})`, size: 10, bold: true });
+  lines.push({ text: `2. ITENS NÃO BIPADOS / PENDENTES (${pending.length})`, size: 10, bold: true, section: 'pending' });
   if (pending.length === 0) {
     lines.push({ text: 'Todos os itens do setor foram bipados.', size: 8.5, indent: 8 });
   } else {
@@ -131,7 +123,7 @@ export function exportAuditReportToPDF(
   const ruptures = audit.ruptureList || [];
   if ((!isInventory || showSystem) && ruptures.length > 0) {
     lines.push({ text: '', size: 6 });
-    lines.push({ text: `3. RUPTURAS IMINENTES (${ruptures.length})`, size: 10, bold: true });
+    lines.push({ text: `3. RUPTURAS IMINENTES (${ruptures.length})`, size: 10, bold: true, section: 'rupture' });
     ruptures.forEach((item, idx) => {
       const raw = `${idx + 1}. ${item.name} [EAN: ${item.ean}] - Saldo: ${item.stock} (Min: ${item.minStock})`;
       wrapText(raw, 92).forEach((chunk, cIdx) => {
@@ -140,39 +132,86 @@ export function exportAuditReportToPDF(
     });
   }
 
-  // Paginação A4 (595 x 842 pt)
-  const pageHeight = 842;
-  const marginTop = 44;
-  const marginBottom = 40;
-  const marginLeft = 36;
+  const accentHex = validateHexColor(options.storeColor);
+  const accent = [1, 3, 5].map(start => parseInt(accentHex.slice(start, start + 2), 16) / 255).join(' ');
+  const ink = '0.06 0.09 0.16';
+  const muted = '0.28 0.33 0.41';
+  const border = '0.89 0.91 0.94';
+  const margin = 36;
+  const width = 523;
+  const top = 735;
+  const bottom = 58;
+  const pages: string[][] = [];
+  let ops: string[] = [];
+  let y = top;
+  let section: PdfLine | undefined;
 
-  const pages: string[] = [];
-  let currentOps: string[] = [];
-  let y = pageHeight - marginTop;
+  function rect(x: number, bottomY: number, w: number, h: number, color: string) {
+    ops.push(`q ${color} rg ${x} ${bottomY} ${w} ${h} re f Q`);
+  }
+  function text(value: string, x: number, baseline: number, size: number, bold = false, color = ink) {
+    ops.push(`BT ${color} rg /${bold ? 'F2' : 'F1'} ${size} Tf ${x} ${baseline} Td (${encodePdfLiteral(value)}) Tj ET`);
+  }
+  function sectionHeader(line: PdfLine, continued = false) {
+    const color = line.section === 'confirmed' ? '0.82 0.98 0.90' :
+      line.section === 'pending' ? '1 0.95 0.81' : '1 0.88 0.90';
+    rect(margin, y - 19, width, 23, color);
+    text(continued ? `${line.text} (continuação)` : line.text, margin + 9, y - 11, 10, true);
+    y -= 31;
+  }
+  function startPage() {
+    ops = [];
+    pages.push(ops);
+    rect(0, 835, 595, 7, accent);
+    rect(margin, 803, 10, 10, accent);
+    text('SuperPWA OpSys', margin + 17, 803, 11, true);
+    const title = wrapText(audit.title, 48).slice(0, 2);
+    title.forEach((part, index) => text(part, margin, 779 - index * 19, 17, true));
+    rect(margin, 747, width, 1, border);
+    y = top;
+  }
 
-  const flushPage = () => {
-    if (currentOps.length > 0) {
-      pages.push(currentOps.join('\n'));
-      currentOps = [];
-    }
-    y = pageHeight - marginTop;
-  };
+  startPage();
+  const presenceMetrics = [
+    ['Total do setor', String(audit.totalItems ?? audit.itemsCount), '0.95 0.96 0.98'],
+    [isInventory ? 'Contados' : 'Confirmados', String(audit.confirmedItems ?? audit.itemsCount), '0.82 0.98 0.90'],
+    [isInventory ? 'Pendentes' : 'Ausentes', String(audit.pendingItems ?? 0), '1 0.95 0.81'],
+  ];
+  if (!isInventory) presenceMetrics.push(['Taxa de presença', audit.presenceRate || '100%', '0.95 0.96 0.98']);
+  const cardWidth = (width - (presenceMetrics.length - 1) * 8) / presenceMetrics.length;
+  presenceMetrics.forEach(([label, value, color], index) => {
+    const x = margin + index * (cardWidth + 8);
+    rect(x, y - 47, cardWidth, 47, color);
+    text(label, x + 9, y - 15, 9, true, muted);
+    text(value, x + 9, y - 35, 16, true);
+  });
+  y -= 65;
 
   for (const line of lines) {
-    const fontSize = line.size ?? 9;
-    const step = fontSize + 4.5;
-    if (y - step < marginBottom) {
-      flushPage();
+    if (line.section) {
+      if (y - 51 < bottom) startPage();
+      section = line;
+      sectionHeader(line);
+      continue;
     }
-    if (line.text) {
-      const font = line.bold ? '/F2' : '/F1';
-      const x = marginLeft + (line.indent ?? 0);
-      currentOps.push(`BT ${font} ${fontSize} Tf ${x} ${y.toFixed(1)} Td (${encodePdfLiteral(line.text)}) Tj ET`);
+    const size = line.size ?? 9;
+    const step = size + 4.5;
+    for (const part of wrapText(line.text, 91)) {
+      if (y - step < bottom) {
+        startPage();
+        if (section) sectionHeader(section, true);
+      }
+      if (part) text(part, margin + (line.indent ?? 0), y, size, line.bold, line.indent ? ink : muted);
+      y -= step;
     }
-    y -= step;
   }
-  flushPage();
-  if (pages.length === 0) pages.push('BT /F1 10 Tf 36 790 Td (Relatorio vazio) Tj ET');
+
+  const contentStreams = pages.map((commands, index) => [
+    ...commands,
+    `q ${border} rg ${margin} 42 ${width} 1 re f Q`,
+    `BT ${muted} rg /F1 8 Tf ${margin} 27 Td (SuperPWA OpSys) Tj ET`,
+    `BT ${muted} rg /F1 8 Tf 494 27 Td (${encodePdfLiteral(`Página ${index + 1} de ${pages.length}`)}) Tj ET`,
+  ].join('\n'));
 
   // Montagem dos objetos PDF 1.4
   const objects: string[] = [];
@@ -186,7 +225,7 @@ export function exportAuditReportToPDF(
   const pagesIdPlaceholder = addObj(''); // idx 2 -> object 3
 
   const pageIds: number[] = [];
-  for (const content of pages) {
+  for (const content of contentStreams) {
     const contentId = addObj(`<< /Length ${content.length} >>\nstream\n${content}\nendstream`);
     const pageId = addObj(
       `<< /Type /Page /Parent ${pagesIdPlaceholder} 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 ${fontRegularId} 0 R /F2 ${fontBoldId} 0 R >> >> /Contents ${contentId} 0 R >>`
