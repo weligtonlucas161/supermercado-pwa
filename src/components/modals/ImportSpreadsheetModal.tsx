@@ -11,7 +11,6 @@ import {
   ArrowLeft, 
   SlidersHorizontal,
   Layers,
-  Table,
   Tag
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
@@ -23,7 +22,7 @@ import {
 } from '../../services/supabaseService';
 import {
   prepareStockImport, saveStockImport, stockImportRequest,
-  type StockImportEntry, type StockImportMode, type StockImportSummary,
+  type StockImportEntry, type StockImportMode,
 } from '../../services/stockImport';
 import { triggerScanBeep } from '../../utils/haptics';
 import { sanitizeSpreadsheetCell, sanitizeIdentifier } from '../../utils/security';
@@ -59,12 +58,9 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
   // Etapa Atual (1 a 4)
   const [step, setStep] = useState<StepNumber>(1);
 
-  // Estados da Etapa 1: Upload e Preview Bruto
+  // Estados da Etapa 1: Arquivo
   const [fileName, setFileName] = useState<string | null>(null);
   const [fileSize, setFileSize] = useState<string | null>(null);
-  const [rawHeaders, setRawHeaders] = useState<string[]>([]);
-  const [rawMatrix, setRawMatrix] = useState<(string | number)[][]>([]);
-  const [rawRows, setRawRows] = useState<Array<Record<string, unknown>>>([]);
   const [detectedColumns, setDetectedColumns] = useState<ColumnOption[]>([]);
 
   // Estados da Etapa 2: Mapeamento das 5 Colunas, Linhas (Começo e Fim) e Seleção de Setor
@@ -85,10 +81,10 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
   const [customCategoryRules, setCustomCategoryRules] = useState<CategoryRules>({});
 
   const [mode, setMode] = useState<StockImportMode | ''>('');
-  const [confirmation, setConfirmation] = useState<{ id: string; summary: StockImportSummary } | null>(null);
+  const [importId, setImportId] = useState<string | null>(null);
+  const [confirmReduction, setConfirmReduction] = useState(false);
   const [progress, setProgress] = useState(0);
   const [busy, setBusy] = useState(false);
-  const [applied, setApplied] = useState(false);
   const [history, setHistory] = useState<StockImportEntry[] | null>(null);
   const [revertId, setRevertId] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -99,15 +95,12 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
       setStep(1);
       setMode('');
       setHistory(null);
-      setConfirmation(null);
-      setApplied(false);
+      setImportId(null);
+      setConfirmReduction(false);
       setRevertId(null);
       setErrorMessage(null);
       setFileName(null);
       setFileSize(null);
-      setRawHeaders([]);
-      setRawRows([]);
-      setRawMatrix([]);
       setAllMatrixRows([]);
     }
   }, [isOpen, store]);
@@ -139,15 +132,12 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
   };
 
   // =========================================================================
-  // ETAPA 1: LEITURA E PREVIEW DA PLANILHA BRUTA
+  // ETAPA 1: LEITURA DA PLANILHA
   // =========================================================================
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    setRawRows([]);
-    setRawHeaders([]);
-    setRawMatrix([]);
     setAllMatrixRows([]);
     setFileName(file.name);
     setFileSize((file.size / 1024).toFixed(1) + ' KB');
@@ -167,7 +157,7 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
         }
         const ws = wb.Sheets[sheets[0]];
 
-        // Matriz bruta para preview fiel
+        // Matriz de células usada no mapeamento
         const range = XLSX.utils.decode_range(ws['!ref']!);
         range.s = { r: 0, c: 0 };
         const matrix = XLSX.utils.sheet_to_json<(string | number)[]>(ws, { header: 1, defval: '', range });
@@ -186,8 +176,6 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
         }
 
         const headerRow = matrix[0] || [];
-        setRawHeaders(headerRow.map(String));
-        setRawMatrix(matrix.slice(1, 10)); // Primeiras linhas de preview
         setAllMatrixRows(matrix);
         setTotalSheetRows(matrix.length);
         
@@ -205,9 +193,6 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
         }));
         setDetectedColumns(cols);
 
-        // Linhas estruturadas
-        const parsed = XLSX.utils.sheet_to_json<Record<string, unknown>>(ws, { defval: '' });
-        setRawRows(parsed);
 
         // Auto-mapeamento das 5 colunas pelas palavras-chave
         const autoMap = {
@@ -404,18 +389,33 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
     }
   };
 
-  const preview = () => run(async () => {
-    if (!mode || !fileName) return;
-    setProgress(0);
-    const payload = mappedItems.map(({ sheetRow, originalCode, originalQuantity, ...item }) => item);
-    setConfirmation(await prepareStockImport(store, fileName, mode, payload, setProgress));
-    setStep(4);
-  });
-
   const apply = () => run(async () => {
-    if (!confirmation) return;
-    await saveStockImport('apply', store, confirmation.id);
-    setApplied(true);
+    if (!mode || !fileName) return;
+    let id = importId;
+    if (!id) {
+      setProgress(0);
+      const payload = mappedItems.map(({ sheetRow, originalCode, originalQuantity, ...item }) => item);
+      const prepared = await prepareStockImport(store, fileName, mode, payload, setProgress);
+      id = prepared.id;
+      setImportId(id);
+      if (prepared.summary.large_reduction) {
+        setConfirmReduction(true);
+        return;
+      }
+    }
+
+    try {
+      await saveStockImport('apply', store, id);
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('O estoque mudou desde a prévia')) {
+        setImportId(null);
+        setConfirmReduction(false);
+        throw new Error('O estoque mudou durante a importação. Confirme novamente para refazer a comparação.');
+      }
+      throw error;
+    }
+    setConfirmReduction(false);
+    setStep(4);
     triggerScanBeep(true);
     void refreshProductsFromDatabase();
   });
@@ -447,7 +447,7 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
                   Importação de Planilha de Estoque
                 </h3>
                 <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
-                  4 Etapas
+                  4 etapas
                 </span>
                 <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
                   supabaseConnected
@@ -479,7 +479,7 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
             }`}>
               {step > 1 ? '✓' : '1'}
             </span>
-            <span>1. Upload & Preview</span>
+            <span>1. Arquivo</span>
           </div>
           <ArrowRight className="w-3.5 h-3.5 text-slate-300 dark:text-slate-700 shrink-0" />
 
@@ -508,11 +508,11 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
           {/* Etapa 4 */}
           <div className={`flex items-center gap-1.5 shrink-0 ${step === 4 ? 'font-black text-emerald-600 dark:text-emerald-400' : 'text-slate-400'}`}>
             <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold ${
-              applied ? 'bg-emerald-500 text-white' : step === 4 ? 'bg-emerald-500/20 text-emerald-600 dark:text-emerald-400' : 'bg-slate-200 dark:bg-slate-800'
+              step === 4 ? 'bg-emerald-500 text-white' : 'bg-slate-200 dark:bg-slate-800'
             }`}>
-              {applied ? '✓' : '4'}
+              {step === 4 ? '✓' : '4'}
             </span>
-            <span>4. Conferência</span>
+            <span>4. Conclusão</span>
           </div>
         </div>
 
@@ -524,7 +524,7 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
         )}
 
         {/* ================================================================= */}
-        {/* ETAPA 1: UPLOAD E PREVIEW DA PLANILHA */}
+        {/* ETAPA 1: SELEÇÃO DA PLANILHA */}
         {/* ================================================================= */}
         {history === null && step === 1 && (
           <div className="py-4 space-y-4 overflow-y-auto flex-1">
@@ -545,7 +545,7 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
                 {fileName ? `Arquivo: ${fileName} (${fileSize})` : 'Clique ou arraste a planilha aqui (.xlsx, .xls ou .csv)'}
               </p>
               <p className="text-[11px] text-slate-400 mt-0.5">
-                O arquivo será lido instantaneamente para visualização prévia das linhas.
+                Selecione a planilha completa da loja.
               </p>
             </div>
 
@@ -563,47 +563,6 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
               </button>
             </div>
 
-            {/* Preview da Planilha Bruta (Tabela das primeiras linhas) */}
-            {rawHeaders.length > 0 && (
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <h4 className="text-xs font-bold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
-                    <Table className="w-4 h-4 text-emerald-500" />
-                    Preview dos Dados Brutos ({rawRows.length} linhas detectadas)
-                  </h4>
-                  <span className="text-[10px] text-slate-400">
-                    Amostragem das primeiras {rawMatrix.length} linhas
-                  </span>
-                </div>
-
-                <div className="border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden max-h-52 overflow-x-auto overflow-y-auto text-xs">
-                  <table className="w-full text-left whitespace-nowrap">
-                    <thead className="bg-slate-100 dark:bg-slate-800 text-[11px] font-bold text-slate-500 dark:text-slate-400 sticky top-0">
-                      <tr>
-                        <th className="p-2 w-10 text-center">#</th>
-                        {rawHeaders.map((head, idx) => (
-                          <th key={idx} className="p-2 border-l border-slate-200 dark:border-slate-700">
-                            {head || `Col ${String.fromCharCode(65 + idx)}`}
-                          </th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                      {rawMatrix.map((row, rIdx) => (
-                        <tr key={rIdx} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
-                          <td className="p-2 text-center text-slate-400 font-mono text-[10px]">{rIdx + 1}</td>
-                          {rawHeaders.map((_, cIdx) => (
-                            <td key={cIdx} className="p-2 text-slate-700 dark:text-slate-300 border-l border-slate-100 dark:border-slate-800 text-[11px]">
-                              {String(row[cIdx] ?? '')}
-                            </td>
-                          ))}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            )}
           </div>
         )}
 
@@ -840,7 +799,7 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
               </div>
             </div>
 
-            {/* TABELA DE CONFERÊNCIA DOS ITENS MAPEADOS */}
+            {hasInvalidRows && (
             <div className="space-y-2">
               <div className="flex items-center justify-between">
                 <span className="text-xs font-bold text-slate-800 dark:text-slate-200">
@@ -867,7 +826,7 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                    {(hasInvalidRows ? invalidItems : mappedItems.slice(0, 100)).map(item => (
+                    {invalidItems.map(item => (
                       <tr key={item.sheetRow} className={item.isValid ? '' : 'bg-rose-500/10 text-rose-600'}>
                         <td className="p-2">{item.sheetRow}</td>
                         <td className="p-2 font-bold truncate max-w-[150px]">{item.name || 'NÃO INFORMADO'}</td>
@@ -898,6 +857,7 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
                 </table>
               </div>
             </div>
+            )}
           </div>
         )}
 
@@ -926,7 +886,7 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
           </section>
         ) : step === 3 ? (
           <section className="py-5 space-y-4 overflow-y-auto flex-1">
-            <fieldset disabled={busy} className="space-y-3">
+            <fieldset disabled={busy || Boolean(importId)} className="space-y-3">
               <legend className="font-bold mb-3">Esta planilha representa um novo estoque?</legend>
               {([
                 ['baseline', 'Sim, novo estoque', 'Cria uma nova base e preserva o histórico anterior.'],
@@ -939,35 +899,17 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
               ))}
             </fieldset>
             <p className="text-sm text-slate-500">Produtos ausentes terão o saldo zerado. Cadastros e históricos serão preservados.</p>
-            {busy && <progress className="w-full accent-emerald-600" aria-label="Preparando comparação" value={progress} max={100} />}
-          </section>
-        ) : step === 4 && confirmation && (
-          <section className="py-5 space-y-4 overflow-y-auto flex-1">
-            <h4 className="font-bold">{applied ? 'Importação concluída' : 'Resumo da importação'}</h4>
-            <dl className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-              {([
-                ['total', 'Produtos após importação'],
-                ['new', 'Produtos novos'],
-                ['out', 'Com saída'],
-                ['in', 'Com reposição'],
-                ['restocked', 'Reabastecidos'],
-                ['unchanged', 'Sem movimentação'],
-                ['zeroed', 'Estoque zerado'],
-                ['still_zero', 'Continuam zerados'],
-                ['absent', 'Ausentes na planilha'],
-              ] as const).filter(([key]) => mode === 'update' || !['out', 'in', 'restocked', 'unchanged'].includes(key)).map(([key, label]) => (
-                <div key={key} className="p-3 rounded-xl bg-slate-100 dark:bg-slate-800">
-                  <dt className="text-xs text-slate-600 dark:text-slate-300">{label}</dt>
-                  <dd className="font-bold text-lg">{confirmation.summary[key].toLocaleString('pt-BR')}</dd>
-                </div>
-              ))}
-            </dl>
-            {confirmation.summary.large_reduction && (
+            {confirmReduction && (
               <p role="alert" className="rounded-xl bg-amber-500/15 p-3 text-sm text-amber-800 dark:text-amber-200">
-                O saldo total cai mais de 30%. Confira se a planilha inclui todos os setores antes de confirmar.
+                O saldo total cai mais de 30%. Confira se a planilha inclui todos os setores antes de prosseguir.
               </p>
             )}
-            {mode === 'update' && <p className="text-xs text-slate-500">Saldo igual entre planilhas pode incluir vendas e reposições na mesma quantidade.</p>}
+            {busy && <progress className="w-full accent-emerald-600" aria-label="Importando estoque" value={progress} max={100} />}
+          </section>
+        ) : step === 4 && (
+          <section className="py-5 flex-1" role="status">
+            <h4 className="font-bold">Importação concluída</h4>
+            <p className="text-sm text-slate-500">O estoque da loja foi atualizado.</p>
           </section>
         )}
 
@@ -987,7 +929,7 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
               <button
                 type="button"
                 onClick={handleGoToStep2}
-                disabled={rawRows.length === 0}
+                disabled={allMatrixRows.length < 2}
                 className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-bold shadow-md shadow-emerald-600/20 flex items-center gap-1.5 transition cursor-pointer"
               >
                 <span>Avançar para Mapeamento & Setor</span>
@@ -1021,18 +963,23 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
             <button type="button" disabled={busy} onClick={() => { setHistory(null); setErrorMessage(null); }} className="text-sm font-semibold">Voltar</button>
           ) : step === 3 ? (
             <>
-              <button type="button" disabled={busy} onClick={() => setStep(2)} className="text-sm font-semibold">Voltar</button>
-              <button type="button" disabled={busy || !mode} onClick={preview} className="px-4 py-2 rounded-xl bg-emerald-600 text-white text-sm font-bold disabled:opacity-50">
-                {busy ? 'Preparando prévia…' : 'Gerar prévia'}
+              <button type="button" disabled={busy} onClick={() => {
+                setImportId(null);
+                setConfirmReduction(false);
+                setErrorMessage(null);
+                setStep(2);
+              }} className="text-sm font-semibold">Voltar</button>
+              <button type="button" disabled={busy || !mode} onClick={apply} className="px-4 py-2 rounded-xl bg-emerald-600 text-white text-sm font-bold disabled:opacity-50">
+                {busy ? 'Importando…' : confirmReduction ? 'Prosseguir com a importação' : 'Confirmar importação'}
               </button>
             </>
           ) : step === 4 ? (
             <>
-              <button type="button" disabled={busy} onClick={applied ? () => run(loadHistory) : () => { setStep(3); setErrorMessage(null); }} className="text-sm font-semibold">
-                {applied ? 'Histórico' : 'Voltar'}
+              <button type="button" disabled={busy} onClick={() => run(loadHistory)} className="text-sm font-semibold">
+                Histórico
               </button>
-              <button type="button" disabled={busy} onClick={applied ? onClose : apply} className="px-4 py-2 rounded-xl bg-emerald-600 text-white text-sm font-bold disabled:opacity-50">
-                {applied ? 'Concluir' : busy ? 'Aplicando…' : 'Confirmar importação'}
+              <button type="button" disabled={busy} onClick={onClose} className="px-4 py-2 rounded-xl bg-emerald-600 text-white text-sm font-bold disabled:opacity-50">
+                Concluir
               </button>
             </>
           ) : null}
