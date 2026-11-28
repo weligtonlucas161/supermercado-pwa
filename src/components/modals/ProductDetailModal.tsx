@@ -21,6 +21,8 @@ import { useApp } from '../../context/AppContext';
 import { triggerScanBeep } from '../../utils/haptics';
 import { sanitizeText, sanitizeBarcode, sanitizeIdentifier, validatePositiveInt } from '../../utils/security';
 
+import { movementLabels, stockImportRequest, type StockMovement } from '../../services/stockImport';
+
 interface ProductDetailModalProps {
   product: Product | null;
   isOpen: boolean;
@@ -33,7 +35,7 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
   onClose,
 }) => {
   const { 
-    operator, 
+    operator, currentUser,
     lockProductForEdit, 
     unlockProductForEdit, 
     updateProductDetails, 
@@ -56,6 +58,33 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
   const [editCategory, setEditCategory] = useState<string>('MERCEARIA');
   const [editLocation, setEditLocation] = useState<string>('');
   const [isSaving, setIsSaving] = useState(false);
+
+  const [movements, setMovements] = useState<StockMovement[] | null>(null);
+  const [historyError, setHistoryError] = useState('');
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const store = currentUser?.loja_id || operator.loja_id || '';
+  const role = (currentUser?.cargoCompleto || currentUser?.cargo || '').toLowerCase();
+  const canViewHistory = role === 'saas_admin' || role.includes('gerente geral');
+  const productId = product?.id;
+
+  useEffect(() => {
+    setMovements(null);
+    setHistoryError('');
+    setHistoryLoading(false);
+  }, [isOpen, store, productId]);
+
+  const readHistory = async () => {
+    if (!productId) return;
+    setHistoryLoading(true);
+    setHistoryError('');
+    try {
+      setMovements(await stockImportRequest<StockMovement[]>('product_history', store, null, { product_id: productId }));
+    } catch (error) {
+      setHistoryError(error instanceof Error ? error.message : 'Não foi possível consultar o histórico.');
+    } finally {
+      setHistoryLoading(false);
+    }
+  };
 
   // Sincroniza formulário ao abrir produto
   useEffect(() => {
@@ -356,6 +385,25 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
                   </div>
                 </div>
               </div>
+
+              {canViewHistory && (
+                <section className="p-4 rounded-2xl border border-slate-200 dark:border-slate-700 space-y-2">
+                  <button type="button" className="text-xs font-bold text-emerald-600 dark:text-emerald-400" onClick={readHistory} disabled={historyLoading}>
+                    {historyLoading ? 'Carregando…' : 'Ver histórico de importações'}
+                  </button>
+                  {historyError && <p role="alert" className="text-sm text-rose-600">{historyError}</p>}
+                  {movements?.length === 0 && <p className="text-xs text-slate-500">Nenhuma movimentação por importação.</p>}
+                  {movements?.map(entry => (
+                    <div className="text-xs border-t border-slate-200 dark:border-slate-700 pt-2" key={entry.id}>
+                      <p className="font-semibold">{movementLabels[entry.movement]}{entry.reverted_at ? ' · Revertida' : ''} · {entry.previous ?? '—'} → {entry.current} un.</p>
+                      <p className="text-slate-500">{new Date(entry.applied_at).toLocaleString('pt-BR')} · {entry.filename}</p>
+                      {entry.unchanged_since && !entry.reverted_at && entry.movement === 'unchanged' && (
+                        <p className="text-slate-500">Saldo sem alteração nas importações desde {new Date(entry.unchanged_since).toLocaleDateString('pt-BR')}.</p>
+                      )}
+                    </div>
+                  ))}
+                </section>
+              )}
 
               {/* Informações de Auditoria e Trava */}
               <div className="p-3.5 rounded-2xl bg-indigo-500/5 border border-indigo-500/20 text-[11px] text-slate-500 dark:text-slate-400 space-y-1">

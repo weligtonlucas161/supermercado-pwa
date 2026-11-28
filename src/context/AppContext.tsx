@@ -783,6 +783,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const lojaId = currentUser?.loja_id || operator.loja_id || '';
     if (!lojaId) return;
 
+    const pending = new Map<string, Product | null>();
+    let flushTimer: number | undefined;
+    const enqueue = (id: string, product: Product | null) => {
+      catalogReconciliation.current?.set(id, product);
+      pending.set(id, product);
+      if (flushTimer !== undefined) return;
+      flushTimer = window.setTimeout(() => {
+        const changes = new Map(pending);
+        pending.clear();
+        flushTimer = undefined;
+        setProducts(previous => {
+          const remaining = new Map(changes);
+          const updated = previous.flatMap(item => {
+            if (!remaining.has(item.id)) return [item];
+            const change = remaining.get(item.id);
+            remaining.delete(item.id);
+            return change ? [change] : [];
+          });
+          const added = [...remaining.values()].filter((item): item is Product => item !== null);
+          return [...added.reverse(), ...updated];
+        });
+      }, 100);
+    };
+
     const unsubscribe = subscribeToProductsRealtime(lojaId, (event) => {
       if (event.type === 'DELETE') {
         const oldLoja = event.oldRow?.loja_id ? String(event.oldRow.loja_id) : '';
@@ -793,8 +817,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           refreshProductsFromDatabase();
           return;
         }
-        catalogReconciliation.current?.set(removedId, null);
-        setProducts(prev => prev.filter(p => p.id !== removedId));
+        enqueue(removedId, null);
         return;
       }
 
@@ -809,23 +832,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       const mapped = mapProductRow(event.row, lojaId);
       if (currentUser?.cargo === 'promotor' && (!currentUser.codigo_fornecedor || mapped.supplierCode?.trim() !== currentUser.codigo_fornecedor.trim())) {
-        catalogReconciliation.current?.set(mapped.id, null);
-        setProducts(prev => prev.filter(p => p.id !== mapped.id));
+        enqueue(mapped.id, null);
         return;
       }
-      catalogReconciliation.current?.set(mapped.id, mapped);
-      setProducts(prev => {
-        const index = prev.findIndex(p => p.id === mapped.id);
-        const next = index >= 0
-          ? prev.map((p, i) => (i === index ? mapped : p))
-          : [mapped, ...prev];
-        return next;
-      });
+      enqueue(mapped.id, mapped);
     }, () => {
       invalidateStockCache(lojaId);
       void refreshProductsFromDatabase();
     });
     return () => {
+      window.clearTimeout(flushTimer);
       unsubscribe();
     };
   }, [isAuthenticated, refreshProductsFromDatabase, operator.loja_id, currentUser?.loja_id, currentUser?.cargo, currentUser?.codigo_fornecedor]);

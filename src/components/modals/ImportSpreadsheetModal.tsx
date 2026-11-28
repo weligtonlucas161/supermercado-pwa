@@ -7,30 +7,26 @@ import {
   AlertTriangle, 
   Download, 
   Lock, 
-  Unlock, 
-  ShieldCheck, 
   ArrowRight, 
   ArrowLeft, 
-  RefreshCw, 
   SlidersHorizontal,
   Layers,
   Table,
-  CheckCircle2,
-  FileCheck,
-  Eye,
   Tag
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { useApp } from '../../context/AppContext';
 import { SpreadsheetProductItem, SetorLoja, SETORES_DISPONIVEIS } from '../../types';
 import { 
-  uploadEncryptedProductsRealtime, 
   isSupabaseConfigured,
   loadStoreCategoryRules,
 } from '../../services/supabaseService';
-import { encryptProductList } from '../../utils/crypto';
+import {
+  prepareStockImport, saveStockImport, stockImportRequest,
+  type StockImportEntry, type StockImportMode, type StockImportSummary,
+} from '../../services/stockImport';
 import { triggerScanBeep } from '../../utils/haptics';
-import { sanitizeSpreadsheetCell, sanitizeIdentifier, sanitizeBarcode, validatePositiveInt } from '../../utils/security';
+import { sanitizeSpreadsheetCell, sanitizeIdentifier, sanitizeBarcode } from '../../utils/security';
 import { resolveCategory, type CategoryRules } from '../../utils/productCategorizer';
 
 interface ImportSpreadsheetModalProps {
@@ -47,12 +43,11 @@ interface ColumnOption {
 }
 
 export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ isOpen, onClose }) => {
-  const { addProduct, importProductsBatch, operator, refreshProductsFromDatabase } = useApp();
+  const { operator, currentUser, refreshProductsFromDatabase } = useApp();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   // Estados de Conexão com Supabase
   const supabaseConnected = isSupabaseConfigured();
-  const [dbSaveStatus, setDbSaveStatus] = useState<'IDLE' | 'SAVED_TO_SUPABASE' | 'LOCAL_ONLY' | 'ERROR'>('IDLE');
 
   // Etapa Atual (1 a 4)
   const [step, setStep] = useState<StepNumber>(1);
@@ -82,20 +77,33 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
   const [mappedItems, setMappedItems] = useState<SpreadsheetProductItem[]>([]);
   const [customCategoryRules, setCustomCategoryRules] = useState<CategoryRules>({});
 
-  // Estados da Etapa 3: Criptografia Local (AES-GCM 256 bits)
-  const [encryptionProgress, setEncryptionProgress] = useState(0);
-  const [encryptedPayloads, setEncryptedPayloads] = useState<
-    Array<{ original: SpreadsheetProductItem; encrypted: { ciphertext: string; iv: string } }>
-  >([]);
-  const [sampleCiphertext, setSampleCiphertext] = useState('');
-  const [isEncrypting, setIsEncrypting] = useState(false);
-
-  // Estados da Etapa 4: Sincronização Supabase e Exibição Descriptografada
-  const [uploadProgress, setUploadProgress] = useState(0);
-  const [isUploading, setIsUploading] = useState(false);
-  const [uploadSuccess, setUploadSuccess] = useState(false);
-  const [showEncryptedView, setShowEncryptedView] = useState(false);
+  const [mode, setMode] = useState<StockImportMode | ''>('');
+  const [confirmation, setConfirmation] = useState<{ id: string; summary: StockImportSummary } | null>(null);
+  const [progress, setProgress] = useState(0);
+  const [busy, setBusy] = useState(false);
+  const [applied, setApplied] = useState(false);
+  const [history, setHistory] = useState<StockImportEntry[] | null>(null);
+  const [revertId, setRevertId] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const store = currentUser?.loja_id || operator.loja_id || '';
+
+  useEffect(() => {
+    if (!isOpen) {
+      setStep(1);
+      setMode('');
+      setHistory(null);
+      setConfirmation(null);
+      setApplied(false);
+      setRevertId(null);
+      setErrorMessage(null);
+      setFileName(null);
+      setFileSize(null);
+      setRawHeaders([]);
+      setRawRows([]);
+      setRawMatrix([]);
+      setAllMatrixRows([]);
+    }
+  }, [isOpen, store]);
 
   // Carrega o dicionário de categorias customizado da loja para aplicar
   // as correções feitas pelos operadores em importações anteriores.
@@ -103,14 +111,14 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
     if (!isOpen) return;
     let cancelled = false;
 
-    loadStoreCategoryRules(operator.loja_id || '').then(rules => {
+    loadStoreCategoryRules(store).then(rules => {
       if (!cancelled) setCustomCategoryRules(rules);
     });
 
     return () => {
       cancelled = true;
     };
-  }, [isOpen, operator.loja_id]);
+  }, [isOpen, store]);
 
   if (!isOpen) return null;
 
@@ -130,18 +138,27 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
     const file = e.target.files?.[0];
     if (!file) return;
 
+    setRawRows([]);
+    setRawHeaders([]);
+    setRawMatrix([]);
+    setAllMatrixRows([]);
     setFileName(file.name);
     setFileSize((file.size / 1024).toFixed(1) + ' KB');
     setErrorMessage(null);
 
     const reader = new FileReader();
+    reader.onerror = () => setErrorMessage('Não foi possível ler o arquivo. Selecione a planilha novamente.');
 
     reader.onload = (evt) => {
       try {
         const bstr = evt.target?.result;
-        const wb = XLSX.read(bstr, { type: 'binary' });
-        const wsname = wb.SheetNames[0];
-        const ws = wb.Sheets[wsname];
+        const wb = XLSX.read(bstr, { type: 'binary', raw: true });
+        const sheets = wb.SheetNames.filter(name => wb.Sheets[name]?.['!ref']);
+        if (sheets.length !== 1) {
+          setErrorMessage('Envie uma planilha com uma única aba contendo todo o estoque da loja.');
+          return;
+        }
+        const ws = wb.Sheets[sheets[0]];
 
         // Matriz bruta para preview fiel
         const matrix = XLSX.utils.sheet_to_json<string[]>(ws, { header: 1, defval: '' });
@@ -187,15 +204,15 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
 
         headerRow.forEach((colName, idx) => {
           const norm = normalize(String(colName));
-          if (norm.includes('desc') || norm.includes('nome') || norm.includes('produto') || norm.includes('item')) {
+          if (norm.includes('desc') || norm === 'nome' || norm === 'produto' || norm === 'item' || norm.includes('nomeproduto')) {
             if (autoMap.name === -1) autoMap.name = idx;
           } else if (norm.includes('categoria') || norm.includes('departamento') || norm.includes('secao') || norm.includes('grupo')) {
             if (autoMap.category === -1) autoMap.category = idx;
           } else if (norm.includes('fornec') || norm.includes('forn') || norm.includes('fabr') || norm.includes('sup')) {
             if (autoMap.supplierCode === -1) autoMap.supplierCode = idx;
-          } else if (norm.includes('reduz') || norm.includes('red') || norm.includes('interno') || norm.includes('plu')) {
+          } else if (norm.includes('reduz') || norm.includes('red') || norm.includes('interno') || norm.includes('plu') || norm === 'codigoproduto') {
             if (autoMap.reducedCode === -1) autoMap.reducedCode = idx;
-          } else if (norm.includes('ean') || norm.includes('barras') || norm.includes('gtin') || norm.includes('codigo')) {
+          } else if (norm.includes('ean') || norm.includes('barras') || norm.includes('gtin') || norm.includes('codigoacesso') || norm === 'codigo') {
             if (autoMap.ean === -1) autoMap.ean = idx;
           } else if (norm.includes('quant') || norm.includes('qtd') || norm.includes('estoque') || norm.includes('saldo')) {
             if (autoMap.quantity === -1) autoMap.quantity = idx;
@@ -203,11 +220,8 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
         });
 
         // Fallbacks se as colunas forem A, B, C, D, E sequenciais
-        if (autoMap.name === -1 && cols.length > 0) autoMap.name = 0;
         if (autoMap.supplierCode === -1 && cols.length > 1) autoMap.supplierCode = 1;
         if (autoMap.reducedCode === -1 && cols.length > 2) autoMap.reducedCode = 2;
-        if (autoMap.ean === -1 && cols.length > 3) autoMap.ean = 3;
-        if (autoMap.quantity === -1 && cols.length > 4) autoMap.quantity = 4;
 
         setColMap(autoMap);
       } catch (err) {
@@ -247,7 +261,8 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
     eRow = endRow,
     matrix = allMatrixRows
   ) => {
-    if (currentColMap.name === -1 || currentColMap.ean === -1 || currentColMap.quantity === -1) {
+    const requiredColumns = [currentColMap.name, currentColMap.ean, currentColMap.quantity];
+    if (requiredColumns.includes(-1) || new Set(requiredColumns).size !== requiredColumns.length) {
       return [];
     }
 
@@ -257,7 +272,7 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
     const endIdx = Math.min(matrix.length, Math.max(startIdx, eRow));
     const targetSlice = matrix.slice(startIdx, endIdx);
 
-    const items: SpreadsheetProductItem[] = targetSlice.map((row) => {
+    const items: SpreadsheetProductItem[] = targetSlice.filter(row => row.some(cell => String(cell).trim() !== '')).map((row) => {
       // 1. Descrição do produto (sanitizada contra XSS, SQLi e Formula Injection)
       const name = currentColMap.name >= 0 ? sanitizeSpreadsheetCell(row[currentColMap.name], 200) : '';
       // 2. Código de fornecedor
@@ -265,10 +280,10 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
       // 3. Código reduzido
       const reducedCode = currentColMap.reducedCode >= 0 ? sanitizeIdentifier(row[currentColMap.reducedCode], 32) : '';
       // 4. Código EAN
-      const ean = currentColMap.ean >= 0 ? sanitizeBarcode(row[currentColMap.ean], 32) : '';
-      // 5. Quantidade
-      const quantityRaw = currentColMap.quantity >= 0 ? row[currentColMap.quantity] : 0;
-      const quantity = validatePositiveInt(String(quantityRaw ?? 0).replace(/[^0-9]/g, ''), 0);
+      const rawEan = String(row[currentColMap.ean] ?? '').trim();
+      const ean = /^[0-9]{1,32}$/.test(rawEan) ? sanitizeBarcode(rawEan, 32) : '';
+      const rawQuantity = String(row[currentColMap.quantity] ?? '').trim();
+      const quantity = /^\d+$/.test(rawQuantity) ? Number(rawQuantity) : NaN;
       // 6. Categoria/departamento (opcional na planilha; quando vazia, genérica
       //    ou abreviada é classificada automaticamente pela descrição)
       const sourceCategory = currentColMap.category >= 0
@@ -280,7 +295,8 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
 
       const errors: string[] = [];
       if (!name) errors.push('Descrição ausente');
-      if (!ean) errors.push('EAN ausente');
+      if (!ean) errors.push('Código de barras inválido');
+      if (!Number.isSafeInteger(quantity) || quantity > 10000000) errors.push('Informe uma quantidade inteira entre 0 e 10.000.000');
 
       return {
         name,
@@ -338,108 +354,46 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
     setMappedItems(items);
   };
 
-  // =========================================================================
-  // ETAPA 3: CRIPTOGRAFIA LOCAL (AES-GCM 256 BITS)
-  // =========================================================================
-  const handleStartEncryption = async () => {
-    const validItems = mappedItems.filter(i => i.isValid);
-    if (validItems.length === 0) {
-      setErrorMessage('Nenhum item válido para criptografar. Verifique o mapeamento das colunas.');
-      return;
-    }
+  const loadHistory = async () => {
+    setHistory(await stockImportRequest<StockImportEntry[]>('history', store));
+  };
 
+  const run = async (action: () => Promise<void>) => {
+    setBusy(true);
     setErrorMessage(null);
-    setStep(3);
-    setIsEncrypting(true);
-    setEncryptionProgress(0);
-
     try {
-      const encrypted = await encryptProductList(validItems, (processed, total, pct) => {
-        setEncryptionProgress(pct);
-      });
-
-      setEncryptedPayloads(encrypted);
-      if (encrypted.length > 0) {
-        setSampleCiphertext(encrypted[0].encrypted.ciphertext);
-      }
-      setIsEncrypting(false);
-      triggerScanBeep(true);
-
-      // Transição automática para Etapa 4 após breve intervalo
-      setTimeout(() => {
-        handleStartSync(encrypted);
-      }, 700);
-    } catch (err) {
-      console.error('Falha na criptografia:', err);
-      setIsEncrypting(false);
-      setErrorMessage('Erro ao criptografar dados com AES-GCM 256 bits.');
+      await action();
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'Falha ao comunicar com o estoque.');
+    } finally {
+      setBusy(false);
     }
   };
 
-  // =========================================================================
-  // ETAPA 4: SINCRONIZAÇÃO COM BACKEND SUPABASE & EXIBIÇÃO NO SOFTWARE
-  // =========================================================================
-  const handleStartSync = async (
-    encryptedList = encryptedPayloads
-  ) => {
+  const preview = () => run(async () => {
+    if (!mode || !fileName) return;
+    setProgress(0);
+    setConfirmation(await prepareStockImport(store, fileName, mode, mappedItems, setProgress));
     setStep(4);
-    setIsUploading(true);
-    setUploadProgress(0);
-    setUploadSuccess(false);
-    setErrorMessage(null);
+  });
 
-    try {
-      // 1. Upload em tempo real para o banco de dados oficial Synk
-      const res = await uploadEncryptedProductsRealtime(
-        encryptedList,
-        (uploaded, total, pct) => {
-          setUploadProgress(pct);
-        },
-        {
-          lojaId: operator.loja_id || '',
-          operatorMatricula: operator.code || '',
-          operatorNome: operator.name || 'Operador',
-        }
-      );
+  const apply = () => run(async () => {
+    if (!confirmation) return;
+    await saveStockImport('apply', store, confirmation.id);
+    setApplied(true);
+    triggerScanBeep(true);
+    void refreshProductsFromDatabase();
+  });
 
-      // 2. Gravação Segura no estoque do App isolada por setor:
-      // O setor selecionado é estritamente aplicado a estes produtos, e produtos de OUTROS setores são 100% PRESERVADOS!
-      const itemsToBatch: SpreadsheetProductItem[] = encryptedList.map(item => ({
-        name: item.original.name,
-        supplierCode: item.original.supplierCode,
-        reducedCode: item.original.reducedCode,
-        ean: item.original.ean,
-        quantity: item.original.quantity,
-        setor: selectedSetor,
-        sector: selectedSetor,
-        department: item.original.department,
-      }));
-      importProductsBatch(itemsToBatch, selectedSetor, operator.loja_id || '');
-
-      setIsUploading(false);
-
-      if (res.success) {
-        setUploadSuccess(true);
-        setDbSaveStatus('SAVED_TO_SUPABASE');
-        triggerScanBeep(true);
-        refreshProductsFromDatabase();
-      } else if (res.isLocalOnly) {
-        setUploadSuccess(false);
-        setDbSaveStatus('LOCAL_ONLY');
-      } else {
-        setUploadSuccess(false);
-        setDbSaveStatus('ERROR');
-        setErrorMessage(res.error || 'Falha ao gravar no banco de dados Supabase.');
-      }
-    } catch (err) {
-      console.error('Erro na sincronização:', err);
-      setIsUploading(false);
-      setDbSaveStatus('ERROR');
-      setErrorMessage('Ocorreu um erro durante a sincronização com o banco de dados.');
-    }
-  };
+  const revert = (id: string) => run(async () => {
+    await saveStockImport('revert', store, id);
+    setRevertId(null);
+    void refreshProductsFromDatabase();
+    await loadHistory();
+  });
 
   const validItemsCount = mappedItems.filter(i => i.isValid).length;
+  const hasInvalidRows = mappedItems.length > validItemsCount;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-xs p-3 sm:p-4 animate-in fade-in duration-200">
@@ -464,16 +418,16 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
                     ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border-emerald-500/20'
                     : 'bg-amber-500/15 text-amber-600 dark:text-amber-400 border-amber-500/20'
                 }`}>
-                  {supabaseConnected ? '🟢 Supabase Conectado' : '⚪ Modo Local (Offline)'}
+                  {supabaseConnected ? '🟢 Supabase Conectado' : 'Conexão necessária'}
                 </span>
               </div>
               <p className="text-[11px] text-slate-400">
-                Mapeamento das 5 colunas estritas • Seleção de Setor • AES-256 • Supabase
+                A planilha deve representar o estoque completo desta loja.
               </p>
             </div>
           </div>
           <button
-            onClick={onClose}
+            onClick={onClose} disabled={busy}
             className="p-1 rounded-xl text-slate-400 hover:text-slate-600 dark:hover:text-white transition"
           >
             <X className="w-5 h-5" />
@@ -511,18 +465,18 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
             }`}>
               {step > 3 ? '✓' : '3'}
             </span>
-            <span>3. Criptografia</span>
+            <span>3. Tipo de importação</span>
           </div>
           <ArrowRight className="w-3.5 h-3.5 text-slate-300 dark:text-slate-700 shrink-0" />
 
           {/* Etapa 4 */}
           <div className={`flex items-center gap-1.5 shrink-0 ${step === 4 ? 'font-black text-emerald-600 dark:text-emerald-400' : 'text-slate-400'}`}>
             <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold ${
-              uploadSuccess ? 'bg-emerald-500 text-white' : step === 4 ? 'bg-emerald-500/20 text-emerald-600 dark:text-emerald-400' : 'bg-slate-200 dark:bg-slate-800'
+              applied ? 'bg-emerald-500 text-white' : step === 4 ? 'bg-emerald-500/20 text-emerald-600 dark:text-emerald-400' : 'bg-slate-200 dark:bg-slate-800'
             }`}>
-              {uploadSuccess ? '✓' : '4'}
+              {applied ? '✓' : '4'}
             </span>
-            <span>4. Sincronização</span>
+            <span>4. Conferência</span>
           </div>
         </div>
 
@@ -536,7 +490,7 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
         {/* ================================================================= */}
         {/* ETAPA 1: UPLOAD E PREVIEW DA PLANILHA */}
         {/* ================================================================= */}
-        {step === 1 && (
+        {history === null && step === 1 && (
           <div className="py-4 space-y-4 overflow-y-auto flex-1">
             {/* Dropzone */}
             <div
@@ -620,7 +574,7 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
         {/* ================================================================= */}
         {/* ETAPA 2: MAPEAMENTO DE COLUNAS, LINHAS E SELEÇÃO DE SETOR */}
         {/* ================================================================= */}
-        {step === 2 && (
+        {history === null && step === 2 && (
           <div className="py-4 space-y-4 overflow-y-auto flex-1">
             {/* 1. SELEÇÃO DO INTERVALO DE LINHAS (COMEÇO E FIM) */}
             <div className="p-4 rounded-3xl bg-slate-50 dark:bg-slate-850 border border-slate-200/80 dark:border-slate-800 space-y-2.5">
@@ -675,14 +629,14 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
               <div className="flex items-center justify-between">
                 <label className="text-xs font-black text-slate-900 dark:text-white flex items-center gap-1.5 uppercase tracking-wider">
                   <Tag className="w-4 h-4 text-emerald-500" />
-                  Selecione o Setor da Loja para estes Produtos *
+                  Selecione o setor para produtos novos
                 </label>
                 <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400">
-                  Setor Ativo: {selectedSetor}
+                  Setor para produtos novos: {selectedSetor}
                 </span>
               </div>
               <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                Escolha a qual setor operacional os produtos importados serão vinculados no estoque:
+                Os produtos já cadastrados mantêm seu setor atual.
               </p>
 
               {/* Botões / Chips dos 6 Setores Oficiais */}
@@ -709,6 +663,12 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
                 })}
               </div>
             </div>
+
+            {hasInvalidRows && (
+              <p role="alert" className="text-xs font-semibold text-rose-600 dark:text-rose-400">
+                Corrija {mappedItems.length - validItemsCount} linha(s) inválida(s) antes de gerar a prévia.
+              </p>
+            )}
 
             {/* 3. MAPEAMENTO DAS 5 COLUNAS ESTRITAS */}
             <div className="p-4 rounded-3xl bg-slate-50 dark:bg-slate-850 border border-slate-100 dark:border-slate-800 space-y-3">
@@ -848,10 +808,10 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
             <div className="space-y-2">
               <div className="flex items-center justify-between">
                 <span className="text-xs font-bold text-slate-800 dark:text-slate-200">
-                  Itens Extraídos com o Setor Aplicado ({validItemsCount} válidos de {mappedItems.length})
+                  Itens extraídos ({validItemsCount} válidos de {mappedItems.length})
                 </span>
                 <span className="text-[10px] font-black px-2 py-0.5 rounded-md bg-emerald-500/10 text-emerald-600 border border-emerald-500/20">
-                  Setor: {selectedSetor}
+                  Produtos novos: {selectedSetor}
                 </span>
               </div>
 
@@ -861,7 +821,7 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
                     <tr>
                       <th className="p-2">Descrição</th>
                       <th className="p-2">Categoria (Auto)</th>
-                      <th className="p-2">Setor</th>
+                      <th className="p-2">Setor se novo</th>
                       <th className="p-2">Cód. Fornecedor</th>
                       <th className="p-2">Cód. Reduzido</th>
                       <th className="p-2">EAN</th>
@@ -903,212 +863,88 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
           </div>
         )}
 
-        {/* ================================================================= */}
-        {/* ETAPA 3: CRIPTOGRAFIA LOCAL (AES-GCM 256 BITS) */}
-        {/* ================================================================= */}
-        {step === 3 && (
-          <div className="py-8 space-y-6 text-center flex-1 flex flex-col justify-center items-center">
-            <div className="w-16 h-16 rounded-3xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-emerald-500 animate-pulse">
-              <Lock className="w-8 h-8" />
-            </div>
-
-            <div className="space-y-1.5 max-w-md">
-              <h4 className="text-base font-black text-slate-900 dark:text-white">
-                Criptografando Dados da Planilha
-              </h4>
-              <p className="text-xs text-slate-400 leading-relaxed">
-                As 5 colunas e o setor <strong>{selectedSetor}</strong> estão sendo cifrados localmente com chave AES-GCM 256 bits antes do trânsito para a nuvem.
+        {history !== null ? (
+          <section className="py-4 space-y-3 overflow-y-auto flex-1">
+            <h4 className="font-bold">Histórico de importações</h4>
+            {history.length === 0 && <p className="text-sm text-slate-500">Nenhuma importação registrada.</p>}
+            {history.map((entry, index) => (
+              <div key={entry.id} className="rounded-xl border border-slate-200 dark:border-slate-700 p-3 text-sm">
+                <p className="font-semibold break-all">{entry.filename}</p>
+                <p className="text-slate-500">{new Date(entry.applied_at).toLocaleString('pt-BR')} · {entry.mode === 'baseline' ? 'Novo estoque' : 'Atualização'} · {entry.summary.total} produtos</p>
+                {entry.reverted_at && <p className="text-slate-500">Revertida em {new Date(entry.reverted_at).toLocaleString('pt-BR')}</p>}
+                {index === 0 && !entry.reverted_at && (
+                  revertId === entry.id ? (
+                    <div className="mt-2 space-y-2">
+                      <p>Os saldos anteriores serão restaurados. Cadastros novos permanecerão com saldo zero.</p>
+                      <button type="button" disabled={busy} onClick={() => revert(entry.id)} className="font-bold text-rose-600">Confirmar reversão</button>
+                      <button type="button" disabled={busy} onClick={() => setRevertId(null)} className="ml-4">Cancelar</button>
+                    </div>
+                  ) : (
+                    <button type="button" disabled={busy} onClick={() => setRevertId(entry.id)} className="mt-2 font-semibold text-rose-600">Reverter importação</button>
+                  )
+                )}
+              </div>
+            ))}
+          </section>
+        ) : step === 3 ? (
+          <section className="py-5 space-y-4 overflow-y-auto flex-1">
+            <fieldset disabled={busy} className="space-y-3">
+              <legend className="font-bold mb-3">Esta planilha representa um novo estoque?</legend>
+              {([
+                ['baseline', 'Sim, novo estoque', 'Cria uma nova base e preserva o histórico anterior.'],
+                ['update', 'Não, atualização de estoque', 'Compara os saldos e registra as movimentações.'],
+              ] as const).map(([value, label, description]) => (
+                <label key={value} className="flex gap-3 items-start p-3 rounded-xl border border-slate-200 dark:border-slate-700 cursor-pointer">
+                  <input type="radio" name="stock-import-mode" checked={mode === value} onChange={() => setMode(value)} />
+                  <span><strong className="block text-sm">{label}</strong><span className="text-xs text-slate-500">{description}</span></span>
+                </label>
+              ))}
+            </fieldset>
+            <p className="text-sm text-slate-500">Produtos ausentes terão o saldo zerado. Cadastros e históricos serão preservados.</p>
+            {busy && <progress className="w-full accent-emerald-600" aria-label="Preparando comparação" value={progress} max={100} />}
+          </section>
+        ) : step === 4 && confirmation && (
+          <section className="py-5 space-y-4 overflow-y-auto flex-1">
+            <h4 className="font-bold">{applied ? 'Importação concluída' : 'Resumo da importação'}</h4>
+            <dl className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+              {([
+                ['total', 'Produtos após importação'],
+                ['new', 'Produtos novos'],
+                ['out', 'Com saída'],
+                ['in', 'Com reposição'],
+                ['restocked', 'Reabastecidos'],
+                ['unchanged', 'Sem movimentação'],
+                ['zeroed', 'Estoque zerado'],
+                ['still_zero', 'Continuam zerados'],
+                ['absent', 'Ausentes na planilha'],
+              ] as const).filter(([key]) => mode === 'update' || !['out', 'in', 'restocked', 'unchanged'].includes(key)).map(([key, label]) => (
+                <div key={key} className="p-3 rounded-xl bg-slate-100 dark:bg-slate-800">
+                  <dt className="text-xs text-slate-600 dark:text-slate-300">{label}</dt>
+                  <dd className="font-bold text-lg">{confirmation.summary[key].toLocaleString('pt-BR')}</dd>
+                </div>
+              ))}
+            </dl>
+            {confirmation.summary.large_reduction && (
+              <p role="alert" className="rounded-xl bg-amber-500/15 p-3 text-sm text-amber-800 dark:text-amber-200">
+                O saldo total cai mais de 30%. Confira se a planilha inclui todos os setores antes de confirmar.
               </p>
-            </div>
-
-            {/* Barra de Progresso */}
-            <div className="w-full max-w-md space-y-1.5">
-              <div className="flex justify-between text-xs font-bold text-slate-500">
-                <span>Cifrando registros em memória...</span>
-                <span>{encryptionProgress}%</span>
-              </div>
-              <div className="w-full h-3 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden p-0.5">
-                <div
-                  className="h-full bg-gradient-to-r from-emerald-500 to-teal-400 rounded-full transition-all duration-300"
-                  style={{ width: `${encryptionProgress}%` }}
-                />
-              </div>
-            </div>
-
-            {sampleCiphertext && (
-              <div className="p-3 rounded-2xl bg-slate-900 text-left font-mono text-[10px] text-emerald-400 max-w-md w-full truncate border border-emerald-500/30">
-                <span className="text-slate-400 block font-sans font-bold mb-0.5">Exemplo do Ciphertext Criptografado:</span>
-                {sampleCiphertext}
-              </div>
             )}
-          </div>
-        )}
-
-        {/* ================================================================= */}
-        {/* ETAPA 4: SINCRONIZAÇÃO COM O SUPABASE & EXIBIÇÃO NO SOFTWARE */}
-        {/* ================================================================= */}
-        {step === 4 && (
-          <div className="py-4 space-y-4 overflow-y-auto flex-1">
-            {/* Status do Upload e Gravação no Banco */}
-            {dbSaveStatus === 'SAVED_TO_SUPABASE' && (
-              <div className="p-4 rounded-3xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="p-2.5 rounded-2xl bg-emerald-500 text-white">
-                    <ShieldCheck className="w-6 h-6" />
-                  </div>
-                  <div>
-                    <h4 className="text-xs font-bold text-emerald-900 dark:text-emerald-300">
-                      Sincronização Concluída com Sucesso no Banco Supabase!
-                    </h4>
-                    <p className="text-[11px] text-emerald-700 dark:text-emerald-400">
-                      {encryptedPayloads.length} produtos gravados no banco na nuvem (tabela 'produtos' e catálogo universal) no setor <strong>{selectedSetor}</strong>.
-                    </p>
-                  </div>
-                </div>
-
-                <button
-                  type="button"
-                  onClick={() => setShowEncryptedView(!showEncryptedView)}
-                  className="px-3 py-1.5 rounded-xl border border-emerald-500/40 bg-white dark:bg-slate-800 text-xs font-bold text-emerald-700 dark:text-emerald-300 flex items-center gap-1.5 transition shadow-xs cursor-pointer shrink-0"
-                >
-                  {showEncryptedView ? <Unlock className="w-3.5 h-3.5" /> : <Lock className="w-3.5 h-3.5" />}
-                  <span>{showEncryptedView ? 'Ver Descriptografado' : 'Ver Criptografado'}</span>
-                </button>
-              </div>
-            )}
-
-            {/* Aviso Quando Supabase está Desconectado / Modo Offline */}
-            {dbSaveStatus === 'LOCAL_ONLY' && (
-              <div className="p-4 rounded-3xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-between">
-                <div className="flex items-start gap-3">
-                  <div className="p-2 rounded-2xl bg-amber-500 text-white shrink-0 mt-0.5">
-                    <AlertTriangle className="w-5 h-5" />
-                  </div>
-                  <div className="space-y-1">
-                    <h4 className="text-xs font-bold text-amber-900 dark:text-amber-200">
-                      Gravado apenas localmente no aparelho (Modo Offline)
-                    </h4>
-                    <p className="text-[11px] text-amber-800 dark:text-amber-300 leading-relaxed">
-                      Os produtos foram salvos no dispositivo. Para sincronizar diretamente com o banco de dados na nuvem, verifique a conexão com a internet e tente novamente.
-                    </p>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => handleStartSync(encryptedPayloads)}
-                  className="px-3 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold shrink-0 transition"
-                >
-                  Tentar Novamente
-                </button>
-              </div>
-            )}
-
-            {/* Erro Durante o Upload */}
-            {dbSaveStatus === 'ERROR' && (
-              <div className="p-4 rounded-3xl bg-rose-500/10 border border-rose-500/30 flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="p-2.5 rounded-2xl bg-rose-500 text-white shrink-0">
-                    <AlertTriangle className="w-6 h-6" />
-                  </div>
-                  <div>
-                    <h4 className="text-xs font-bold text-rose-900 dark:text-rose-200">
-                      Falha ao Gravar no Banco de Dados Supabase
-                    </h4>
-                    <p className="text-[11px] text-rose-700 dark:text-rose-300">
-                      {errorMessage || 'Ocorreu um erro ao comunicar com as tabelas do Supabase.'}
-                    </p>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => handleStartSync(encryptedPayloads)}
-                  className="px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold shrink-0 transition"
-                >
-                  Tentar Novamente
-                </button>
-              </div>
-            )}
-
-            {/* Progresso do Upload se ainda em andamento */}
-            {isUploading && (
-              <div className="space-y-1">
-                <div className="flex justify-between text-xs font-bold text-slate-500">
-                  <span>Enviando em tempo real para o banco...</span>
-                  <span>{uploadProgress}%</span>
-                </div>
-                <div className="w-full h-2.5 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
-                  <div
-                    className="h-full bg-emerald-500 transition-all duration-300"
-                    style={{ width: `${uploadProgress}%` }}
-                  />
-                </div>
-              </div>
-            )}
-
-            {/* Tabela do Software (Mostrando Informações Descriptografadas ou Criptografadas) */}
-            <div className="border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden max-h-56 overflow-y-auto text-xs">
-              <table className="w-full text-left">
-                <thead className="bg-slate-100 dark:bg-slate-800 text-[11px] font-bold text-slate-500 dark:text-slate-400 sticky top-0">
-                  <tr>
-                    <th className="p-2">Descrição</th>
-                    <th className="p-2">Setor</th>
-                    <th className="p-2">Cód. Fornecedor</th>
-                    <th className="p-2">Cód. Reduzido</th>
-                    <th className="p-2">EAN</th>
-                    <th className="p-2 text-right">Qtd</th>
-                    <th className="p-2 text-center">Proteção</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                  {encryptedPayloads.map((row, idx) => (
-                    <tr key={idx}>
-                      <td className="p-2 font-bold truncate max-w-[160px]">
-                        {showEncryptedView ? row.encrypted.ciphertext.substring(0, 18) + '...' : row.original.name}
-                      </td>
-                      <td className="p-2 font-semibold text-emerald-600 dark:text-emerald-400 text-[11px]">
-                        {row.original.setor || selectedSetor}
-                      </td>
-                      <td className="p-2 font-mono text-[11px] text-slate-400">
-                        {showEncryptedView ? '***' : row.original.supplierCode || '-'}
-                      </td>
-                      <td className="p-2 font-mono text-[11px] text-slate-400">
-                        {showEncryptedView ? '***' : row.original.reducedCode || '-'}
-                      </td>
-                      <td className="p-2 font-mono text-[11px] text-slate-700 dark:text-slate-300">
-                        {row.original.ean}
-                      </td>
-                      <td className="p-2 text-right font-black text-emerald-600 dark:text-emerald-400">
-                        {showEncryptedView ? '***' : `${row.original.quantity} un`}
-                      </td>
-                      <td className="p-2 text-center">
-                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-600 flex items-center justify-center gap-1">
-                          <Lock className="w-2.5 h-2.5" /> AES-256
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-
-            <p className="text-[11px] text-slate-400 text-center">
-              ✓ Na interface operacional, os operadores visualizam as informações descriptografadas instantaneamente para auditoria e conferência.
-            </p>
-          </div>
+            {mode === 'update' && <p className="text-xs text-slate-500">Saldo igual entre planilhas pode incluir vendas e reposições na mesma quantidade.</p>}
+          </section>
         )}
 
         {/* ================================================================= */}
         {/* FOOTER DO MODAL COM CONTROLES DE NAVEGAÇÃO POR ETAPA */}
         {/* ================================================================= */}
         <div className="pt-3 border-t border-slate-100 dark:border-slate-800 flex justify-between items-center">
-          {step === 1 && (
+          {history === null && step === 1 && (
             <>
               <button
                 type="button"
-                onClick={onClose}
+                onClick={() => run(loadHistory)} disabled={busy || !supabaseConnected}
                 className="px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-semibold text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 transition"
               >
-                Cancelar
+                Histórico
               </button>
               <button
                 type="button"
@@ -1122,7 +958,7 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
             </>
           )}
 
-          {step === 2 && (
+          {history === null && step === 2 && (
             <>
               <button
                 type="button"
@@ -1133,34 +969,36 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
               </button>
               <button
                 type="button"
-                onClick={handleStartEncryption}
-                disabled={validItemsCount === 0}
+                onClick={() => setStep(3)}
+                disabled={!supabaseConnected || validItemsCount === 0 || hasInvalidRows}
                 className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-bold shadow-md shadow-emerald-600/20 flex items-center gap-1.5 transition cursor-pointer"
               >
                 <Lock className="w-4 h-4" />
-                <span>Criptografar Dados ({validItemsCount} itens no setor {selectedSetor})</span>
+                <span>Avançar com {validItemsCount} produtos</span>
               </button>
             </>
           )}
 
-          {step === 3 && (
-            <div className="w-full text-center text-xs font-bold text-slate-400">
-              Aguarde a finalização da criptografia AES-GCM...
-            </div>
-          )}
-
-          {step === 4 && (
-            <div className="w-full flex justify-end">
-              <button
-                type="button"
-                onClick={onClose}
-                disabled={isUploading}
-                className="px-6 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-bold shadow-md shadow-emerald-600/20 flex items-center gap-1.5 transition cursor-pointer"
-              >
-                <Check className="w-4 h-4" /> Concluir e Visualizar no Estoque
+          {history !== null ? (
+            <button type="button" disabled={busy} onClick={() => { setHistory(null); setErrorMessage(null); }} className="text-sm font-semibold">Voltar</button>
+          ) : step === 3 ? (
+            <>
+              <button type="button" disabled={busy} onClick={() => setStep(2)} className="text-sm font-semibold">Voltar</button>
+              <button type="button" disabled={busy || !mode} onClick={preview} className="px-4 py-2 rounded-xl bg-emerald-600 text-white text-sm font-bold disabled:opacity-50">
+                {busy ? 'Preparando prévia…' : 'Gerar prévia'}
               </button>
-            </div>
-          )}
+            </>
+          ) : step === 4 ? (
+            <>
+              <button type="button" disabled={busy} onClick={applied ? () => run(loadHistory) : () => { setStep(3); setErrorMessage(null); }} className="text-sm font-semibold">
+                {applied ? 'Histórico' : 'Voltar'}
+              </button>
+              <button type="button" disabled={busy} onClick={applied ? onClose : apply} className="px-4 py-2 rounded-xl bg-emerald-600 text-white text-sm font-bold disabled:opacity-50">
+                {applied ? 'Concluir' : busy ? 'Aplicando…' : 'Confirmar importação'}
+              </button>
+            </>
+          ) : null}
+
         </div>
       </div>
     </div>

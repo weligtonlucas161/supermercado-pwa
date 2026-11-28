@@ -26,6 +26,7 @@ export interface Product {
   category: string;
   department?: string; // Categoria/departamento comercial (ex: Bebidas Não Alcoólicas, Limpeza)
   stock: number;
+  lastStockImport?: { movement: string; previous: number | null; current: number };
   minStock: number;
   price: number;
   costPrice?: number;

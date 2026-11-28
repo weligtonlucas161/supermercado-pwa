@@ -31,6 +31,7 @@ import { useDebounce } from '../../hooks/useDebounce';
 import { getEncryptedCache, setEncryptedCache, invalidateStockCache } from '../../utils/encryptedCache';
 import { fetchStockPaginatedFromSupabase, mapProductRow } from '../../services/supabaseService';
 import { getDbClient } from '../../services/db/client';
+import { movementLabels } from '../../services/stockImport';
 
 interface ProductCardProps {
   product: Product;
@@ -154,7 +155,13 @@ const ProductCard: React.FC<ProductCardProps> = ({
     }
   };
 
-  const isLow = product.stock <= product.minStock;
+  const isZero = product.stock === 0;
+  const isLow = !isZero && product.stock <= product.minStock;
+  const movement = product.lastStockImport;
+  const movementLabel = movement?.current === product.stock
+    ? movementLabels[movement.movement as keyof typeof movementLabels]
+    : undefined;
+  const delta = movement?.previous == null ? 0 : movement.current - movement.previous;
   const isRebaixaPending = product.rebaixaStatus === 'pending';
   const isRebaixaConfirmed = product.rebaixaStatus === 'confirmed';
 
@@ -241,10 +248,12 @@ const ProductCard: React.FC<ProductCardProps> = ({
               ? 'animate-rebaixa-blink border-amber-400'
               : isRebaixaConfirmed
               ? 'bg-amber-50/70 border-amber-300'
+              : isZero
+              ? 'bg-slate-100 border-slate-300 dark:bg-slate-800 dark:border-slate-700'
               : darkMode
               ? 'bg-slate-800/90 border-slate-700'
               : 'bg-white dark:bg-slate-900 border-slate-200'
-          } shadow-xs hover:border-emerald-500/50 hover:shadow-md transition-all active:scale-[0.99]`}
+          } ${isZero ? 'grayscale' : ''} shadow-xs hover:border-emerald-500/50 hover:shadow-md transition-all active:scale-[0.99]`}
         >
           <div className="space-y-1">
             <div className="flex items-center gap-2 flex-wrap">
@@ -262,6 +271,14 @@ const ProductCard: React.FC<ProductCardProps> = ({
               {product.isLockedForEdit && (
                 <span className="bg-amber-500/15 text-amber-700 dark:text-amber-400 text-[10px] px-2 py-0.5 rounded-md font-bold border border-amber-500/30 flex items-center gap-1">
                   <Lock className="w-3 h-3 text-amber-500" /> Em edição ({product.lockedBy || 'outro operador'})
+                </span>
+              )}
+              {isZero && (
+                <span className="text-[10px] font-semibold text-slate-600 dark:text-slate-300">Estoque zerado</span>
+              )}
+              {!isZero && movementLabel && (
+                <span className="text-[10px] font-semibold text-slate-600 dark:text-slate-300">
+                  {movementLabel}{delta !== 0 && movement?.movement !== 'baseline' ? ` de ${Math.abs(delta)} un.` : ''}
                 </span>
               )}
               {isLow && (

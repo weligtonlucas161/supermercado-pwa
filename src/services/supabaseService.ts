@@ -1500,6 +1500,7 @@ export function mapProductRow(
     category: sanitizeText(row.setor || 'MERCEARIA', 64),
     department: row.departamento ? sanitizeText(String(row.departamento), 80) : undefined,
     stock: validatePositiveInt(row.quantidade, 0),
+    lastStockImport: row.last_stock_import as Product['lastStockImport'],
     minStock: 10,
     price: 0,
     location: `Gôndola - ${sanitizeText(row.setor || 'Estoque', 64)}`,
@@ -1547,7 +1548,7 @@ export async function fetchProductsFromSupabase(lojaId?: string): Promise<Produc
     // Projeção explícita: evita trafegar colunas desnecessárias (o payload
     // encolhe de forma significativa em catálogos grandes).
     const PRODUCT_COLUMNS =
-      'id, nome, codigo_barras, codigo_barras_secundario, plu, codigo_fornecedor, setor, departamento, quantidade, data_vencimento, loja_id, is_encrypted, ciphertext, iv, is_locked_for_edit, locked_by, locked_at, criado_em';
+      'last_stock_import,id, nome, codigo_barras, codigo_barras_secundario, plu, codigo_fornecedor, setor, departamento, quantidade, data_vencimento, loja_id, is_encrypted, ciphertext, iv, is_locked_for_edit, locked_by, locked_at, criado_em';
 
     // Processa cada página antes de buscar a próxima: não mantém uma segunda
     // cópia de todas as linhas brutas (cifradas) na memória do celular.
@@ -1695,7 +1696,7 @@ export async function fetchStockPaginatedFromSupabase(
   }
 
   const PRODUCT_COLUMNS =
-    'id, nome, codigo_barras, codigo_barras_secundario, plu, codigo_fornecedor, setor, departamento, quantidade, data_vencimento, loja_id, is_encrypted, ciphertext, iv, is_locked_for_edit, locked_by, locked_at, criado_em';
+    'last_stock_import,id, nome, codigo_barras, codigo_barras_secundario, plu, codigo_fornecedor, setor, departamento, quantidade, data_vencimento, loja_id, is_encrypted, ciphertext, iv, is_locked_for_edit, locked_by, locked_at, criado_em';
 
   // Campos de produto são cifrados com IV aleatório. SQL não pode comparar
   // codigo_fornecedor/nome cifrados com o texto informado pelo usuário.
