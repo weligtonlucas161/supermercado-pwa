@@ -26,7 +26,8 @@ import {
   type StockImportEntry, type StockImportMode, type StockImportSummary,
 } from '../../services/stockImport';
 import { triggerScanBeep } from '../../utils/haptics';
-import { sanitizeSpreadsheetCell, sanitizeIdentifier, sanitizeBarcode } from '../../utils/security';
+import { sanitizeSpreadsheetCell, sanitizeIdentifier } from '../../utils/security';
+import { parseSpreadsheetStock } from '../../utils/stockSpreadsheet';
 import { resolveCategory, type CategoryRules } from '../../utils/productCategorizer';
 
 interface ImportSpreadsheetModalProps {
@@ -35,6 +36,12 @@ interface ImportSpreadsheetModalProps {
 }
 
 type StepNumber = 1 | 2 | 3 | 4;
+
+interface MappedProduct extends SpreadsheetProductItem {
+  sheetRow: number;
+  originalCode: string;
+  originalQuantity: string;
+}
 
 interface ColumnOption {
   index: number;
@@ -56,13 +63,13 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
   const [fileName, setFileName] = useState<string | null>(null);
   const [fileSize, setFileSize] = useState<string | null>(null);
   const [rawHeaders, setRawHeaders] = useState<string[]>([]);
-  const [rawMatrix, setRawMatrix] = useState<string[][]>([]);
+  const [rawMatrix, setRawMatrix] = useState<(string | number)[][]>([]);
   const [rawRows, setRawRows] = useState<Array<Record<string, unknown>>>([]);
   const [detectedColumns, setDetectedColumns] = useState<ColumnOption[]>([]);
 
   // Estados da Etapa 2: Mapeamento das 5 Colunas, Linhas (Começo e Fim) e Seleção de Setor
   const [selectedSetor, setSelectedSetor] = useState<SetorLoja>('MERCEARIA');
-  const [allMatrixRows, setAllMatrixRows] = useState<string[][]>([]);
+  const [allMatrixRows, setAllMatrixRows] = useState<(string | number)[][]>([]);
   const [totalSheetRows, setTotalSheetRows] = useState<number>(0);
   const [startRow, setStartRow] = useState<number>(2);
   const [endRow, setEndRow] = useState<number>(100);
@@ -74,7 +81,7 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
     quantity: -1,     // 5. Quantidade
     category: -1,     // 6. Categoria/departamento (opcional)
   });
-  const [mappedItems, setMappedItems] = useState<SpreadsheetProductItem[]>([]);
+  const [mappedItems, setMappedItems] = useState<MappedProduct[]>([]);
   const [customCategoryRules, setCustomCategoryRules] = useState<CategoryRules>({});
 
   const [mode, setMode] = useState<StockImportMode | ''>('');
@@ -161,7 +168,17 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
         const ws = wb.Sheets[sheets[0]];
 
         // Matriz bruta para preview fiel
-        const matrix = XLSX.utils.sheet_to_json<string[]>(ws, { header: 1, defval: '' });
+        const range = XLSX.utils.decode_range(ws['!ref']!);
+        range.s = { r: 0, c: 0 };
+        const matrix = XLSX.utils.sheet_to_json<(string | number)[]>(ws, { header: 1, defval: '', range });
+        // Conserve zeros à esquerda quando o Excel guardou o código como número com máscara.
+        matrix.forEach((row, r) => row.forEach((value, c) => {
+          if (!Number.isSafeInteger(value)) return;
+          const formatted = ws[XLSX.utils.encode_cell({ r, c })]?.w;
+          if (typeof formatted === 'string' && /^0[0-9]+$/.test(formatted) && Number(formatted) === value) {
+            row[c] = formatted;
+          }
+        }));
 
         if (!matrix || matrix.length < 1) {
           setErrorMessage('A planilha selecionada está vazia.');
@@ -169,7 +186,7 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
         }
 
         const headerRow = matrix[0] || [];
-        setRawHeaders(headerRow);
+        setRawHeaders(headerRow.map(String));
         setRawMatrix(matrix.slice(1, 10)); // Primeiras linhas de preview
         setAllMatrixRows(matrix);
         setTotalSheetRows(matrix.length);
@@ -204,12 +221,12 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
 
         headerRow.forEach((colName, idx) => {
           const norm = normalize(String(colName));
-          if (norm.includes('desc') || norm === 'nome' || norm === 'produto' || norm === 'item' || norm.includes('nomeproduto')) {
+          if ((norm.includes('desc') && !norm.includes('fornec')) || norm === 'nome' || norm === 'produto' || norm === 'item' || norm.includes('nomeproduto')) {
             if (autoMap.name === -1) autoMap.name = idx;
           } else if (norm.includes('categoria') || norm.includes('departamento') || norm.includes('secao') || norm.includes('grupo')) {
             if (autoMap.category === -1) autoMap.category = idx;
           } else if (norm.includes('fornec') || norm.includes('forn') || norm.includes('fabr') || norm.includes('sup')) {
-            if (autoMap.supplierCode === -1) autoMap.supplierCode = idx;
+            if (norm.includes('codigo') || (autoMap.supplierCode === -1 && norm !== 'fornecedorprincipal')) autoMap.supplierCode = idx;
           } else if (norm.includes('reduz') || norm.includes('red') || norm.includes('interno') || norm.includes('plu') || norm === 'codigoproduto') {
             if (autoMap.reducedCode === -1) autoMap.reducedCode = idx;
           } else if (norm.includes('ean') || norm.includes('barras') || norm.includes('gtin') || norm.includes('codigoacesso') || norm === 'codigo') {
@@ -218,10 +235,6 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
             if (autoMap.quantity === -1) autoMap.quantity = idx;
           }
         });
-
-        // Fallbacks se as colunas forem A, B, C, D, E sequenciais
-        if (autoMap.supplierCode === -1 && cols.length > 1) autoMap.supplierCode = 1;
-        if (autoMap.reducedCode === -1 && cols.length > 2) autoMap.reducedCode = 2;
 
         setColMap(autoMap);
       } catch (err) {
@@ -272,7 +285,8 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
     const endIdx = Math.min(matrix.length, Math.max(startIdx, eRow));
     const targetSlice = matrix.slice(startIdx, endIdx);
 
-    const items: SpreadsheetProductItem[] = targetSlice.filter(row => row.some(cell => String(cell).trim() !== '')).map((row) => {
+    const items: MappedProduct[] = targetSlice.flatMap((row, index) => {
+      if (!row.some(cell => String(cell).trim() !== '')) return [];
       // 1. Descrição do produto (sanitizada contra XSS, SQLi e Formula Injection)
       const name = currentColMap.name >= 0 ? sanitizeSpreadsheetCell(row[currentColMap.name], 200) : '';
       // 2. Código de fornecedor
@@ -280,10 +294,12 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
       // 3. Código reduzido
       const reducedCode = currentColMap.reducedCode >= 0 ? sanitizeIdentifier(row[currentColMap.reducedCode], 32) : '';
       // 4. Código EAN
-      const rawEan = String(row[currentColMap.ean] ?? '').trim();
-      const ean = /^[0-9]{1,32}$/.test(rawEan) ? sanitizeBarcode(rawEan, 32) : '';
-      const rawQuantity = String(row[currentColMap.quantity] ?? '').trim();
-      const quantity = /^\d+$/.test(rawQuantity) ? Number(rawQuantity) : NaN;
+      const codeCell = row[currentColMap.ean];
+      const rawEan = String(codeCell ?? '').trim();
+      const validCode = typeof codeCell === 'string' || Number.isSafeInteger(codeCell);
+      const ean = validCode && /^[a-zA-Z0-9]{1,32}$/.test(rawEan) && !/^\d+[eE]\d+$/.test(rawEan) ? rawEan : '';
+      const quantityCell = row[currentColMap.quantity];
+      const quantity = parseSpreadsheetStock(quantityCell);
       // 6. Categoria/departamento (opcional na planilha; quando vazia, genérica
       //    ou abreviada é classificada automaticamente pela descrição)
       const sourceCategory = currentColMap.category >= 0
@@ -295,10 +311,13 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
 
       const errors: string[] = [];
       if (!name) errors.push('Descrição ausente');
-      if (!ean) errors.push('Código de barras inválido');
-      if (!Number.isSafeInteger(quantity) || quantity > 10000000) errors.push('Informe uma quantidade inteira entre 0 e 10.000.000');
+      if (!ean) errors.push('Código inválido. Use o código completo, sem notação científica.');
+      if (Number.isNaN(quantity)) errors.push('Saldo inválido. Use um inteiro de 0 a 10.000.000, por exemplo 12 ou 12,00.');
 
-      return {
+      return [{
+        sheetRow: startIdx + index + 1,
+        originalCode: rawEan,
+        originalQuantity: String(quantityCell ?? '').trim(),
         name,
         supplierCode,
         reducedCode,
@@ -309,8 +328,23 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
         sourceCategory: sourceCategory || undefined,
         isValid: errors.length === 0,
         errors,
-      };
+      }];
     });
+
+    const firstRows = new Map<string, MappedProduct>();
+    for (const item of items) {
+      if (!item.ean) continue;
+      const first = firstRows.get(item.ean);
+      if (!first) {
+        firstRows.set(item.ean, item);
+        continue;
+      }
+      const duplicateError = `Código duplicado a partir da linha ${first.sheetRow}.`;
+      for (const match of [first, item]) {
+        match.isValid = false;
+        if (!match.errors?.includes(duplicateError)) match.errors?.push(duplicateError);
+      }
+    }
 
     return items;
   };
@@ -373,7 +407,8 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
   const preview = () => run(async () => {
     if (!mode || !fileName) return;
     setProgress(0);
-    setConfirmation(await prepareStockImport(store, fileName, mode, mappedItems, setProgress));
+    const payload = mappedItems.map(({ sheetRow, originalCode, originalQuantity, ...item }) => item);
+    setConfirmation(await prepareStockImport(store, fileName, mode, payload, setProgress));
     setStep(4);
   });
 
@@ -392,7 +427,8 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
     await loadHistory();
   });
 
-  const validItemsCount = mappedItems.filter(i => i.isValid).length;
+  const invalidItems = mappedItems.filter(item => !item.isValid);
+  const validItemsCount = mappedItems.length - invalidItems.length;
   const hasInvalidRows = mappedItems.length > validItemsCount;
 
   return (
@@ -666,7 +702,7 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
 
             {hasInvalidRows && (
               <p role="alert" className="text-xs font-semibold text-rose-600 dark:text-rose-400">
-                Corrija {mappedItems.length - validItemsCount} linha(s) inválida(s) antes de gerar a prévia.
+                Confira as {invalidItems.length} linhas destacadas abaixo. Veja o número da linha e o valor lido para ajustar a coluna ou corrigir a planilha.
               </p>
             )}
 
@@ -819,6 +855,7 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
                 <table className="w-full text-left">
                   <thead className="bg-slate-100 dark:bg-slate-800 text-[11px] font-bold text-slate-500 dark:text-slate-400 sticky top-0">
                     <tr>
+                      <th className="p-2">Linha</th>
                       <th className="p-2">Descrição</th>
                       <th className="p-2">Categoria (Auto)</th>
                       <th className="p-2">Setor se novo</th>
@@ -830,8 +867,9 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                    {mappedItems.map((item, idx) => (
-                      <tr key={idx} className={item.isValid ? '' : 'bg-rose-500/10 text-rose-600'}>
+                    {(hasInvalidRows ? invalidItems : mappedItems.slice(0, 100)).map(item => (
+                      <tr key={item.sheetRow} className={item.isValid ? '' : 'bg-rose-500/10 text-rose-600'}>
+                        <td className="p-2">{item.sheetRow}</td>
                         <td className="p-2 font-bold truncate max-w-[150px]">{item.name || 'NÃO INFORMADO'}</td>
                         <td className="p-2">
                           <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded whitespace-nowrap ${
@@ -845,8 +883,8 @@ export const ImportSpreadsheetModal: React.FC<ImportSpreadsheetModalProps> = ({ 
                         <td className="p-2 font-semibold text-emerald-600 dark:text-emerald-400 text-[11px]">{item.setor}</td>
                         <td className="p-2 font-mono text-[11px] text-slate-500 dark:text-slate-400">{item.supplierCode || '-'}</td>
                         <td className="p-2 font-mono text-[11px] text-slate-500 dark:text-slate-400">{item.reducedCode || '-'}</td>
-                        <td className="p-2 font-mono text-[11px] text-slate-700 dark:text-slate-300">{item.ean}</td>
-                        <td className="p-2 text-right font-black text-emerald-600 dark:text-emerald-400">{item.quantity} un</td>
+                        <td className="p-2 font-mono text-[11px] text-slate-700 dark:text-slate-300">{item.originalCode || '—'}</td>
+                        <td className="p-2 text-right font-black text-emerald-600 dark:text-emerald-400">{Number.isNaN(item.quantity) ? item.originalQuantity || '—' : `${item.quantity} un`}</td>
                         <td className="p-2 text-center">
                           {item.isValid ? (
                             <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-600">Válido</span>
